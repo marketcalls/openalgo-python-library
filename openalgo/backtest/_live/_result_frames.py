@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from .._result_tables import IST
+from ._fill_comparison import FillRow
 from ._reconcile_findings import Reconciliation
 from ._session_open import OpenPosition
 from ._session_records import FillRecord, LockRecord, OrderRecord
@@ -64,6 +65,14 @@ def orders_frame(orders: Sequence[OrderRecord]) -> pd.DataFrame:
     """Every order the session placed (`_session_records.OrderRecord`), `created` its
     IST instant."""
     return frame(orders, _names(OrderRecord), [("created_ns", "created")])
+
+
+def fill_comparison_frame(rows: Sequence[FillRow]) -> pd.DataFrame:
+    """Each fill against a backtest of the same bars (`_fill_comparison.FillRow`),
+    `live_time` and `backtest_time` the IST instants of `live_ns` and `backtest_ns` (NaT
+    for a row not compared)."""
+    instants = [("live_ns", "live_time"), ("backtest_ns", "backtest_time")]
+    return frame(rows, _names(FillRow), instants)
 
 
 def fills_frame(fills: Sequence[FillRecord]) -> pd.DataFrame:
@@ -133,6 +142,7 @@ __all__ = [
     "GROUP_COLUMNS",
     "OPEN_POSITION_COLUMNS",
     "drift_frame",
+    "fill_comparison_frame",
     "fills_frame",
     "frame",
     "locks_frame",

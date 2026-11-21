@@ -64,6 +64,7 @@ from ..session_result import SessionResult
 from ._plan_catch_up import StrategyPlan
 from ._result_frames import (
     drift_frame,
+    fill_comparison_frame,
     fills_frame,
     locks_frame,
     open_positions_frame,
@@ -150,6 +151,7 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
         summary=outcome.summary,
         orders=orders_frame(outcome.orders),
         fills=fills_frame(outcome.fills),
+        fill_comparison=fill_comparison_frame(outcome.fill_comparison),
         drift=drift_frame(outcome.drift),
         unprotected=unprotected_frame(outcome.unprotected, outcome.ended_ns),
         locks=locks_frame(outcome.locks),

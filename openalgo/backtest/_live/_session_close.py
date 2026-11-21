@@ -55,6 +55,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._fill_comparison import FillRow, slippage_of, strategy_rows
 from ._plan_args import LiveArguments
 from ._plan_catch_up import StrategyPlan
 from ._reconcile_final import final_read
@@ -71,7 +72,7 @@ from ._session_named import (
 from ._session_open import OpenPosition, open_positions
 from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
 from ._session_saved import save, save_session
-from ._session_slippage import Slippage, strategy_slippage
+from ._session_slippage import Slippage
 from ._session_trader import Skipped, Trader
 from ._stops_cover import Unprotected
 from ._stops_held import Estimate
@@ -108,8 +109,9 @@ class SessionOutcome:
     records of `_session_records`: `orders`, `fills` and `locks`; `plans`, each
     strategy's part of the session plan by name (its settings, strategy and run context,
     for its result), `timer_warnings`, its timers' notes, read before its kernel
-    session finished, `restored`, each restored strategy's restore at a restart, and
-    `versions`, each strategy's run manifest of this start by name (`_session_versions`)."""
+    session finished, `restored`, each restored strategy's restore at a restart,
+    `versions`, each strategy's run manifest of this start by name (`_session_versions`),
+    and `fill_comparison`, each fill of the day against a backtest (`_fill_comparison`)."""
 
     mode: str
     broker: str
@@ -140,6 +142,7 @@ class SessionOutcome:
     timer_warnings: dict[str, tuple[str, ...]] = field(default_factory=dict)
     restored: dict[str, Restored] = field(default_factory=dict)
     versions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    fill_comparison: tuple[FillRow, ...] = ()
 
 
 def close_session(
@@ -160,7 +163,8 @@ def close_session(
         parts.worker.close()
         # Read while each kernel session runs: a finished one counts its timers no more.
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
-        slipped = {t.name: strategy_slippage(session, t) for t in session.traders}
+        compared = {t.name: strategy_rows(session, t) for t in session.traders}
+        slipped = {name: slippage_of(rows) for name, rows in compared.items()}
         stopped = {trader.name: _stop_engine(trader) for trader in session.traders}
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)
@@ -170,7 +174,8 @@ def close_session(
             # Under the test seam no sender thread posts: the queue goes now, as it would.
             parts.sender.deliver_queued()
         session.event("closed", stopped_by=stopped_by)
-        outcome = _outcome(session, stopped_by, (outputs, orders, timers), summary, named)
+        records = (outputs, orders, timers, session.figures.rows.day(compared))
+        outcome = _outcome(session, stopped_by, records, summary, named)
     finally:
         parts.stack.close()
     return outcome
@@ -220,14 +225,17 @@ def _named(session: Session) -> _Named:
 def _outcome(
     session: Session,
     stopped_by: str,
-    records: tuple[dict[str, Any], tuple[OrderRecord, ...], dict[str, tuple[str, ...]]],
+    records: tuple[
+        dict[str, Any], tuple[OrderRecord, ...], dict[str, tuple[str, ...]], list[FillRow]
+    ],
     summary: SessionSummary,
     named: _Named,
 ) -> SessionOutcome:
     """The session's outcome, ended now: `records` are each kernel session's `finish()`
-    tables, the orders and each strategy's timers' notes, by strategy."""
+    tables, the orders and each strategy's timers' notes, by strategy, and the day's fills
+    against a backtest."""
     parts = session.parts
-    outputs, orders, timers = records
+    outputs, orders, timers, compared = records
     return SessionOutcome(
         mode=parts.mode.value,
         broker=parts.broker,
@@ -263,6 +271,7 @@ def _outcome(
         timer_warnings=timers,
         restored={t.name: t.records.restored for t in session.traders if t.records.restored},
         versions=session.versions.manifests,
+        fill_comparison=tuple(compared),
     )
 
 
@@ -274,8 +283,9 @@ def _summary(
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
-    none) from `stopped`'s outputs, the slippage of their MARKET fills against the
-    backtest's (`stopped`'s slippages, `_session_slippage`), the session's counts, the legs
+    none) from `stopped`'s outputs, the slippage of their MARKET fills and their stops'
+    fills against the backtest's (`stopped`'s slippages, `_fill_comparison`), the session's
+    counts, the legs
     `named` gives (`_session_named.named_legs`), each differing one a mismatch too unless
     the day counted it already, and a line per shared instrument it gives; the strategies
     earlier starts ran and this one does not, the day not flat while a row of `named` holds
@@ -295,6 +305,8 @@ def _summary(
         charges=traded.charges,
         slippage=traded.summary_slippage,
         slippage_not_compared=traded.slippage_not_compared,
+        stop_slippage=traded.summary_stop_slippage,
+        stop_slippage_not_compared=traded.stop_slippage_not_compared,
         rejected_orders=counted.rejected_orders,
         unprotected_seconds=counted.unprotected_seconds,
         reconcile_mismatches=counted.reconcile_mismatches + legs.new_mismatches,

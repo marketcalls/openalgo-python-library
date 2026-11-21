@@ -8,6 +8,7 @@ style of `Result.summary()`:
     Charges     : Rs 182.40 (modelled)
     Net P&L     : Rs 1,067.60
     Slippage    : Rs 35.00 worse than the backtest
+    Stop fills  : Rs 4.50 worse than the backtest
     Rejected    : 1 order
     Unprotected : 0 s without a stop at the broker
     Reconcile   : 0 mismatches
@@ -20,6 +21,8 @@ follows the strategies when the session set daily limits (18-multi-strategy 2.5a
 session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compared: no
 bar of its decision)" when the session had no bar to set a MARKET fill against, and reads
 "not compared (2 MARKET fills: no bar of their decisions)" when it had none for any. The
+Stop fills line, the same for the fills of the stops (18-multi-strategy 12.3), is printed
+only when a stop filled ("(1 stop fill not compared)" for one with no bar). The
 Strategies line names after "; earlier today:" the
 strategies an earlier start of the day ran and this one does not, whose figures the day's
 include. A leg whose OpenAlgo books differed from the engine at the
@@ -58,6 +61,7 @@ _COUNTS = (
     "reconcile_mismatches",
     "undelivered_alerts",
     "slippage_not_compared",
+    "stop_slippage_not_compared",
 )
 
 
@@ -78,7 +82,10 @@ class SessionSummary:
     for the same orders, each at the open of the bar that opens at its decision with the
     run's modelled slippage (negative when live did better), or None when not one of the
     day's MARKET fills could be compared; `slippage_not_compared` counts the MARKET fills
-    it could not set against a bar. `rejected_orders` counts the orders the broker or
+    it could not set against a bar; `stop_slippage` and `stop_slippage_not_compared` are
+    the same for the fills of stops, each at its trigger (or its bar's open when the bar
+    opened through it) with the run's slippage, `stop_slippage` None when no stop's fill
+    was compared. `rejected_orders` counts the orders the broker or
     OpenAlgo refused, `unprotected_seconds` the seconds a position had no stop at the
     broker (shown rounded up, so any exposure shows), and
     `reconcile_mismatches` the reconciliations whose broker position differed from the
@@ -126,12 +133,16 @@ class SessionSummary:
     shared: tuple[str, ...] = ()
     limits: tuple[str, ...] = ()
     versions: tuple[str, ...] = ()
+    stop_slippage: float | None = None
+    stop_slippage_not_compared: int = 0
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
         _check_figure("charges", self.charges)
         if self.slippage is not None:
             _check_figure("slippage", self.slippage)
+        if self.stop_slippage is not None:
+            _check_figure("stop_slippage", self.stop_slippage)
         _check_figure("unprotected_seconds", self.unprotected_seconds)
         if self.unprotected_seconds < 0:
             raise ConfigError(
@@ -174,6 +185,7 @@ def summary_text(summary: SessionSummary) -> str:
         ("Charges", f"{_rupees(summary.charges)} (modelled)"),
         ("Net P&L", _rupees(summary.net_pnl)),
         ("Slippage", _slippage(summary.slippage, summary.slippage_not_compared)),
+        *_stop_line(summary),
         ("Rejected", _count(summary.rejected_orders, "order")),
         ("Unprotected", f"{math.ceil(summary.unprotected_seconds)} s without a stop at the broker"),
         (
@@ -251,6 +263,24 @@ def _slippage(slippage: float | None, not_compared: int) -> str:
     else:
         figure = f"{_rupees(-slippage)} better than the backtest"
     return figure + _not_compared(not_compared, words=" not compared")
+
+
+def _stop_line(summary: SessionSummary) -> list[tuple[str, str]]:
+    """The Stop fills line (module docstring), none when no stop filled."""
+    missed = summary.stop_slippage_not_compared
+    if summary.stop_slippage is None and not missed:
+        return []
+    if summary.stop_slippage is None:
+        return [("Stop fills", f"not compared ({_count(missed, 'stop fill')}: no bar)")]
+    shown = round(summary.stop_slippage, _PAISE_DECIMALS)
+    if shown == 0:
+        figure = "none against the backtest"
+    elif shown > 0:
+        figure = f"{_rupees(summary.stop_slippage)} worse than the backtest"
+    else:
+        figure = f"{_rupees(-summary.stop_slippage)} better than the backtest"
+    note = f" ({_count(missed, 'stop fill')} not compared)" if missed else ""
+    return [("Stop fills", figure + note)]
 
 
 def _not_compared(count: int, *, words: str) -> str:

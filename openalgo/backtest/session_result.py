@@ -51,7 +51,9 @@ not it has rows.
   opening at each decision, with the run's modelled slippage; negative when live did
   better; None when not one of them could be compared) and `slippage_not_compared`
   (MARKET fills with no bar to set them against),
-  `closed_trades`, `rejected_orders`, `unprotected_seconds`,
+  `stop_slippage` and `stop_slippage_not_compared` (the same for the fills of the
+  stops, each at its trigger with the run's slippage, or its bar's open when the bar
+  opened through it), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`; a difference of an instrument several strategies share is
   named and counted once), the strategies of earlier starts (`earlier`) and each
@@ -63,6 +65,19 @@ not it has rows.
   final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
+- `fill_comparison`: each fill of the day's orders (every start's, as `summary`) against
+  the price a backtest of the session's own bars fills the same order at: `strategy`,
+  `version_id`, `symbol`, `exchange`, `order_id`, `purpose` (entry, add, exit, stop,
+  target for the engine's exit at a leg's target, square_off, risk_exit, or hand for a
+  fill of an order placed by hand that the session adopted), `price_type` as placed,
+  `side`, `units`, `live_time` and `live_price`, `backtest_time` (the open of the bar a
+  backtest fills it in) and `backtest_price`, `difference` (rupees per unit, signed
+  against the trader: positive when live did worse), `rupees` (the difference times the
+  units and the multiplier), `compared` and `reason` (why a row is not compared: no bar
+  yet, a LIMIT order, a hand order). A MARKET order is set against the open of the bar
+  opening at its decision, the engine's target exit against its level, a stop against its
+  trigger (or the bar's open through a gap), each with the run's slippage. The compared
+  MARKET rows add up to `summary.slippage`, the stops' to `summary.stop_slippage`.
 - `drift`: each broker candle against the bar built from the feed's ticks. The strategy
   decided, and kept deciding, on the bars built from ticks: a broker candle never
   replaced one, and was the bar only of a minute with no ticks (one the feed was dead
@@ -139,6 +154,7 @@ class SessionResult:
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame
+    fill_comparison: pd.DataFrame
     drift: pd.DataFrame
     unprotected: pd.DataFrame
     locks: pd.DataFrame

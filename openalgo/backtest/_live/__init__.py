@@ -39,7 +39,12 @@ rate is `_order_throttle` (for `worker`) and the account's daily rules `_account
 `watch`). Three serve several rows: `_groups`, the strategies of a session that trade one
 instrument and the entry gates set on them, `_group_rules`, the rules of such a group
 against the broker's net position, and `_margin_reject`, a closing order rejected on such
-an instrument (18-multi-strategy 4).
+an instrument (18-multi-strategy 4). The audit record of 18-multi-strategy 12 is
+`_version_id` and `_session_versions` (each strategy's version on every order, its
+manifest in the journal, `_journal_versions`), `_preflight_expiry` and
+`_preflight_calendar` (the master contract's expiry and OpenAlgo's holidays against the
+tables), and `_fill_comparison` (each fill against a backtest of the same bars, priced by
+`_session_slippage`); `_exit_reasons` names why an order closes a position.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes
