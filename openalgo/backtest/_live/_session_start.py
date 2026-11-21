@@ -225,7 +225,7 @@ def _open(
         wait_max_s=settings.wait_max_s,
     )
     session.traders = traders(session, report.funds_available)
-    session.versions = record_versions(session)
+    _audit_records(session, report)
     session.figures = DayFigures.at_start(snapshot.rms_states, names)
     for envelope in start.deferred:
         # What the worker posted during the start's reads, for the loop to take.
@@ -234,10 +234,18 @@ def _open(
     # The preflight marks its warnings with a prefix of its own; the console adds one.
     for note in (*(note.removeprefix(WARNING) for note in report.warnings), *plan.warnings):
         session.warn(note)
-    if report.calendar_disagrees:
-        session.event(CALENDAR_DISAGREES, days=list(report.calendar_disagrees))
     session.risk.warn_at_start()
     return session
+
+
+def _audit_records(session: Session, report: Any) -> None:
+    """The start's audit records (18-multi-strategy 12): each strategy's version and run
+    manifest written to journal L (`_session_versions`), and the event naming the later
+    days on which OpenAlgo's holidays and the package calendar disagree (the preflight's
+    `report`). Raises JournalError when the journal cannot write them."""
+    session.versions = record_versions(session)
+    if report.calendar_disagrees:
+        session.event(CALENDAR_DISAGREES, days=list(report.calendar_disagrees))
 
 
 def _broker(client: Any, account: str | None) -> str:

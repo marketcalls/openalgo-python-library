@@ -11,15 +11,18 @@ last trade's price. Every alert is echoed on the console as "KIND: text".
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from live_samples import live, seam
 from session_samples import BuyAndHold, Hold, ist, rig
 from stops_samples import at_price
+from test_kernel_session import EXIT, holding
 from watch_samples import HoldInfy, HoldSbin, HoldWithTarget
 
-from openalgo.backtest._live._exit_reasons import EXIT_REASON_WORDS
+from openalgo.backtest._calendar_convert import native_attr
+from openalgo.backtest._live._exit_reasons import EXIT_REASON_WORDS, MANUAL_RISK_EXIT_WORDS
 from openalgo.backtest._live._types import LOGGER_NAME
 
 
@@ -84,6 +87,18 @@ def test_the_square_off_names_the_square_off_time(world):
     assert "(square_off: square-off time, order " in exit_line
 
 
+def test_the_sale_on_ctrl_c_is_worded_as_the_sessions_exit_not_a_manual_one(world):
+    # Hold buys 10 at its first decision; Ctrl+C at 14:46:30 sells them, a risk exit the
+    # kernel records as "manual": its event keeps that code, and its alert says what
+    # made it.
+    world.stop_at(ist(14, 46, 30))
+    live(world, Hold)
+    sale = placements(world)[-1]
+    assert (sale["purpose"], sale["reason"]) == ("risk_exit", "manual")
+    [exit_line] = console(world, "EXIT")
+    assert "(risk_exit: Ctrl+C or a retried exit, order " in exit_line
+
+
 def test_the_kill_switchs_exits_name_the_accounts_daily_loss_limit(
     make_fake_openalgo, monkeypatch, tmp_path, caplog
 ):
@@ -102,26 +117,26 @@ def test_the_kill_switchs_exits_name_the_accounts_daily_loss_limit(
         assert "(risk_exit: kill switch at the account daily loss limit, order " in line
 
 
+def kernel_exit_reasons() -> set[str]:
+    """Every exit reason the kernel has, from the binding itself: the list its refusal of
+    an unknown reason gives (rust/oa_py/src/backtest/engine/request.rs), so a reason the
+    kernel gains is in it without this test changing."""
+    with pytest.raises(native_attr("NativeEngineInputError")) as refused:
+        holding(100.0).submit(EXIT | {"exit_reason": "no_such_reason"})
+    found = re.fullmatch(
+        r'unknown exit reason "no_such_reason": use one of (.*)', str(refused.value)
+    )
+    assert found is not None, str(refused.value)
+    return set(found[1].split(", "))
+
+
 def test_every_exit_reason_of_the_kernel_has_words():
-    # The kernel's ExitReason codes (rust/oa_bt/src/rms/vocabulary.rs), every one of which
-    # a live session's order may carry.
-    codes = {
-        "leg_sl",
-        "leg_target",
-        "time_exit",
-        "overall_sl",
-        "overall_target",
-        "lock_profit",
-        "daily_loss_limit",
-        "scheduler",
-        "manual",
-        "eod",
-        "drawdown_halt",
-        "margin_liquidation",
-        "expiry",
-        "signal",
-        "account_loss_limit",
-        "daily_profit_target",
-        "account_profit_target",
-    }
+    # Every one of them a live session's order may carry: a reason with no words would
+    # stop the session in the middle of a fill (`reason_words`).
+    codes = kernel_exit_reasons()
+    assert "leg_target" in codes and "account_profit_target" in codes
     assert set(EXIT_REASON_WORDS) == codes
+
+
+def test_the_words_of_the_sessions_manual_exits_are_the_kernels_risk_exit_reasons():
+    assert set(MANUAL_RISK_EXIT_WORDS) <= set(native_attr("RISK_EXIT_REASONS"))

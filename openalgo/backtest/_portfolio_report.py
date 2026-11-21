@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from ._messages import spoken_list
 from ._result_report import benchmark_name
 from ._summary import summary_text
+from .report._dashboard.portfolio_tables import REFUSED_NOTE
 from .report._performance import Performance
 from .report.custom import Layout
 from .report.tearsheet import write_tearsheet
@@ -72,7 +73,9 @@ def _quick_checks(portfolio: PortfolioResult) -> dict[str, Any]:
 
 def report(portfolio: PortfolioResult) -> Report:
     """The adapter the combined tearsheet reads (module docstring)."""
-    lines = [f"{key}: {value}" for key, value in portfolio.assumptions.items()]
+    # The words of an account that refused nothing are its refusals card's, not a line.
+    notes = portfolio.assumptions.items()
+    lines = [f"{key}: {value}" for key, value in notes if key != REFUSED_NOTE]
     lines += [f"warning: {text}" for text in portfolio.warnings]
     return Report(
         performance=portfolio.performance,

@@ -15,6 +15,7 @@ By hand, each row below: a buy at 500.00 decided at 14:42:00 against the 14:42 b
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -28,8 +29,15 @@ from watch_samples import HoldWithTarget
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._fill_comparison import HAND_ORDER, LIMIT_ORDER
-from openalgo.backtest._live._session_slippage import NO_BAR
-from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._session_slippage import (
+    NO_BAR,
+    NOT_REACHED,
+    Priced,
+    StopTriggers,
+    Unpriced,
+    stop_price,
+)
+from openalgo.backtest._live._types import LOGGER_NAME, OrderIntent, Purpose
 from openalgo.backtest._live._version_id import version_of
 
 IST = "Asia/Kolkata"
@@ -197,6 +205,164 @@ def test_a_stop_gapped_through_is_set_against_its_bars_open(stops):
     assert (sale["difference"], sale["rupees"]) == (pytest.approx(-0.10), -1.00)
 
 
+def test_a_stop_heard_filled_after_its_minute_is_set_in_the_bar_that_reached_it(stops):
+    # SBIN trades at 496.00 from 14:44:57 (and once more at 14:44:58); the stream holds the
+    # order updates from 14:44:56 to 14:45:08. The stop fills at 496.00 in the 14:44
+    # minute, and the session hears it in the 14:45 minute. A backtest fills it in the bar
+    # whose low reached the trigger, 14:44's, which opened at 500.00 above it: at the
+    # trigger less 2 bps, 496.90, as when the fill is heard at once (Rs 9.00 worse).
+    # (Set in the 14:45 bar, opened at 496.00, it read 495.90, Rs 1.00 better.)
+    at_price(stops, ist(14, 44, 57), 496.0)
+    stops.script.at(ist(14, 44, 58), stops.script.trade)
+    stops.script.at(ist(14, 44, 56), stops.fake.faults.hold_order_updates)
+    stops.script.at(ist(14, 45, 8), stops.fake.faults.release_order_updates)
+    stops.stop_at(ist(14, 47))
+    result = live(stops, StopHold)
+    sale = row(result, "stop")
+    assert sale["live_time"] >= minute(14, 45)
+    assert sale["backtest_time"] == minute(14, 44)
+    assert sale["backtest_price"] == pytest.approx(496.90)
+    assert (sale["difference"], sale["rupees"]) == (pytest.approx(0.90), 9.00)
+    assert result.summary.stop_slippage == 9.00
+
+
+class Trails(bt.Strategy):
+    """Buys 10 SBIN at its first decision with a stop 3 points below that trails 3 points
+    behind the best price."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10, stop=bt.points(3), trail=bt.trail_points(3))
+
+
+def test_a_trailed_stop_is_looked_for_from_the_bar_its_trigger_moved_in(stops):
+    # SBIN trades at 510.00 from 14:43: the stop trails to 507.00. It trades at 506.00 from
+    # 14:45:30: the 14:45:35 trade fills the stop at 506.00. The bars before the move went
+    # below 507.00 (14:42's opened at 500.00), but the stop was at 497.00 then; the first
+    # bar from the move whose low reaches 507.00 is 14:45's, which opened at 510.00 above
+    # it: the backtest sells at the trigger less 2 bps, 506.8986, rounded down to 506.85,
+    # and the live sale did 0.85 worse a unit, Rs 8.50.
+    at_price(stops, ist(14, 43), 510.0)
+    at_price(stops, ist(14, 45, 30), 506.0)
+    stops.stop_at(ist(14, 47))
+    result = live(stops, Trails)
+    stop = next(o for o in stops.orders() if o.price_type == "SL-M")
+    assert stop.trigger_price == 507.0
+    sale = row(result, "stop")
+    assert (sale["live_price"], sale["backtest_time"]) == (506.0, minute(14, 45))
+    assert sale["backtest_price"] == pytest.approx(506.85)
+    assert (sale["difference"], sale["rupees"]) == (pytest.approx(0.85), 8.50)
+
+
+#: A stop placed at 497.00 at instant 100 (`held_since`'s table).
+PLACED = OrderIntent(
+    "i", "S", "SBIN", "NSE", "SELL", 10, "SL-M", "MIS", Purpose.STOP, 100, trigger_price=497.0
+)
+
+
+@pytest.mark.parametrize(
+    ("modifies", "trigger", "since"),
+    [
+        ((), 497.0, 100),
+        (((507.0, 300),), 507.0, 300),
+        (((507.0, 300), (507.0, 400)), 507.0, 300),
+        (((507.0, 300), (510.0, 500)), 510.0, 500),
+        ((), 507.0, 250),
+        (((507.0, 300),), 510.0, 300),
+    ],
+    ids=[
+        "never moved: from its placing",
+        "moved: from the modify",
+        "its units changed after: from the move",
+        "moved twice: from the last move",
+        "moved before a restart at 250: from the start",
+        "moved where this start did not see: from the last move it knows",
+    ],
+)
+def test_a_stop_holds_its_trigger_from_the_move_that_set_it(modifies, trigger, since):
+    triggers = StopTriggers()
+    for moved_to, at_ns in modifies:
+        triggers.modified("S", 2, moved_to, at_ns)
+    assert triggers.held_since("S", 2, PLACED, trigger, start_ns=250) == since
+
+
+class StandInSeries:
+    """Four one-minute slices from 0 (instants in seconds, for reading), the bars given as
+    {open instant: (open, high, low)}, and the slices marked missing."""
+
+    slices = ((0, 60), (60, 120), (120, 180), (180, 240))
+
+    def __init__(self, bars: dict, missing: tuple = ()) -> None:
+        self._bars = {
+            at: SimpleNamespace(open=o, high=h, low=lo) for at, (o, h, lo) in bars.items()
+        }
+        self._missing = missing
+
+    def bar(self, opened):
+        return self._bars.get(opened)
+
+    def missing_slices(self, start, end):
+        return tuple(at for at in self._missing if start <= at < end)
+
+
+def stop_at(
+    bars, *, side="SELL", trigger=497.0, since=0, heard=130, released=4, so_far=None, missing=()
+):
+    """`stop_price` on stand-ins whose fill price is the reference itself (no slippage),
+    so the result reads the rule; the slice in progress has opened at `so_far`."""
+    builder = SimpleNamespace(open_so_far=lambda symbol, opened: so_far)
+    session = SimpleNamespace(builders={"NSE": builder})
+    trader = SimpleNamespace(
+        part=SimpleNamespace(series=StandInSeries(bars, missing), released=released),
+        engine=SimpleNamespace(market_fill_price=lambda _i, _side, _at, reference: reference),
+        exchange="NSE",
+        symbol="SBIN",
+    )
+    return stop_price(session, trader, side=side, trigger=trigger, since_ns=since, heard_ns=heard)
+
+
+ABOVE = (500.0, 500.0, 499.0)
+
+
+@pytest.mark.parametrize(
+    ("given", "priced"),
+    [
+        ({"bars": {0: ABOVE, 60: (500.0, 500.0, 496.0)}}, Priced(60, 497.0)),
+        ({"bars": {0: ABOVE, 60: (495.0, 495.0, 494.0)}}, Priced(60, 495.0)),
+        ({"bars": {0: ABOVE, 60: ABOVE, 120: ABOVE}}, Unpriced(NOT_REACHED)),
+        ({"bars": {0: ABOVE, 120: (500.0, 500.0, 490.0)}}, Priced(120, 497.0)),
+        ({"bars": {0: ABOVE, 120: (500.0, 500.0, 490.0)}, "missing": (60,)}, Unpriced(NO_BAR)),
+        (
+            {"bars": {0: (500.0, 500.0, 490.0), 60: (499.0, 499.0, 496.0)}, "since": 70},
+            Priced(60, 497.0),
+        ),
+        ({"bars": {0: ABOVE, 60: ABOVE}, "released": 2, "so_far": 498.0}, Priced(120, 497.0)),
+        (
+            {"bars": {0: ABOVE, 60: (501.0, 504.0, 500.0)}, "side": "BUY", "trigger": 503.0},
+            Priced(60, 503.0),
+        ),
+    ],
+    ids=[
+        "the first bar whose low reaches the trigger, at the trigger",
+        "a bar that opened through the trigger, at its open",
+        "no bar reached the trigger: not priced",
+        "a minute with no trade passed over",
+        "a minute marked missing: not priced",
+        "a bar before the trigger was held is not looked at",
+        "not reached in a released bar: the slice in progress, by its open so far",
+        "a buy's stop, by the bar's high",
+    ],
+)
+def test_a_stop_is_priced_in_the_first_bar_that_reaches_its_trigger(given, priced):
+    assert stop_at(**given) == priced
+
+
 def test_the_stop_rows_are_not_in_the_market_slippage(stops):
     at_price(stops, ist(14, 44, 30), 496.0)
     stops.stop_at(ist(14, 46))
@@ -208,6 +374,42 @@ def test_the_stop_rows_are_not_in_the_market_slippage(stops):
 def test_a_day_without_a_stop_fill_prints_no_stop_line(round_trip):
     assert round_trip.summary.stop_slippage is None
     assert "Stop fills" not in round_trip.summary_text()
+
+
+class SellsOnItsOwnStop(bt.Strategy):
+    """Buys 10 SBIN at its first decision and at its second rests its own exit, a sell
+    stop order (SL-M) triggered at 497.00, with no leg rules."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(10)
+        elif self.calls == 2:
+            self.sell(10, trigger_price=497.0)
+
+
+def test_a_strategys_own_stop_order_is_not_a_stop_fill(world):
+    # The sale rests from 14:43 at 497.00; SBIN trades at 496.00 from 14:44:30 and the
+    # 14:44:35 trade fills it at 496.00. The 14:44 bar opened at 500.00 above the trigger:
+    # the backtest sells at 497.00 less 2 bps, 496.9006, rounded down to 496.90. The row
+    # is compared, but it is the strategy's own exit, not a leg's stop: no Stop fills
+    # line.
+    at_price(world, ist(14, 44, 30), 496.0)
+    world.stop_at(ist(14, 46))
+    result = live(world, SellsOnItsOwnStop)
+    sale = row(result, "exit")
+    assert (sale["price_type"], sale["live_price"]) == ("SL-M", 496.0)
+    assert (sale["backtest_time"], sale["backtest_price"]) == (
+        minute(14, 44),
+        pytest.approx(496.90),
+    )
+    assert result.summary.stop_slippage is None
+    assert "Stop fills" not in result.summary_text()
 
 
 # ----- not compared ------------------------------------------------------------------------------

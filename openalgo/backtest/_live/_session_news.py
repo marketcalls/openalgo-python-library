@@ -13,7 +13,8 @@ other clients' fills) go to `_session_feed`.
   or one the order rate withdrew, is a REJECT alert.
 - `Throttled`: a request the order rate held back, the event `order_throttled` and an
   ERROR alert once a session (`_order_throttle.throttled_news`).
-- `Settled`: the venue map applies the read's verdict.
+- `Settled`: the venue map applies the read's verdict. A modify it applied, by this or by
+  its `SendResult`, notes the trigger it leaves and when (`_session_slippage.StopTriggers`).
 - `Resolutions`: bound (with the order's update, if any), not placed, or ambiguous (the
   strategy's entries locked, an ERROR alert): `_session_resolved`.
 - `HeldFills`: to the stops supervisor (held fills, 4.11).
@@ -41,7 +42,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
-from ._exit_reasons import exit_reason, reason_words
+from ._exit_reasons import exit_reason, exit_words
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
@@ -51,7 +52,7 @@ from ._session_records import fill_record
 from ._session_resolved import ResolutionNews, order_words
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
-from ._venue_requests import Applied, CancelRequest, ModifyRequest, PlaceRequest
+from ._venue_requests import Applied, CancelRequest, Handled, ModifyRequest, PlaceRequest
 from ._worker_queue import ReadBooks
 from .inbox import (
     Books,
@@ -150,7 +151,8 @@ class News(ResolutionNews):
         if result.increment is not None:
             session.reconcile.filled(trader, update.ts_recv_ns)
             reason = exit_reason(trader, result.kernel_order, intent.purpose)
-            self._fill_alert(intent, update, result.increment, reason)
+            words = None if reason is None else exit_words(trader, result.kernel_order, reason)
+            self._fill_alert(intent, update, result.increment, words)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
@@ -173,14 +175,14 @@ class News(ResolutionNews):
         margin.reject(trader, kernel_order, intent, update.rejection_reason or "no reason given")
 
     def _fill_alert(
-        self, intent: OrderIntent, update: OrderUpdate, increment: Increment, reason: str | None
+        self, intent: OrderIntent, update: OrderUpdate, increment: Increment, words: str | None
     ) -> None:
-        """The fill's record, its event and its ENTRY or EXIT alert, which names the exit
-        `reason` of an order that closes a position (`_exit_reasons`)."""
+        """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
+        the exit reason of an order that closes a position (`_exit_reasons`)."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
         why = intent.purpose.value
-        if reason is not None:
-            why = f"{why}: {reason_words(reason)}"
+        if words is not None:
+            why = f"{why}: {words}"
         session = self._session
         estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
         record = fill_record(intent, update, increment, estimated=estimated)
@@ -226,6 +228,8 @@ class News(ResolutionNews):
             if intent is not None and session.margin.takes(trader, intent):
                 session.margin.reject(trader, refused, intent, message.outcome.reason)
         handled = trader.venue.sent(message)
+        if message.order_id:
+            self._modified(trader, trader.venue.kernel_order_of(message.order_id), handled)
         session.stops.sent(trader, message)
         outcome = message.outcome
         session.event(
@@ -305,6 +309,7 @@ class News(ResolutionNews):
         request = message.request
         trader = self._session.trader_named(request.intent.strategy)
         handled = trader.venue.settled(message)
+        self._modified(trader, request.kernel_order, handled)
         self._session.stops.settled(trader, message, handled)
         self._session.event(
             "settled",
@@ -313,6 +318,13 @@ class News(ResolutionNews):
             expired=message.expired,
             applied=handled.applied.value,
         )
+
+    def _modified(self, trader: Trader, kernel_order: int | None, handled: Handled) -> None:
+        """Note the trigger a modify the venue map applied leaves its order holding, and
+        when: the fill comparison looks for a stop's fill from then (`StopTriggers`)."""
+        if handled.applied is Applied.MODIFIED and kernel_order is not None:
+            trigger = trader.venue.terms(kernel_order).trigger_price
+            self._session.triggers.modified(trader.name, kernel_order, trigger, self._session.now())
 
     def _held_fills(self, message: HeldFills) -> None:
         self._session.stops.held.update(message.held)

@@ -32,9 +32,10 @@ REASONS = {
 }
 #: The column of a strategy's units in `PortfolioResult.net_positions`.
 UNITS_COLUMN = "{name}_units"
-#: The key of the Assumptions line in which a run words its account's empty refusals
-#: itself (a live session's account, whose own refusals are its trade cap's: the
-#: `SessionResult.portfolio` notes); a run without it shows `NOTHING_REFUSED`.
+#: The key of the note in `assumptions` in which a run words its account's empty refusals
+#: itself (a live session's account, by the limits it set: the `SessionResult.portfolio`
+#: notes), which this card shows and the page's Assumptions block leaves out; a run
+#: without it shows `NOTHING_REFUSED`.
 REFUSED_NOTE = "refused"
 #: What the card of the account's refusals says when the account refused and ended none.
 NOTHING_REFUSED = "The account refused no order and ended none."

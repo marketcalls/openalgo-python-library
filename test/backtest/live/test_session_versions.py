@@ -15,12 +15,14 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from live_samples import live, seam
 from session_samples import BuyAndHold, StopFlag, ist, rig
 
+from openalgo.backtest._live._session_loop import Session
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live._version_id import version_of
 from openalgo.backtest._manifest import strategy_source_hash
@@ -146,3 +148,18 @@ def test_a_class_with_no_source_is_named_in_the_banner(world):
         "Built: its source was not hashed (a class built at run time): its version id "
         "hashes its name and parameters only"
     ) in world.lines
+
+
+def test_a_session_whose_start_has_not_recorded_versions_has_none():
+    # The banner and the close read the versions; before the start records them they are
+    # empty, as every other record of a start is.
+    session = Session(
+        SimpleNamespace(broker="zerodha"),
+        now=lambda: 0,
+        sleep=lambda seconds: None,
+        threads=False,
+        stop=StopFlag(),
+        emit=print,
+    )
+    versions = session.versions
+    assert (versions.banner_lines(), versions.manifests, versions.ids) == ([], {}, {})

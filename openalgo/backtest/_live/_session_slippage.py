@@ -18,26 +18,32 @@ away from the trader), so the rule has one source.
   the kernel stamps the order with the open of the slice in progress, which opened before
   the event, so the instant is the one the session placed it at (its intent's
   `created_ns`), and the bar is the next minute's.
-- **The engine's exit at a leg's target** (`level_price`), made on the tick that reached
+- **The engine's exit at a leg's target** (`target_price`), made on the tick that reached
   the target: at the target's level in the bar that tick came in, or at that bar's open
   when it opened at or beyond the level, as the kernel fills a leg's level. It is told
   from a strategy's exit by the exit reason the kernel records (`LEG_TARGET`), which a
   strategy's exit cannot take (`_strategy_orders.ENGINE_LEG_EXIT_REASONS`); its level is
   learned from the kernel's live state when the exit is placed (`TargetLevels`).
-- **A stop** (`level_price`), an SL-M (cash equity, futures) or the stop-limit of an
-  option: at its trigger in the bar its fill came in, or at that bar's open when it opened
-  at or through the trigger, as the kernel fills a stop; an option's stop-limit is held at
-  its limit, and one whose bar opened beyond its limit is not priced (the kernel's limit
-  then rests or exits at a later open).
+- **A stop** (`stop_price`), an SL-M (cash equity, futures) or the stop-limit of an
+  option: in the first bar whose low (a sell's stop) or high (a buy's) reaches its
+  trigger, at the trigger, or at that bar's open when it opened at or through the
+  trigger, as the kernel fills a stop on the same bars. The bars looked at run from the
+  one in which the broker began holding the trigger (`StopTriggers`: the stop's placing,
+  or the modify that last moved it) to the one in which its fill was heard, which may be
+  later than the trade that filled it (a fill heard through a poll, or a lagging
+  stream). A stop filled where no bar reached its trigger is not priced. An option's
+  stop-limit is held at its limit, and one whose bar opened beyond its limit is not
+  priced (the kernel's limit then rests or exits at a later open).
 
 The bars are the session's own (the series'). For a released slice that is the bar the
 kernel ran (its tick bar, or the broker's candle of a minute the catch-up released), else
 the broker's candle read for it since. For a slice not released yet it is its trades so far
-(`TickBarBuilder.open_so_far`): only its open is known then. A released slice with no bar
-had no trade and is passed over by a MARKET order, as a backtest passes a missing bar,
-unless it is still marked missing (no bar of it is known: the feed was dead, or a restart
-began in it, and no candle has come), so it may hold the trade the broker filled at. A
-price the session cannot give is None, with why (`Unpriced`).
+(`TickBarBuilder.open_so_far`): only its open is known then, so a stop not reached in a
+released bar is set in it. A released slice with no bar had no trade and is passed over,
+as a backtest passes a missing bar, unless it is still marked missing (no bar of it is
+known: the feed was dead, or a restart began in it, and no candle has come), so it may
+hold the trade the broker filled at. A price the session cannot give is None, with why
+(`Unpriced`).
 
 Times are UTC nanoseconds, prices rupees, quantities units.
 """
@@ -67,6 +73,7 @@ NO_BAR = "no bar of its minute"
 NOT_KNOWN = "an order its kernel session does not know"
 NO_LEVEL = "its target's level was not kept (placed before a restart)"
 BEYOND_LIMIT = "its bar opened beyond the stop-limit's limit"
+NOT_REACHED = "no bar from its trigger's placing to its fill reached the trigger"
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,40 @@ class TargetLevels:
         return self._levels.get((strategy, kernel_order))
 
 
+class StopTriggers:
+    """When the broker began holding each order's trigger, by strategy and kernel order:
+    the trigger in rupees and the instant (UTC nanoseconds) of each modify the venue map
+    applied (`modified`, after the broker accepted it), so a stop's fill is looked for
+    from the bar its present trigger has held since (`held_since`)."""
+
+    def __init__(self) -> None:
+        self._modified: dict[tuple[str, int], list[tuple[float, int]]] = {}
+
+    def modified(self, strategy: str, kernel_order: int, trigger: float, at_ns: int) -> None:
+        """Note that `strategy`'s order `kernel_order` holds `trigger` from `at_ns`."""
+        self._modified.setdefault((strategy, kernel_order), []).append((trigger, at_ns))
+
+    def held_since(
+        self, strategy: str, kernel_order: int, intent: OrderIntent, trigger: float, start_ns: int
+    ) -> int:
+        """The instant from which order `kernel_order` of `strategy`, placed as `intent`,
+        has held `trigger`, its present one: its placing, or the modify that moved it
+        there (a later modify of its units alone keeps it). A trigger moved where this
+        start did not see it (before a restart, or by a modify its order's news confirmed)
+        is held from the last move this start knows of, at the earliest from its
+        beginning (`start_ns`)."""
+        held = [(intent.trigger_price, intent.created_ns)]
+        held += self._modified.get((strategy, kernel_order), [])
+        if held[-1][0] != trigger:
+            return max(held[-1][1], start_ns)
+        since = held[-1][1]
+        for kept, at_ns in reversed(held):
+            if kept != trigger:
+                break
+            since = at_ns
+        return since
+
+
 def is_target_exit(trader: Any, kernel_order: int, intent: OrderIntent) -> bool:
     """True for the engine's exit at a leg's target (module docstring)."""
     if intent.purpose is not Purpose.EXIT:
@@ -153,23 +194,69 @@ def market_price(
     return Priced(bar[0], price)
 
 
-def level_price(
+def target_price(
+    session: Any, trader: Any, *, side: str, level: float, at_ns: int
+) -> Priced | Unpriced:
+    """A backtest's fill of the engine's exit of `side` at a leg's target `level` in the
+    bar holding `at_ns`, the instant of the tick that reached it, or at its open when it
+    opened at or beyond the level (module docstring)."""
+    bar = _bar_holding(session, trader, at_ns)
+    if bar is None:
+        return Unpriced(NO_BAR)
+    return _at_level(trader, side, level, *bar, target=True)
+
+
+def stop_price(
     session: Any,
     trader: Any,
     *,
     side: str,
+    trigger: float,
+    since_ns: int,
+    heard_ns: int,
+    limit: float | None = None,
+) -> Priced | Unpriced:
+    """A backtest's fill of a stop of `side` at `trigger`, which the broker held from
+    `since_ns` and whose fill the session heard at `heard_ns`, held at `limit` for an
+    option's stop-limit: in the first bar from the one holding `since_ns` to the one
+    holding `heard_ns` that reaches the trigger (module docstring)."""
+    series, released = trader.part.series, trader.part.released
+    # A sell's stop lies below the price and a bar's low reaches it; a buy's lies above.
+    below = side == "SELL"
+    for index, (opened, closed) in enumerate(series.slices):
+        if closed <= min(since_ns, heard_ns):
+            continue
+        if opened > heard_ns:
+            break
+        if index >= released:
+            so_far = _so_far(session, trader, opened)
+            if so_far is None:
+                return Unpriced(NO_BAR)
+            return _at_level(trader, side, trigger, *so_far, target=False, limit=limit)
+        bar = series.bar(opened)
+        if bar is None:
+            if series.missing_slices(opened, closed):
+                return Unpriced(NO_BAR)
+            continue
+        if (bar.low <= trigger) if below else (bar.high >= trigger):
+            return _at_level(trader, side, trigger, opened, bar.open, target=False, limit=limit)
+    return Unpriced(NOT_REACHED)
+
+
+def _at_level(
+    trader: Any,
+    side: str,
     level: float,
-    at_ns: int,
+    opened: int,
+    open_price: float,
+    *,
     target: bool,
     limit: float | None = None,
 ) -> Priced | Unpriced:
-    """A backtest's fill of a closing order of `side` at a leg's `level` (a `target`, else a
-    stop's trigger) in the bar holding `at_ns`, or at its open when it opened at or beyond
-    the level, held at `limit` for an option's stop-limit (module docstring)."""
-    bar = _bar_holding(session, trader, at_ns)
-    if bar is None:
-        return Unpriced(NO_BAR)
-    opened, open_price = bar
+    """The kernel's fill of a closing order of `side` at a leg's `level` (a `target`, else
+    a stop's trigger) in the bar opening at `opened` at `open_price`: at the level, or at
+    the open when it opened at or beyond it, with the run's slippage; held at `limit` for
+    an option's stop-limit, and not priced when the bar opened beyond that limit."""
     if limit is not None and AGAINST_THE_TRADER[side] * (open_price - limit) > 0:
         return Unpriced(BEYOND_LIMIT)
     # A long's target and a short's stop lie above the price: an open at or above them
@@ -185,11 +272,9 @@ def level_price(
 
 def _made_on_an_event(purpose: Purpose, exit_reason: str | None) -> bool:
     """True for an order the engine makes on an event while its kernel session waits
-    inside a minute (module docstring): a leg's target exit, a risk exit but the time
-    exit."""
-    if purpose is Purpose.RISK_EXIT:
-        return exit_reason != _TIME_EXIT
-    return purpose is Purpose.EXIT and exit_reason == LEG_TARGET
+    inside a minute (module docstring): a risk exit but the time exit. (The engine's
+    target exit, made on a tick too, is priced at its level, `target_price`.)"""
+    return purpose is Purpose.RISK_EXIT and exit_reason != _TIME_EXIT
 
 
 def _bar_at_or_after(session: Any, trader: Any, decided_at_ns: int) -> tuple[int, float] | None:
@@ -237,14 +322,17 @@ __all__ = [
     "BEYOND_LIMIT",
     "MARKET",
     "NOT_KNOWN",
+    "NOT_REACHED",
     "NO_BAR",
     "NO_LEVEL",
     "TRIGGERED",
     "Priced",
     "Slippage",
+    "StopTriggers",
     "TargetLevels",
     "Unpriced",
     "is_target_exit",
-    "level_price",
     "market_price",
+    "stop_price",
+    "target_price",
 ]

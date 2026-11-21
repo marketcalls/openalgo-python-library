@@ -188,17 +188,36 @@ def test_the_kill_switchs_lock_leaves_its_refusals_in_the_strategies_orders(acco
         assert set(result.orders["reject_code"].dropna()) == {"live_lock"}
 
 
+#: The card of the account's refusals in the account's session, as the page writes it: the
+#: session set the account's daily loss limit alone, no trade cap and no profit target.
+LOCKED_OUT_CARD = (
+    "The account refused no order; the entries the account&#x27;s daily loss limit locked "
+    "out are in the strategies&#x27; orders with the code live_lock, and the working entries "
+    "and adds its kill switch cancelled are in their orders as cancelled."
+)
+
+
+def refused_card(page: str) -> str:
+    """The words of the empty card of the account's refusals on a combined page."""
+    after = page.split("Refused by the Account", 1)[1]
+    return after.split("<p class='empty'>", 1)[1].split("</p>", 1)[0]
+
+
 def test_the_empty_refused_card_after_the_kill_switch_says_where_its_refusals_are(account):
-    # The account's trade cap refused nothing, but the account's loss limit fired the kill
-    # switch: the card must not read as if the account had refused and ended nothing.
+    # The account refused nothing itself, but its loss limit fired the kill switch: the
+    # card must not read as if the account had refused and ended nothing, nor name a trade
+    # cap or a profit target the session did not set.
+    assert refused_card(account.portfolio.tearsheet()) == LOCKED_OUT_CARD
+
+
+def test_the_refused_cards_words_are_not_an_assumptions_line_too(account):
     page = account.portfolio.tearsheet()
-    assert "The account refused no order and ended none." not in page
-    assert (
-        "The account&#x27;s trade cap refused no order; the entries the account&#x27;s daily "
-        "loss limit or profit target locked out are in the strategies&#x27; orders with the "
-        "code live_lock, and the working entries and adds its kill switch cancelled are in "
-        "their orders as cancelled."
-    ) in page
+    assert page.count("locked out are in the strategies&#x27; orders") == 1
+
+
+def test_a_session_with_no_account_limit_refuses_nothing_in_a_backtests_words(world):
+    page = live(world, BuyAndHold).portfolio.tearsheet()
+    assert refused_card(page) == "The account refused no order and ended none."
 
 
 def test_the_account_note_names_the_kill_switchs_cancels(account):

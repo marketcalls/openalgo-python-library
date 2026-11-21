@@ -58,12 +58,13 @@ from ._session_news import News
 from ._session_parts import SessionParts, SessionStopped, StopFlag
 from ._session_records import FillRecord
 from ._session_saved import save_released, saved_commands
-from ._session_slippage import TargetLevels
+from ._session_slippage import StopTriggers, TargetLevels
 from ._session_trader import Trader
 from ._shared_alerts import warning_line
 from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
 from ._venue_requests import request_fields
+from ._version_id import StartVersions
 from ._worker_queue import Request
 from .bars import DEFAULT_CLOSE_GRACE_S, TickBarBuilder
 from .data_worker import DataWorker
@@ -147,10 +148,11 @@ class Session:
         #: sets it from journal L at a restart).
         self.fills: list[FillRecord] = []
         self.figures = DayFigures({}, StrategyFigures(), SessionFigures())
-        #: The strategies' versions at this start (`_session_versions.StartVersions`), and
-        #: the levels of their target exits (`_session_slippage`).
-        self.versions: Any = None
-        self.levels = TargetLevels()
+        #: The strategies' versions at this start (`_session_versions`, none until it
+        #: records them), and the levels of their target exits and the moves of their
+        #: stops' triggers (`_session_slippage`).
+        self.versions = StartVersions()
+        self.levels, self.triggers = TargetLevels(), StopTriggers()
         self.started_ns = now()
         self._held: collections.deque[Envelope] = collections.deque()
         self._event_failed = False

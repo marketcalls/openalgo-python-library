@@ -8,7 +8,10 @@ code a backtest's trade of that exit carries: the kernel's exit reason of the or
 (`Engine.order_exit_reason`), or `SIGNAL` for a strategy's order that names none (a sell
 that reduces, as the kernel's fill path records it). An entry or an add closes nothing and
 has none: its alert and event are as they were. The event carries the code, the alert its
-words in the trader's terms (`EXIT_REASON_WORDS`).
+words in the trader's terms (`EXIT_REASON_WORDS`), but for the session's own risk exits the
+kernel records as "manual" (Ctrl+C or a retried exit, a stop not confirmed or rejected,
+the strategy's kill switch), which the alert words by the reason the session gave the
+kernel for them (`Trader.reasons`, `MANUAL_RISK_EXIT_WORDS`).
 """
 
 from __future__ import annotations
@@ -27,9 +30,13 @@ from ._venue_requests import PlaceRequest
 #: (rust/oa_bt/src/engine/venue_fills.rs: `exit_reason.unwrap_or(ExitReason::Signal)`).
 SIGNAL = "signal"
 
+#: The exit reason the kernel records for a risk exit the session asks for that has no
+#: reason of its own (rust/oa_bt/src/engine/venue_roles.rs) and for a strategy's own exit
+#: naming "manual".
+MANUAL = "manual"
+
 #: Each of the kernel's exit reasons (rust/oa_bt/src/rms/vocabulary.rs, `ExitReason`) in
-#: the trader's terms. A risk exit of the session that the kernel records as "manual" is
-#: Ctrl+C's flatten, or the market exit of a stop the broker refused or left unplaced.
+#: the trader's terms.
 EXIT_REASON_WORDS: Mapping[str, str] = MappingProxyType(
     {
         "leg_sl": "stop level",
@@ -40,7 +47,7 @@ EXIT_REASON_WORDS: Mapping[str, str] = MappingProxyType(
         "lock_profit": "profit lock",
         "daily_loss_limit": "daily loss limit",
         "scheduler": "square-off time",
-        "manual": "manual exit",
+        MANUAL: "manual exit",
         "eod": "end of the session",
         "drawdown_halt": "drawdown halt",
         "margin_liquidation": "margin call",
@@ -49,6 +56,17 @@ EXIT_REASON_WORDS: Mapping[str, str] = MappingProxyType(
         "account_loss_limit": "kill switch at the account daily loss limit",
         "daily_profit_target": "daily profit target",
         "account_profit_target": "kill switch at the account daily profit target",
+    }
+)
+#: The session's own risk exits the kernel records as `MANUAL`, in the trader's terms, by
+#: the reason the session gave the kernel (its `RISK_EXIT_REASONS`; the place command's
+#: "reason"). A strategy's exit asked for again after a rejection is "operator_stop".
+MANUAL_RISK_EXIT_WORDS: Mapping[str, str] = MappingProxyType(
+    {
+        "operator_stop": "Ctrl+C or a retried exit",
+        "unprotected": "stop not confirmed in time",
+        "stop_rejected": "stop rejected",
+        "kill_switch": "kill switch",
     }
 )
 
@@ -60,6 +78,14 @@ def exit_reason(trader: Any, kernel_order: int, purpose: Purpose) -> str | None:
     if purpose in ENTRY_PURPOSES:
         return None
     return call(trader.engine.order_exit_reason, kernel_order) or SIGNAL
+
+
+def exit_words(trader: Any, kernel_order: int, code: str) -> str:
+    """Exit reason `code` of `trader`'s kernel order `kernel_order` in the trader's terms
+    (module docstring): a risk exit the kernel records as `MANUAL` by the reason the
+    session gave it. Raises LiveError as `reason_words` does."""
+    risk = trader.reasons.get(kernel_order) if code == MANUAL else None
+    return MANUAL_RISK_EXIT_WORDS.get(risk or "") or reason_words(code)
 
 
 def reason_words(code: str) -> str:
@@ -87,4 +113,13 @@ def request_reason(traders: Any, request: object) -> dict[str, str]:
     return {}
 
 
-__all__ = ["EXIT_REASON_WORDS", "SIGNAL", "exit_reason", "reason_words", "request_reason"]
+__all__ = [
+    "EXIT_REASON_WORDS",
+    "MANUAL",
+    "MANUAL_RISK_EXIT_WORDS",
+    "SIGNAL",
+    "exit_reason",
+    "exit_words",
+    "reason_words",
+    "request_reason",
+]

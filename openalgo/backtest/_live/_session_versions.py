@@ -14,14 +14,14 @@ and the restart match orders on.
 A restart whose version id of a strategy differs from the day's latest earlier start of it
 is allowed: the start banner says so and the event `version_changed` records both ids, so
 the record shows the trader changed the code or the parameters. The banner names every
-strategy's version id, and each strategy whose source could not be hashed (a class built
-at run time). Times are UTC nanoseconds.
+strategy's version id, each strategy whose source could not be hashed (a class built at
+run time), and each parameter hashed by its type alone (`_version_id`), with the record of
+the start's versions (`_version_id.StartVersions`). Times are UTC nanoseconds.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from .._manifest import build_manifest
@@ -29,67 +29,10 @@ from .._pipeline_result import manifest_arguments
 from ..reference import default_tables
 from ._plan_catch_up import StrategyPlan
 from ._result_build import prepared_run
-from ._version_id import parameter_values
+from ._version_id import Started, StartVersions, parameter_values
 
 #: The event of a strategy whose version differs from the day's earlier start's.
 VERSION_CHANGED = "version_changed"
-
-
-@dataclass(frozen=True)
-class Started:
-    """One strategy's version at this start: its name, `version_id`, whether its source was
-    hashed, its run `manifest` (JSON types) and the version id of the day's latest earlier
-    start of it (`earlier`, None at its first start of the day)."""
-
-    name: str
-    version_id: str
-    source_hashed: bool
-    manifest: dict[str, Any]
-    earlier: str | None = None
-
-    @property
-    def changed(self) -> bool:
-        """True when an earlier start of the day ran the strategy at another version."""
-        return self.earlier is not None and self.earlier != self.version_id
-
-
-@dataclass(frozen=True)
-class StartVersions:
-    """Every strategy's version at this start, in call order (`started`)."""
-
-    started: tuple[Started, ...] = ()
-
-    @property
-    def manifests(self) -> dict[str, dict[str, Any]]:
-        """Each strategy's run manifest of this start, by name in call order."""
-        return {one.name: one.manifest for one in self.started}
-
-    @property
-    def ids(self) -> dict[str, str]:
-        """Each strategy's version id, by name in call order."""
-        return {one.name: one.version_id for one in self.started}
-
-    def banner_lines(self) -> list[str]:
-        """The start banner's lines (module docstring): the version ids, then each
-        strategy whose version changed since the day's earlier start, then each whose source
-        was not hashed."""
-        if not self.started:
-            return []
-        ids = ", ".join(f"{one.name} {one.version_id}" for one in self.started)
-        lines = [f"Versions: {ids}"]
-        lines += [
-            f"{one.name}: its version changed since the day's earlier start, from "
-            f"{one.earlier} to {one.version_id} (its code or its parameters)"
-            for one in self.started
-            if one.changed
-        ]
-        lines += [
-            f"{one.name}: its source was not hashed (a class built at run time): its version "
-            "id hashes its name and parameters only"
-            for one in self.started
-            if not one.source_hashed
-        ]
-        return lines
 
 
 def start_manifest(part: StrategyPlan) -> dict[str, Any]:
@@ -127,6 +70,7 @@ def record_versions(session: Any) -> StartVersions:
             spec.version.source_hashed,
             start_manifest(part),
             earlier.get(spec.name),
+            spec.version.by_type,
         )
         journal.record_version(one.name, one.version_id, one.manifest, day=day)
         if one.changed:
@@ -142,4 +86,4 @@ def _latest(rows: Any) -> Mapping[str, str]:
     return {row.strategy: row.version_id for row in rows}
 
 
-__all__ = ["VERSION_CHANGED", "StartVersions", "Started", "record_versions", "start_manifest"]
+__all__ = ["VERSION_CHANGED", "record_versions", "start_manifest"]

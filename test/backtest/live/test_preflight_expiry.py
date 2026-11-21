@@ -77,6 +77,12 @@ def test_a_missing_or_unreadable_expiry_is_a_warning_not_a_refusal(given):
     assert check.ok and check.message.startswith(WARNING)
 
 
+def test_a_contract_two_strategies_trade_is_checked_once():
+    # Two strategies on one contract (a shared instrument) name it twice.
+    [check] = expiry_checks([CONTRACT, CONTRACT], facts("24-DEC-26"))
+    assert not check.ok
+
+
 def test_a_contract_openalgo_did_not_find_has_no_expiry_check():
     # Its own symbol check has failed already.
     assert expiry_checks([CONTRACT], []) == []

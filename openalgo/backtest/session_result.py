@@ -52,8 +52,8 @@ not it has rows.
   better; None when not one of them could be compared) and `slippage_not_compared`
   (MARKET fills with no bar to set them against),
   `stop_slippage` and `stop_slippage_not_compared` (the same for the fills of the
-  stops, each at its trigger with the run's slippage, or its bar's open when the bar
-  opened through it), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
+  legs' stops, each at its trigger with the run's slippage, or its bar's open when the
+  bar opened through it), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
   (`differing`, `unconfirmed`; a difference of an instrument several strategies share is
   named and counted once), the strategies of earlier starts (`earlier`) and each
@@ -75,9 +75,10 @@ not it has rows.
   against the trader: positive when live did worse), `rupees` (the difference times the
   units and the multiplier), `compared` and `reason` (why a row is not compared: no bar
   yet, a LIMIT order, a hand order). A MARKET order is set against the open of the bar
-  opening at its decision, the engine's target exit against its level, a stop against its
-  trigger (or the bar's open through a gap), each with the run's slippage. The compared
-  MARKET rows add up to `summary.slippage`, the stops' to `summary.stop_slippage`.
+  opening at its decision, the engine's target exit against its level, a stop order against
+  its trigger (or the bar's open through a gap) in the first bar that reached it, each with
+  the run's slippage. The compared MARKET rows add up to `summary.slippage`, the legs'
+  stops' (purpose stop) to `summary.stop_slippage`.
 - `drift`: each broker candle against the bar built from the feed's ticks. The strategy
   decided, and kept deciding, on the bars built from ticks: a broker candle never
   replaced one, and was the bar only of a minute with no ticks (one the feed was dead

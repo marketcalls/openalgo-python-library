@@ -36,11 +36,13 @@ def expiry_checks(contracts: Sequence[Instrument], facts: Sequence[InstrumentFac
     reference tables resolved them) that OpenAlgo found (`facts`, the preflight's
     instruments): passed when OpenAlgo's expiry is the contract's listed expiry or its last
     trading day, failed when it is another day, and passed with a warning when OpenAlgo
-    gives none or one that cannot be read (module docstring)."""
+    gives none or one that cannot be read (module docstring). A contract several
+    strategies trade is checked once."""
     found = {(fact.symbol, fact.exchange): fact for fact in facts}
+    named = {(contract.symbol, contract.exchange): contract for contract in contracts}
     checks = []
-    for contract in contracts:
-        fact = found.get((contract.symbol, contract.exchange))
+    for (symbol, exchange), contract in named.items():
+        fact = found.get((symbol, exchange))
         if fact is not None:
             checks.append(_check(contract, fact.expiry))
     return checks

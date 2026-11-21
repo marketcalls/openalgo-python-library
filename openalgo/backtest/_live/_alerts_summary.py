@@ -83,9 +83,9 @@ class SessionSummary:
     run's modelled slippage (negative when live did better), or None when not one of the
     day's MARKET fills could be compared; `slippage_not_compared` counts the MARKET fills
     it could not set against a bar; `stop_slippage` and `stop_slippage_not_compared` are
-    the same for the fills of stops, each at its trigger (or its bar's open when the bar
-    opened through it) with the run's slippage, `stop_slippage` None when no stop's fill
-    was compared. `rejected_orders` counts the orders the broker or
+    the same for the fills of the legs' stops, each at its trigger (or its bar's open when
+    the bar opened through it) with the run's slippage, `stop_slippage` None when no
+    stop's fill was compared. `rejected_orders` counts the orders the broker or
     OpenAlgo refused, `unprotected_seconds` the seconds a position had no stop at the
     broker (shown rounded up, so any exposure shows), and
     `reconcile_mismatches` the reconciliations whose broker position differed from the

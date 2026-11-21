@@ -11,7 +11,12 @@ import hashlib
 import pytest
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._version_id import parameter_values, version_of
+from openalgo.backtest._live._version_id import (
+    Started,
+    StartVersions,
+    parameter_values,
+    version_of,
+)
 
 
 class Cross(bt.Strategy):
@@ -88,3 +93,37 @@ def test_a_version_id_is_12_lowercase_hexadecimal_characters():
 
 def test_the_parameter_values_are_the_defaults_with_the_given_ones_over_them():
     assert parameter_values(Cross, {"slow": 30}) == {"fast": 9, "slow": 30}
+
+
+def test_a_set_parameter_is_hashed_in_sorted_order():
+    # A set's own order depends on the process's hash seed: the id must not.
+    from openalgo.backtest._manifest import strategy_source_hash
+
+    source = strategy_source_hash(Cross)
+    version = version_of(Cross, {"watch": {"TCS", "SBIN", "INFY", "HDFCBANK"}})
+    canonical = (
+        '{"parameters":{"fast":9,"slow":21,"watch":["HDFCBANK","INFY","SBIN","TCS"]},'
+        f'"source":"{source}"}}'
+    )
+    assert version.version_id == by_hand(canonical)
+
+
+class Model:
+    """An object with no text of its own: its default text names its memory address."""
+
+
+def test_an_object_known_only_by_its_address_is_hashed_by_its_type_and_named():
+    # Two objects alive at once have two addresses, as one object has in two processes.
+    one, other = Model(), Model()
+    first, second = version_of(Cross, {"model": one}), version_of(Cross, {"model": other})
+    assert first.version_id == second.version_id
+    assert first.by_type == ("model",)
+    assert version_of(Cross, None).by_type == ()
+
+
+def test_the_banner_names_a_parameter_hashed_by_its_type():
+    started = Started("Cross", "0123456789ab", True, {}, by_type=("model",))
+    assert StartVersions((started,)).banner_lines()[-1] == (
+        "Cross: model has no text of its value (an object shown by its memory address): its "
+        "version id hashes its type only, so a change to its value does not change the id"
+    )
