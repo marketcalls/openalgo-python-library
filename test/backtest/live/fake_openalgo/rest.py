@@ -79,6 +79,7 @@ ROUTES: dict[str, Route] = {
     "intervals": routes_data.intervals,
     "quotes": routes_data.quotes,
     "history": routes_data.history,
+    "market/holidays": routes_data.holidays,
     "telegram/notify": routes_data.telegram_notify,
 }
 API_PREFIX = "/api/v1/"

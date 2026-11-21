@@ -10,7 +10,8 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
 7. The preflight. Started before the open, a preflight that fails only on the broker's
    login is run again every `LOGIN_RETRY_EVERY_S`, its alert test reported again rather
    than sent, with an ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The
-   guard's banner line is read now.
+   guard's banner line is read now. The later days on which OpenAlgo's holidays and the
+   package calendar disagree are the event `CALENDAR_DISAGREES` once the session exists.
 8. The order worker starts journal handle W, the journal's session of the day and the
    order path (on its own thread, or inline under the test seam), and the main thread
    opens journal handle L.
@@ -87,6 +88,9 @@ WORKER_READY_TIMEOUT_S = 30.0
 PRODUCT = "MIS"
 #: The folder of the day's logs, under the account's folder.
 LOGS_FOLDER = "logs"
+#: The event naming the later days OpenAlgo's holidays and the package calendar disagree
+#: on (18-multi-strategy 12.2; `_preflight_calendar`).
+CALENDAR_DISAGREES = "calendar_disagrees"
 
 _NS = NANOS_PER_SECOND
 
@@ -230,6 +234,8 @@ def _open(
     # The preflight marks its warnings with a prefix of its own; the console adds one.
     for note in (*(note.removeprefix(WARNING) for note in report.warnings), *plan.warnings):
         session.warn(note)
+    if report.calendar_disagrees:
+        session.event(CALENDAR_DISAGREES, days=list(report.calendar_disagrees))
     session.risk.warn_at_start()
     return session
 
@@ -267,6 +273,7 @@ def _preflight(
         account_max_daily_loss=options.account_max_daily_loss,
         mode=mode,
         alerts=alerts,
+        contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
     )
     calendar = default_calendar()
     opens = [calendar.session(exchange, spec.day) for _, exchange in spec.instruments]
@@ -352,6 +359,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
 
 
 __all__ = [
+    "CALENDAR_DISAGREES",
     "LOGIN_ALERT_AT",
     "LOGIN_RETRY_EVERY_S",
     "LOGS_FOLDER",
