@@ -112,6 +112,7 @@ def replay(record: SessionRecord) -> ReplayOutcome:
                 now=lambda: 0,
                 event=lambda *a, **k: None,
                 decision=lambda *a, **k: None,
+                warn=lambda text: None,
                 locked_entries=LockedEntries(),
             )
             for name, part in parts.items()

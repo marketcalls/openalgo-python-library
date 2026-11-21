@@ -46,6 +46,7 @@ def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...
             now=session.now,
             event=session.event,
             decision=parts.logs.decision,
+            warn=session.warn,
             locked_entries=parts.worker.locked_entries,
         )
         call(part.engine.cap_sizing_equity, float(funds_available))

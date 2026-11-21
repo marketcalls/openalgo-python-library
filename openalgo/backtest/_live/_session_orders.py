@@ -9,15 +9,17 @@ job.
   entries are locked (a reversal the kernel held for its stop's cancel) is refused, never
   sent (`_session_unsent`); one that still waits for the order worker when they lock is
   withdrawn (`_venue_withdraw`), and the worker refuses one it takes meanwhile
-  (`_locked_entries`).
+  (`_locked_entries`). A resting reversal is refused, never sent (`_session_unsent`).
 - **Position and working orders**: the kernel's position in units, its working orders,
   those that open or add and those that close, and how an alert names an order.
 - **Exits and cancels** the session asks of the kernel.
 
 `TraderOrders` is a part of `_session_trader.Trader`, which holds the kernel session
-(`engine`), the venue map (`venue`), the strategy's name, whether the kernel session
-finished (`finished`), the event stream's writer (`_event`), and the risk exits' reasons
-and the position's units at each placement (`reasons`, `units_at_place`). Times are UTC
+(`engine`) and the strategy's part of the plan (`part`, its run context among it), the
+venue map (`venue`), the strategy's name, whether the kernel session finished
+(`finished`), the event stream's writer (`_event`), the session's warnings (`_warn`), and
+the risk exits' reasons and the position's units at each placement (`reasons`,
+`units_at_place`). Times are UTC
 nanoseconds, quantities units. Used by the loop only.
 """
 
@@ -41,11 +43,13 @@ class TraderOrders:
     name: str
     #: The strategy's kernel session (`_session_bookkeeping.Bookkeeping.engine`).
     engine: Any
+    part: Any
     venue: VenueMap
     finished: bool
     reasons: dict[int, str]
     units_at_place: dict[int, int]
     _event: Callable[..., None]
+    _warn: Callable[[str], None]
 
     def commands(self) -> list[OrderRequest | WithdrawPlace]:
         """The kernel's commands since the last call, as the order worker's requests (a
@@ -57,8 +61,16 @@ class TraderOrders:
             return []
         requests: list[OrderRequest | WithdrawPlace] = []
         commands = call(self.engine.take_commands)
+        reversals = self.part.context.resting_reversals
         while commands:
-            kept = to_send(self.engine, self.name, commands, event=self._event)
+            kept = to_send(
+                self.engine,
+                self.name,
+                commands,
+                event=self._event,
+                reversals=reversals,
+                warn=self._warn,
+            )
             for command in kept:
                 if command.get("command") != "place":
                     continue

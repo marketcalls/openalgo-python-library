@@ -198,6 +198,20 @@ def test_reverse_closes_and_opens_the_rest_on_the_other_side():
     assert result.final_positions["quantity_units"].iloc[0] == -50
 
 
+def test_a_resting_reversal_fills_in_a_backtest():
+    # A live session refuses a resting reversal (2.4.0 item P3-2); a backtest takes it as
+    # before. The LIMIT sale of 150 at 100.50, decided at the 09:19 close, rests from the
+    # 09:20 bar, which opens at 100.00 and reaches 101.00: it fills at its limit, 100
+    # closing the long and 50 opening the short.
+    strategy = scripted(
+        {2: lambda s: s.buy(qty=100), 4: lambda s: s.sell(qty=150, price=100.5, reverse=True)}
+    )
+    result = run(strategy)
+    assert list(result.fills["quantity_units"]) == [100, 100, 50]
+    assert list(result.fills["price_rupees"]) == [100.0, 100.5, 100.5]
+    assert result.final_positions["quantity_units"].iloc[0] == -50
+
+
 def test_an_order_beyond_the_position_without_reverse_is_rejected():
     handles = []
     strategy = scripted({2: lambda s: s.buy(qty=100), 4: lambda s: handles.append(s.sell(qty=150))})

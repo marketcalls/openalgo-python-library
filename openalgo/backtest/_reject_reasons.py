@@ -3,7 +3,8 @@ of the run's rejection warnings (`_rejections`).
 
 The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
 `rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
-and `exit_cover` are a live session's: the broker's own rejection of an order, and a
+and `exit_cover` are a live session's: the broker's own rejection of an order (or the
+session's refusal to send a resting reversal, `_live/_session_unsent`), and a
 reduce-only order that would leave more units resting to close a position than it has
 (`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
@@ -131,8 +132,11 @@ REASONS = MappingProxyType(
         ),
         "venue": (
             "the broker or the exchange refused the order in a live session, for a "
-            "reason of its own",
-            "read the broker's reason in the session's journal and the OpenAlgo order book",
+            "reason of its own, or the session itself did not send it: a live session "
+            "takes a reversal (reverse=True) as a MARKET order only, since a resting one "
+            "would work beside the position's stop and both could fill",
+            "read the broker's reason in the session's journal and the OpenAlgo order book; "
+            "submit a reversal as a MARKET order, or exit and enter separately",
         ),
         "exit_cover": (
             "a live session keeps at most the position's units resting to close it, so "
