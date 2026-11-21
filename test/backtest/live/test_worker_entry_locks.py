@@ -13,6 +13,8 @@ The worker runs on the fake OpenAlgo with its real clients, guard and journal
 (`worker_samples`); its record is written here as the loop's `Trader.lock` writes it, and
 the copy itself is shown on a real kernel session (`venue_samples`). The thread test holds
 the worker inside another order's call with events, so the order of what happens is fixed.
+A session started on the fake shows its traders write to the worker's own record (2.4.0
+item P4-2): a trader given a record of its own would leave the worker's check blind.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
+from session_samples import Hold, ist
+from session_samples import rig as session_rig
 from venue_samples import new_session
 from worker_samples import PRICE, STRATEGY, WorkerRig
 
@@ -194,6 +198,58 @@ def test_an_entry_taken_after_its_strategys_entries_locked_is_not_sent(broker, t
 
     assert isinstance(answer, NotSent) and answer.reason is NotSentReason.ENTRIES_LOCKED
     assert placed(rig) == [("INFY", "SL-M")]
+
+
+# ----- a session's traders write to the worker's own record (2.4.0 item P4-2) -------------
+
+
+@pytest.fixture
+def session_world(make_fake_openalgo, monkeypatch, tmp_path):
+    """A session of `session_samples.Hold` on the fake (SBIN trading every 10 s at 500.00
+    from 14:40:05 IST; it buys 10 at 14:42:01 and holds them), Ctrl+C at 14:44:30."""
+    world = session_rig(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(14, 44, 30))
+    return world
+
+
+def read_the_workers_record(world, seen: list, *, lock: bool = False):
+    """An action of the world's script: note the order worker's record of the running
+    session's one trader in `seen`, after the trader locks its entries for the feed when
+    `lock` (lifted again at once, so the session runs on as before)."""
+
+    def act():
+        session = world.trace.runs[-1].session
+        (trader,) = session.traders
+        if lock:
+            trader.lock(FEED_DEAD)
+        seen.append(session.parts.worker.locked_entries.reasons(trader.name))
+        if lock:
+            trader.unlock(FEED_DEAD)
+
+    return act
+
+
+def test_a_session_traders_lock_reaches_the_order_workers_own_record(session_world):
+    seen: list = []
+    session_world.script.at(
+        ist(14, 43, 30), read_the_workers_record(session_world, seen, lock=True)
+    )
+
+    session_world.run(Hold)
+
+    assert seen == [(FEED_DEAD,)]
+
+
+def test_a_dead_feeds_lock_in_a_session_reaches_the_order_workers_own_record(session_world):
+    # The feed dies at 14:43:30 after its tick of 14:43:25: the risk watch locks the
+    # strategy's entries from 14:43:35, 10 s without a tick, and they stay locked.
+    seen: list = []
+    session_world.script.at(ist(14, 43, 30), session_world.fake.faults.feed_dead)
+    session_world.script.at(ist(14, 43, 50), read_the_workers_record(session_world, seen))
+
+    session_world.run(Hold)
+
+    assert seen == [(FEED_DEAD,)]
 
 
 def answer_to(rig: WorkerRig, request: PlaceRequest):
