@@ -2,8 +2,11 @@
 `_live/_version_id.py`; 18-multi-strategy 12.1, 2.4.0 item P5-3): a class defined in a
 notebook cell, or built with `exec` or `type()`, has its compiled code hashed in place of
 its source, so an edit of its code gives it a new version id, while the same code gives
-the same id in every process of one Python version, whatever its hash seed. A class whose
-code cannot be read either keeps the old rule: its qualified name and parameters.
+the same id in every process of one Python version, whatever its hash seed. A member whose
+code Python does not keep (a builtin, an object called as a method) leaves the rest of the
+class hashed, and a value known by its type alone is named for the start banner, as a
+parameter is. A class whose code cannot be read at all (every callable it holds is such a
+member) keeps the old rule: its qualified name and parameters.
 
 The classes are `version_cells`': `Cell` of a notebook cell, and the cell's edits.
 """
@@ -17,7 +20,7 @@ import subprocess
 import sys
 
 import pytest
-from version_cells import CELL, EDITS, KEPT, edited, from_cell
+from version_cells import CELL, EDITS, KEPT, edited, from_cell, with_member
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._version_id import Started, StartVersions, version_of
@@ -99,19 +102,73 @@ def test_a_class_built_at_run_time_is_hashed_by_its_compiled_code_under_its_pyth
     assert version.compiled_under == PYTHON
 
 
-def test_a_class_of_plain_attributes_hashes_them_by_type_and_text():
-    # Built has no function of its own; its attributes are hashed in name order, each as
-    # its type's name and its text, with the Python version, and that hash stands in the
-    # version id where a source hash would.
+def test_a_class_of_plain_attributes_hashes_them_as_its_parameters_are_hashed():
+    # Built has no function of its own; its attributes are hashed in name order, each by
+    # the rule a parameter's value is hashed by, with the Python version, and that hash
+    # stands in the version id where a source hash would.
     built = type("Built", (bt.Strategy,), {"symbol": "SBIN", "exchange": "NSE", "fast": 5})
     code = (
-        '{"classes":[{"attributes":{"exchange":["str","\'NSE\'"],"fast":["int","5"],'
-        '"symbol":["str","\'SBIN\'"]},"functions":{},"name":"Built"}],'
-        f'"python":"{PYTHON}"}}'
+        '{"classes":[{"attributes":{"exchange":"NSE","fast":5,"symbol":"SBIN"},'
+        f'"functions":{{}},"name":"Built"}}],"python":"{PYTHON}"}}'
     )
     source = f"compiled:sha256:{by_hand(code)}"
     expected = by_hand(f'{{"parameters":{{"fast":5}},"source":"{source}"}}')[:12]
     assert version_of(built, None).version_id == expected
+
+
+def with_constant(constant: object) -> type:
+    """`Cell` with `constant` added to its `on_bar`'s compiled constants."""
+    cell = from_cell(CELL)
+    code = cell.on_bar.__code__
+    cell.on_bar.__code__ = code.replace(co_consts=(*code.co_consts, constant))
+    return cell
+
+
+#: The slices Python 3.14 keeps among a method's constants for `x[1:]`, `x[:5]`, `x[1:3]`
+#: and `x[::2]`; Python 3.12 keeps their bounds instead, so the tests add them by hand.
+SLICES = (slice(1, None, None), slice(None, 5, None), slice(1, 3, None), slice(None, None, 2))
+
+
+def test_a_slice_among_a_methods_constants_is_hashed_by_its_text():
+    versions = [version_of(with_constant(each), None) for each in SLICES]
+    assert {version.compiled_under for version in versions} == {PYTHON}
+    assert len({version.version_id for version in versions}) == len(SLICES)
+    assert version_of(with_constant(SLICES[0]), None).version_id == versions[0].version_id
+
+
+def test_a_cached_method_and_a_builtin_leave_the_class_hashed_by_its_compiled_code():
+    # Cell holds a method cached with lru_cache and a static method cached with cache, each
+    # read through the function its cache wraps, and math.floor as a static method, hashed
+    # by its module and name: nothing in it is known by its type alone.
+    version = version_of(from_cell(CELL), None)
+    assert (version.compiled_under, version.by_type) == (PYTHON, ())
+
+
+def test_an_object_called_as_a_method_is_named_and_the_rest_of_the_class_still_hashed():
+    source = with_member("rule = Rule()")
+    version = version_of(from_cell(source), None)
+    assert (version.compiled_under, version.by_type) == (PYTHON, ("rule",))
+    body = source.replace(*EDITS["a method's body"])
+    assert version_of(from_cell(body), None).version_id != version.version_id
+
+
+def test_an_object_called_as_a_method_gives_one_version_id_whatever_its_address():
+    # Each build makes its own Rule at its own address; the id hashes its text without it.
+    source = with_member("rule = Rule()")
+    first, second = from_cell(source), from_cell(source)
+    assert first.rule is not second.rule
+    assert version_of(first, None).version_id == version_of(second, None).version_id
+
+
+def test_a_class_attribute_known_by_its_type_alone_is_named_for_the_banner():
+    version = version_of(from_cell(with_member("model = Model()")), None)
+    assert version.by_type == ("model",)
+
+
+def test_a_default_argument_known_by_its_type_alone_is_named_for_the_banner():
+    member = "def sized(self, bar, model=Model()):\n        return model"
+    version = version_of(from_cell(with_member(member)), None)
+    assert version.by_type == ("sized's default model",)
 
 
 class Rule:
@@ -126,7 +183,10 @@ class Rule:
     [Rule(), staticmethod(len)],
     ids=["an object called as a method", "a builtin as a static method"],
 )
-def test_a_class_whose_code_cannot_be_read_hashes_its_qualified_name_and_parameters(unreadable):
+def test_a_class_whose_code_cannot_be_read_at_all_hashes_its_qualified_name_and_parameters(
+    unreadable,
+):
+    # Every callable Opaque holds is one whose code Python does not keep.
     members = {"symbol": "SBIN", "exchange": "NSE", "fast": 5, "on_bar": unreadable}
     opaque = type("Opaque", (bt.Strategy,), members)
     version = version_of(opaque, None)
@@ -158,9 +218,8 @@ def test_the_banner_says_a_class_built_at_run_time_is_hashed_by_its_compiled_cod
     started = Started("Cell", "0123456789ab", False, {}, compiled_under="CPython 3.12")
     assert StartVersions((started,)).banner_lines()[1:] == [
         "Cell: its source could not be read (a class built at run time): its version id "
-        "hashes its compiled code (its functions and plain class attributes) under CPython "
-        "3.12 and its parameters, so the same code under another Python version gets "
-        "another id"
+        "hashes its compiled code (its functions and class attributes) under CPython 3.12 "
+        "and its parameters, so the same code under another Python version gets another id"
     ]
 
 

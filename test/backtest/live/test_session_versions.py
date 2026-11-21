@@ -23,6 +23,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from live_samples import live, seam
 from session_samples import BuyAndHold, StopFlag, ist, rig
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._session_loop import Session
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._live._version_id import version_of
@@ -150,8 +151,8 @@ def test_a_class_with_no_source_is_named_in_the_banner_with_the_python_its_code_
     assert f"Versions: Built {built}" in world.lines
     assert (
         "Built: its source could not be read (a class built at run time): its version id "
-        f"hashes its compiled code (its functions and plain class attributes) under {python} "
-        "and its parameters, so the same code under another Python version gets another id"
+        f"hashes its compiled code (its functions and class attributes) under {python} and "
+        "its parameters, so the same code under another Python version gets another id"
     ) in world.lines
 
 
@@ -162,8 +163,22 @@ class Rule:
         return None
 
 
-def test_a_class_whose_code_cannot_be_read_either_is_named_in_the_banner_as_before(world):
-    Opaque = type("Opaque", (BuyAndHold,), {"rule": Rule()})
+def test_an_object_called_as_a_method_is_named_in_the_banner_by_its_type(world):
+    # BuyAndHold's code is read; the Rule object's code is not, and the banner says so.
+    Ruled = type("Ruled", (BuyAndHold,), {"rule": Rule()})
+    world.stop_at(ist(14, 41))
+    live(world, Ruled)
+    assert (
+        "Ruled: rule has no text of its value (an object shown by its memory address): its "
+        "version id hashes its type only, so a change to its value does not change the id"
+    ) in world.lines
+    assert not any("its source was not hashed" in line for line in world.lines)
+
+
+def test_a_class_whose_code_cannot_be_read_at_all_is_named_in_the_banner_as_before(world):
+    # Opaque's one callable is the Rule object it calls as its on_bar.
+    members = {"symbol": "SBIN", "exchange": "NSE", "interval": "1m", "on_bar": Rule()}
+    Opaque = type("Opaque", (bt.Strategy,), members)
     world.stop_at(ist(14, 41))
     live(world, Opaque)
     assert (

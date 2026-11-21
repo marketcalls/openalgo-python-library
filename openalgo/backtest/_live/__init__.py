@@ -43,7 +43,8 @@ an instrument (18-multi-strategy 4), and `_locked_entries`, the strategies whose
 are locked, which the loop writes and the order worker reads before an entry or add. The
 audit record of 18-multi-strategy 12 is `_version_id` and `_session_versions` (each
 strategy's version on every order, its manifest in the journal, `_journal_versions`; the
-compiled code of a class whose source cannot be read, `_version_code`),
+compiled code of a class whose source cannot be read, `_version_code`; the one rule for
+the values both hash, `_version_values`),
 `_preflight_expiry` and `_preflight_calendar` (the master contract's expiry and OpenAlgo's
 holidays against the tables), and `_fill_comparison` (each fill against a backtest of the
 same bars, priced by `_session_slippage`); `_exit_reasons` names why an order closes a

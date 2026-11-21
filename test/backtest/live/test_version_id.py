@@ -3,7 +3,7 @@ characters, the start of the SHA-256 of the strategy's source hash and its param
 as canonical JSON (keys sorted, no spaces). The same code with the same parameters gives the
 same id on every day and restart; a change to either gives a new one; a class with no
 source (built at run time) hashes its compiled code in its place (`test_version_code`), or
-its qualified name when its code cannot be read either."""
+its qualified name when its code cannot be read at all."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class Rule:
         return None
 
 
-#: A class built at run time whose code cannot be read either.
+#: A class built at run time whose code cannot be read at all: its one callable is an object.
 Opaque = type("Opaque", (Built,), {"on_bar": Rule()})
 
 
