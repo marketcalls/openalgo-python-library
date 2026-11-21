@@ -41,7 +41,8 @@ exit again at a later bar's open and places a stop again that ended at the broke
 request of its own (16-session-design 4.8, 4.10), so a sale by hand beside it sells
 twice: an alert sent while the session runs (the give-up of an exit, a safe stop's
 reminder) says to end the session first, then what the leg asks for (`while_running`,
-`open_while_running`).
+`open_while_running`). An instrument held for the day is the exception: the session sends
+nothing more for it today, so its square-off alert gives the note (`_stops_held_day`).
 
 The notes are taken once the loop step's commands are handed over (`_session_stop`): an
 order not sent then was not handed to the order worker (after a guard lock, or an exit
@@ -148,17 +149,18 @@ def protected(stops: Any, trader: Trader) -> bool:
 
 def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     """The note of `trader`'s position left open once the session has ended (module
-    docstring), then, for an instrument held for the day, that nothing can be sent for it
-    (`_stops_held_day`); with `books` False it leaves out the units OpenAlgo's books
-    showed, for a caller whose words name them."""
+    docstring); for an instrument held for the day, why nothing can be sent for it and
+    what to do, in place of the advice (`_stops_held_day`). With `books` False it leaves
+    out the units OpenAlgo's books showed, for a caller whose words name them."""
     parts, advice = _note(stops, trader, books=books)
-    held_day = stops.day.words(trader)
-    held = [] if held_day is None else [held_day]
+    held = stops.day.words(trader, check=advice == _CHECK)
+    if held is not None:
+        return "; ".join([*parts, held])
     if advice == _CHECK:
-        return "; ".join([*parts, CHECK_FIRST, *held])
+        return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts
     words = f"{last}, close it by hand" if advice == _CLOSE else f"{last}: {STOP_PROTECTS}"
-    return "; ".join([*before, words, *held])
+    return "; ".join([*before, words])
 
 
 def still_working(stops: Any, trader: Trader) -> list[str]:

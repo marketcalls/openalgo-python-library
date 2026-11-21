@@ -25,11 +25,19 @@ gives `Trader.commands` the rest.
   exit) while it rests overfills the same way. So a live session never sends one: its
   placement is refused in the loop step of the decision that made it, before anything
   reaches the broker, and the kernel is told the venue rejected it (`venue`, since no
-  kernel check makes this refusal; the strategy sees it in `on_order`). The strategy's
-  context notes each such order as the kernel takes it (`_series_context.LiveRunContext.
-  resting_reversals`), since the kernel's order no longer says `reverse`. The session's
-  warnings say, once per strategy, to send a reversal as a MARKET order or to exit and
-  enter separately. The backtest is unchanged.
+  kernel check makes this refusal; the strategy sees it in `on_order` before its next
+  decision). The strategy's context notes each such order as the kernel takes it
+  (`_series_context.LiveRunContext.resting_reversals`), since the kernel's order no
+  longer says `reverse`. The session's warnings say, once per strategy, to send a
+  reversal as a MARKET order or to exit and enter separately. The backtest is unchanged.
+
+  The 2.4.0 ruling asked for the refusal at submission; it comes at the handover
+  instead, after `on_bar` has returned. The kernel takes no venue result while it is
+  paused at a bar close, where the strategy decides, and has no reject code of its own
+  for this refusal. So inside `on_bar` the order reads Submitted, the decisions file lists
+  it so (as it lists an order the broker refuses later), and until the decision ends the
+  kernel's entry gates count it as working. The log names it as it names a rejection at
+  submission, with its side, units and reject code.
 
 Each is logged and written to the event stream ("withdrawn", "refused_locked",
 "refused_resting_reversal"). Used by the loop only.
@@ -43,6 +51,7 @@ from typing import Any
 
 from .._engine import call
 from ._order_state import ENTRY_PURPOSES
+from ._session_decisions import units_text
 from ._types import LOGGER_NAME
 from ._venue_requests import ROLE_PURPOSES
 
@@ -110,8 +119,15 @@ def _refuse_resting_reversals(
     refused = sorted(placed & reversals)
     for kernel_order in refused:
         call(engine.apply_reject, kernel_order, RESTING_REVERSAL_CODE)
+        order = call(engine.order, kernel_order)
         logger.info(
-            "%s: order o%d is a resting reversal: refused, not sent", strategy, kernel_order
+            "%s: order o%d rejected before it was sent: %s %s units, %s (a resting reversal, %s)",
+            strategy,
+            kernel_order,
+            order["side"],
+            units_text(order["quantity_units"]),
+            RESTING_REVERSAL_CODE,
+            order["order_type"],
         )
         event("refused_resting_reversal", strategy=strategy, kernel_order=kernel_order)
         warn(f"{strategy}: {RESTING_REVERSAL_WORDS}")

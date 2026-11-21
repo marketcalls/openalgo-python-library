@@ -4,9 +4,11 @@
 A placement the order book cannot tell apart from another order (an AMBIGUOUS resolution)
 stays unbound for the rest of the day: the order book only grows, so the orders it cannot
 tell apart stay so. While it is unbound the order path sends nothing for its symbol,
-exchange and product, for any strategy of the session that trades it. The instrument is
-held for the day (`holder`), for every member of its group (`_groups`), a strategy alone
-included.
+exchange and product, for any strategy of the session that trades it, so no order of the
+session can take one of the candidates and settle it later, and a restart refuses to start
+while an intent is ambiguous (`_restart_books`). The instrument is held for the day
+(`holder`), for every member of its group (`_groups`), a strategy alone included, and the
+hold is final: a cancel kept here is never handed over.
 
 So the square-off cannot close such a position: its cancel-then-exit (3.4, the kernel's
 exit owner) would cancel the leg's stop first, and that cancel could never be sent. For an
@@ -15,11 +17,17 @@ broker: a cancel of a member's stop the kernel decides at or after the member's 
 is kept here, never handed to the order worker (`admit`), and the stop keeps working at
 the broker and is reported as working (`StopsSupervisor.cancelling` leaves it out, so its
 units count as covered and no unprotected window opens for it). The kernel's exit, which
-waits for that cancel, is never sent either. Once the square-off has come, one ERROR alert
-per member with a position says that nothing is sent for it and why (`review`); the note
-of its position left open says the same (`words`, `_stops_report.left_open`): close it by
-hand in OpenAlgo, with the broker's own MIS square-off as the backstop. Every other
-square-off is unchanged.
+waits for that cancel, is never sent either. Every other square-off is unchanged.
+
+Once the square-off has come, one ERROR alert per member with a position says that no
+square-off is sent for it, then the note of its position left open (`review`,
+`_stops_report.left_open`), which ends with why and what to do (`words`): nothing can be
+sent for the instrument today, so cancel the leg's stop working at the broker (a sale by
+hand beside it would let it sell again), check the order book when an order may still
+work, then close it by hand in OpenAlgo, with the broker's own MIS square-off as the
+backstop. That advice holds while the session runs, unlike the note of another leg: the
+session sends nothing more for the instrument today, so it cannot sell beside the
+operator.
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -31,7 +39,7 @@ from typing import Any
 
 from ._session_trader import Trader
 from ._stops_orders import Sent
-from ._stops_report import leg_words, stop_words
+from ._stops_report import left_open, leg_words, stop_state
 from ._types import AlertKind, Purpose
 from ._venue_requests import CancelRequest
 
@@ -59,17 +67,25 @@ class DayHolds:
                     return f"{member.name}'s {purpose} order, intent {watched.intent_id}"
         return None
 
-    def words(self, trader: Trader) -> str | None:
+    def words(self, trader: Trader, *, check: bool) -> str | None:
         """What a note of `trader`'s position says of its instrument held for the day, or
-        None when it is not held."""
+        None when it is not held: why nothing can be sent for it, then what to do (module
+        docstring), the order book checked first when `check` (an order may still work, or
+        the stop may be at the broker without covering the position)."""
         holder = self.holder(trader)
         if holder is None:
             return None
+        stop_id, confirmed = stop_state(self._stops, trader)
+        steps = [f"cancel its stop {stop_id} at the broker"] if confirmed else []
+        if check:
+            other = "else " if steps else ""
+            steps.append(f"check the order book, cancelling what {other}still works")
+        steps.append("close it by hand in OpenAlgo")
         return (
             f"{trader.symbol} {trader.exchange} is held for the day by {holder}, which the "
             "order book cannot tell apart from another order: nothing can be sent for it "
-            "today, so close it by hand in OpenAlgo; the broker's own MIS square-off remains "
-            "the backstop"
+            f"today, so {', then '.join(steps)}; the broker's own MIS square-off remains the "
+            "backstop"
         )
 
     def admit(self, requests: Sequence[Any]) -> list[Any]:
@@ -96,14 +112,13 @@ class DayHolds:
             if trader.name in self._alerted or now_ns < trader.square_off_ns:
                 continue
             units = trader.open_units()
-            held = self.words(trader) if units else None
-            if held is None:
+            if not units or self.holder(trader) is None:
                 continue
             self._alerted.add(trader.name)
-            stop = stop_words(self._stops, trader)
+            note = left_open(self._stops, trader)
             session.alert(
                 AlertKind.ERROR,
-                f"{leg_words(trader, units)}: no square-off is sent for it: {stop}; {held}",
+                f"{leg_words(trader, units)}: no square-off is sent for it: {note}",
             )
 
     def _keeps(self, request: Any) -> bool:

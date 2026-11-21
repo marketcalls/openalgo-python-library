@@ -78,7 +78,7 @@ def test_a_lock_of_one_strategy_leaves_another_unlocked():
     Host(record, "ema_cross").lock(FEED_DEAD)
     Host(record, "breakout")
 
-    assert record.reasons("breakout") == ()
+    assert (record.reasons("ema_cross"), record.reasons("breakout")) == ((FEED_DEAD,), ())
 
 
 # ----- the worker reads it before an entry or add ------------------------------------------

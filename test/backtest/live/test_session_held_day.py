@@ -95,6 +95,20 @@ def test_the_square_off_cancels_no_stop_and_sends_no_exit(world):
     )
 
 
+def held(stop_id: str) -> str:
+    """What the note and the square-off alert say of SBIN held for the day by the add, and
+    what they ask of the operator: the stop works at the broker, so it is cancelled before
+    a sale by hand (which it would otherwise follow with its own), and the add may work
+    too."""
+    return (
+        "SBIN NSE is held for the day by StopThenRestingAdd's add order, intent "
+        "20261116-live-1-StopThenRestingAdd-o3, which the order book cannot tell apart from "
+        f"another order: nothing can be sent for it today, so cancel its stop {stop_id} at "
+        "the broker, then check the order book, cancelling what else still works, then "
+        "close it by hand in OpenAlgo; the broker's own MIS square-off remains the backstop"
+    )
+
+
 def test_the_stop_is_reported_working_and_the_note_says_the_instrument_is_held(world):
     outcome = world.run(StopThenRestingAdd)
 
@@ -104,21 +118,16 @@ def test_the_stop_is_reported_working_and_the_note_says_the_instrument_is_held(w
     (row,) = outcome.open_positions
     stop = stop_of(world).order_id
     assert (row.units, row.stop_order_id, row.stop_confirmed) == (2 * UNITS, stop, False)
-    assert f"stop {stop} confirmed at the broker;" in row.note
     assert "being cancelled" not in row.note
-    assert (
-        "SBIN NSE is held for the day by StopThenRestingAdd's add order, intent "
-        "20261116-live-1-StopThenRestingAdd-o3, which the order book cannot tell apart from "
-        "another order: nothing can be sent for it today, so close it by hand in OpenAlgo; "
-        "the broker's own MIS square-off remains the backstop"
-    ) in row.note
+    assert f"stop {stop} confirmed at the broker; {held(stop)}" in row.note
 
 
 def test_one_error_alert_at_the_square_off_says_nothing_is_sent_and_why(world, caplog):
     world.run(StopThenRestingAdd)
 
     (said,) = [text for text in alerts(caplog, "error") if "no square-off is sent" in text]
+    stop = stop_of(world).order_id
     assert f"StopThenRestingAdd SBIN NSE {UNITS} units: no square-off is sent for it" in said
-    assert f"stop {stop_of(world).order_id} confirmed at the broker" in said
-    assert "SBIN NSE is held for the day" in said
+    # It names the stop to cancel before a sale by hand, as the position's note does.
+    assert said.endswith(f"stop {stop} confirmed at the broker; {held(stop)}")
     assert not [text for text in alerts(caplog, "error") if "cannot be sent now" in text]

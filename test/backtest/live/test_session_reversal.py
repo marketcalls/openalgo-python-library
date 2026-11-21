@@ -22,6 +22,7 @@ from stops_samples import stop_world
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._reject_reasons import REASONS
 
 #: The short's units, and the stop's distance from each entry, points.
 UNITS = 10
@@ -319,6 +320,31 @@ def test_the_refusal_says_to_send_the_reversal_at_market_or_to_exit_and_enter(
         if record.levelname == "WARNING" and "resting reversal" in record.getMessage()
     ]
     assert "MARKET" in line and "exit and enter separately" in line
+
+
+def test_the_log_names_the_refused_reversal_as_a_rejection_of_its_order(resting_world, caplog):
+    # The refusal comes as the loop step hands the decision's orders over, after on_bar
+    # returned (the kernel takes no venue result at a bar close), so the decisions file
+    # lists o3 as submitted: the log names it as it names a rejection at submission, with
+    # its side, units and reject code.
+    resting_world.run(ShortThenRestingReverse, on_stop="keep")
+
+    lines = [record.getMessage() for record in caplog.records if record.levelname == "INFO"]
+    assert (
+        "ShortThenRestingReverse: order o3 rejected before it was sent: BUY 20 units, venue "
+        "(a resting reversal, LIMIT)"
+    ) in lines
+
+
+def test_the_venue_reason_gives_a_brokers_refusal_and_a_resting_reversal_each_its_advice():
+    meaning, advice = REASONS["venue"]
+
+    assert "broker or the exchange refused" in meaning and "resting reversal" in meaning
+    assert advice == (
+        "for a broker's refusal, read its reason in the session's journal and the OpenAlgo "
+        "order book; for a resting reversal, which the session's warnings name, submit the "
+        "reversal as a MARKET order, or exit and enter separately"
+    )
 
 
 def resting_reverse(price: float | None, trigger: float | None, *, short_first: bool = True):

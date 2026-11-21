@@ -132,13 +132,29 @@ def test_F105_b_keeps_its_stop_working_and_both_are_in_open_positions(world):
     assert world.fake.position("SBIN", "NSE") == A_UNITS + B_UNITS
 
 
-#: What every member's note and square-off alert says of SBIN held for the day by A's stop.
-HELD = (
+#: What every member's note and square-off alert says of SBIN held for the day by A's stop,
+#: before what it asks of the operator (`held`).
+HELD_BY = (
     "SBIN NSE is held for the day by LateTrend's stop order, intent "
     "20261116-live-1-LateTrend-o2, which the order book cannot tell apart from another "
-    "order: nothing can be sent for it today, so close it by hand in OpenAlgo; the broker's "
-    "own MIS square-off remains the backstop"
+    "order: nothing can be sent for it today, so "
 )
+#: What every such note and alert ends with.
+BACKSTOP = "; the broker's own MIS square-off remains the backstop"
+#: What A's note and alert ask of the operator: its stop is the ambiguous order, which may
+#: or may not work at the broker.
+A_STEPS = "check the order book, cancelling what still works, then close it by hand in OpenAlgo"
+
+
+def b_steps(b_stop_id: str) -> str:
+    """What B's note and alert ask of the operator: its stop works at the broker, so a sale
+    by hand before its cancel would let it sell again."""
+    return f"cancel its stop {b_stop_id} at the broker, then close it by hand in OpenAlgo"
+
+
+def held(steps: str) -> str:
+    """A member's words on SBIN held for the day, asking `steps` of the operator."""
+    return f"{HELD_BY}{steps}{BACKSTOP}"
 
 
 def test_F105_each_members_note_says_the_instrument_is_held_and_bs_says_its_stop_works(world):
@@ -146,10 +162,9 @@ def test_F105_each_members_note_says_the_instrument_is_held_and_bs_says_its_stop
 
     (b_stop,) = [o for o in sbin_orders(world, "SbinBreakout") if o.price_type == "SL-M"]
     rows = {p.strategy: p for p in outcome.open_positions}
-    assert rows["LateTrend"].note.endswith(HELD)
+    assert rows["LateTrend"].note.endswith(held(A_STEPS))
     assert rows["SbinBreakout"].note == (
-        f"stop {b_stop.order_id} confirmed at the broker: it protects the position, so cancel "
-        f"the stop before any sale by hand; {HELD}"
+        f"stop {b_stop.order_id} confirmed at the broker; {held(b_steps(b_stop.order_id))}"
     )
 
 
@@ -158,11 +173,13 @@ def test_F105_one_error_alert_per_member_at_the_square_off_says_nothing_is_sent(
 
     (b_stop,) = [o for o in sbin_orders(world, "SbinBreakout") if o.price_type == "SL-M"]
     said = [text for text in alerts(caplog, "error") if "no square-off is sent" in text]
+    # Each alert gives the advice of the member's note: B's names its working stop to
+    # cancel before a sale by hand, which would otherwise sell twice.
     assert [text.split(": ", 1)[1] for text in said] == [
         f"LateTrend SBIN NSE {A_UNITS} units: no square-off is sent for it: ambiguous stop "
-        f"order (intent 20261116-live-1-LateTrend-o2): check the order book; {HELD}",
+        f"order (intent 20261116-live-1-LateTrend-o2); {held(A_STEPS)}",
         f"SbinBreakout SBIN NSE {B_UNITS} units: no square-off is sent for it: stop "
-        f"{b_stop.order_id} confirmed at the broker; {HELD}",
+        f"{b_stop.order_id} confirmed at the broker; {held(b_steps(b_stop.order_id))}",
     ]
     assert not [text for text in alerts(caplog, "error") if "cannot be sent now" in text]
 

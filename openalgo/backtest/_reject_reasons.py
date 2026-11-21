@@ -131,12 +131,14 @@ REASONS = MappingProxyType(
             "set allow_averaging_down = True or loosen the scale-in limits",
         ),
         "venue": (
-            "the broker or the exchange refused the order in a live session, for a "
-            "reason of its own, or the session itself did not send it: a live session "
-            "takes a reversal (reverse=True) as a MARKET order only, since a resting one "
-            "would work beside the position's stop and both could fill",
-            "read the broker's reason in the session's journal and the OpenAlgo order book; "
-            "submit a reversal as a MARKET order, or exit and enter separately",
+            "in a live session, the broker or the exchange refused the order for a reason "
+            "of its own, or the session did not send it: a resting reversal (reverse=True "
+            "on a LIMIT, SL or SL-M order), which a live session takes as a MARKET order "
+            "only, since at the broker it would work beside the position's stop and both "
+            "could fill",
+            "for a broker's refusal, read its reason in the session's journal and the "
+            "OpenAlgo order book; for a resting reversal, which the session's warnings "
+            "name, submit the reversal as a MARKET order, or exit and enter separately",
         ),
         "exit_cover": (
             "a live session keeps at most the position's units resting to close it, so "
