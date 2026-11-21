@@ -4,8 +4,11 @@ happened (`session_invariants` 1 to 3; 16-session-design 7.1 "at any instant", u
 1. **One stop.** At most one stop of the session's (SL or SL-M) works per leg (book,
    strategy, instrument).
 2. **Exits within the position.** At every change, the session's working orders on the
-   closing side of an instrument (the side opposite its first order there) hold no more
-   units than the position on the open side. Another client's sale by hand can overtake
+   closing side of an instrument (the side opposite the leg's open side: its first
+   order's, moved by each reversal, below) hold no more units than the position on the
+   open side; a working entry of the session's on the closing side (a reversal, which
+   `venue_roles` files as an entry) holds as an exit only the position it closes, the
+   rest opening the other side. Another client's sale by hand can overtake
    the session's exits: the session learns of it only by its comparisons, and 5.3 fits
    its stop on the second that shows the sale. So the exits that were working when the
    sale filled may stand beyond the position by as much as the sale left them beyond it,
@@ -19,12 +22,18 @@ happened (`session_invariants` 1 to 3; 16-session-design 7.1 "at any instant", u
    left it beyond the position (`SessionTrace.oversold_by_decision`; unit 14 round 2,
    finding 1).
 
+**A reversal** (2.4.0 item P2-3): a fill of an entry of the session's (`entries`, the
+broker order IDs of its entries and adds) that leaves the position on the entry's side
+moves the leg's open side there: `buy(..., reverse=True)` against a short is one entry
+that closes the short and opens the long, and the long's stop is then the leg's exit. An
+exit or a stop that fills through zero moves nothing and is found as before.
+
 Quantities are signed units, prices rupees, times UTC nanoseconds.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Set
 from dataclasses import dataclass, field
 
 from session_trace import OrderChange
@@ -60,12 +69,26 @@ class SaleRoom:
         return order.order_id in self.overtaken
 
 
-def sides_of(own: list[OrderChange]) -> dict[Instrument, str]:
-    """The open side of each instrument the session traded: its first order's action."""
+def sides_of(own: list[OrderChange], entries: Set[str] = frozenset()) -> dict[Instrument, str]:
+    """The open side of each instrument the session traded after its changes `own`: its
+    first order's action, moved by each reversal among `entries` (module docstring); with
+    no entries, the first order's action."""
     sides: dict[Instrument, str] = {}
     for change in own:
-        sides.setdefault(change.instrument, change.action)
+        sides[change.instrument] = side_after(sides.get(change.instrument), change, entries)
     return sides
+
+
+def side_after(opens: str | None, change: OrderChange, entries: Set[str]) -> str:
+    """The leg's open side after `change` of the session's order, `opens` before it (None
+    before its first order): that order's action for the first; an entry's whose fill
+    leaves the position on its side (a reversal); else as it was."""
+    if opens is None:
+        return change.action
+    on_its_side = change.position > 0 if change.action == "BUY" else change.position < 0
+    if change.order_id in entries and change.fill_units and on_its_side:
+        return change.action
+    return opens
 
 
 def one_stop_per_leg(changes: list[OrderChange], mine: frozenset[str]) -> None:
@@ -94,26 +117,34 @@ def within_the_position(
     within: bool = True,
     side: bool = True,
     used: set[str] | None = None,
+    entries: Set[str] = frozenset(),
 ) -> dict[Instrument, SaleRoom]:
     """2 and 3 (module docstring), `within` and `side` saying which is asserted, and
     `oversold` the strategies whose decided end lets an overtaken stop fill through zero
-    (each one whose end a fill took is added to `used`, when given). Returns, for each
-    instrument whose session exits a sale by hand left beyond the position at the end,
-    its `SaleRoom`."""
+    (each one whose end a fill took is added to `used`, when given). `sides` is each
+    instrument's open side at the session's first order there, and `entries` the broker
+    order IDs of the session's entries and adds, whose reversals move it. Returns, for
+    each instrument whose session exits a sale by hand left beyond the position at the
+    end, its `SaleRoom`."""
     orders: dict[str, OrderChange] = {}
     rooms: dict[Instrument, SaleRoom] = {}
+    legs = dict(sides)
     for change in changes:
         orders[change.order_id] = change
-        instrument, opens = change.instrument, sides.get(change.instrument)
+        instrument, opens = change.instrument, legs.get(change.instrument)
         if opens is None:
             continue
+        if change.client in mine:
+            opens = legs[instrument] = side_after(opens, change, entries)
         held = change.position if opens == "BUY" else -change.position
         room = rooms.setdefault(instrument, SaleRoom())
-        exits = [
+        against = [
             o for o in orders.values()
             if o.client in mine and o.working and o.instrument == instrument and o.action != opens
         ]  # fmt: skip
-        closing = sum(o.remaining for o in exits)
+        exits = [o for o in against if o.order_id not in entries]
+        reversing = [min(o.remaining, max(held, 0)) for o in against if o.order_id in entries]
+        closing = sum(o.remaining for o in exits) + sum(reversing)
         if change.client in mine:
             allowed = side and _never_the_other_side(change, opens, held, room, oversold or {})
             if allowed and used is not None:
@@ -157,6 +188,7 @@ __all__ = [
     "Instrument",
     "SaleRoom",
     "one_stop_per_leg",
+    "side_after",
     "sides_of",
     "within_the_position",
 ]

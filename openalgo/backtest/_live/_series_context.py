@@ -9,20 +9,44 @@ other (`self.data[symbol, "15m"]`), as in a backtest. `self.I` is registered in 
 only: the strategy's own rule (`Strategy.I` raises `IndicatorOutsideInitError` once the
 context has left its declaration phase), which the live context keeps unchanged. A
 history too short for an indicator refuses the start (`check_history`).
+
+For the session's decisions file (2.4.0 item P2-2) the context notes each order request
+of the strategy's code as the kernel took it (`take_submissions`) and gives the latest
+value of each `self.I` output (`indicator_values`); neither changes an order or a value.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .._context import RunContext, RunData
+from .._orders import Order
 from .._series import SeriesStore
 from ..errors import ConfigError
 from ..reference import Instrument
 
 if TYPE_CHECKING:
+    from ._series_indicators import LiveView
     from .series import LiveSeries, LiveStore
+
+
+@dataclass(frozen=True)
+class Submission:
+    """One order request of the strategy's code as the kernel took it: `order`, the
+    kernel order it made (its number, 1 for "o1"; a rejection at submission is an order
+    too, with its reject code), or None with `skipped`, why it made none (a code of the
+    run's skipped orders: a sizer's, a target that rounds to no units, a symbol not
+    ready)."""
+
+    order: int | None
+    skipped: str | None = None
+
+
+def _latest(view: LiveView) -> float | bool | None:
+    """The value of `view` at the latest decision; None before it shows a bar."""
+    return view[-1] if len(view) else None
 
 
 class LiveRunContext(RunContext):
@@ -52,6 +76,7 @@ class LiveRunContext(RunContext):
                     "series of it on that exchange"
                 )
         self._live = {instrument.symbol: series[instrument.symbol] for instrument in instruments}
+        self._submitted: list[Submission] = []
         super().__init__(engine, instruments, product, default_size, run)
 
     def _decision(self) -> int | None:
@@ -101,5 +126,50 @@ class LiveRunContext(RunContext):
         self.check_history()
         super().begin_run()
 
+    def submit(self, request: dict) -> Order | None:
+        """`RunContext.submit`, the submission noted (`take_submissions`)."""
+        return self._noted(super().submit, request)
 
-__all__ = ["LiveRunContext"]
+    def submit_target(self, request: dict) -> Order | None:
+        """`RunContext.submit_target`, the submission noted (`take_submissions`)."""
+        return self._noted(super().submit_target, request)
+
+    def submit_rebalance(self, request: dict) -> Order | None:
+        """`RunContext.submit_rebalance`, the submission noted (`take_submissions`)."""
+        return self._noted(super().submit_rebalance, request)
+
+    def take_submissions(self) -> list[Submission]:
+        """The order requests of the strategy's code since the last call, oldest first,
+        as the kernel took them; a target already met, which makes no order and no skip,
+        is not among them."""
+        taken, self._submitted = self._submitted, []
+        return taken
+
+    def indicator_values(self) -> dict[str, float | bool | None]:
+        """The value of each `self.I` output at the latest decision, by its label (an
+        output that looks ahead has none); a label met again (one call registered twice)
+        is suffixed with its count ("#2"), so each output keeps its value. None before its
+        store shows a bar, NaN while it is not known; the decisions file writes both as
+        null. A value is computed once per change of its store, as when the strategy reads
+        it."""
+        values: dict[str, float | bool | None] = {}
+        for store in self._all_stores():
+            for indicator in store.indicators:
+                for view in indicator.views:
+                    label, count = view.label, 1
+                    while label in values:
+                        count += 1
+                        label = f"{view.label}#{count}"
+                    values[label] = _latest(view)
+        return values
+
+    def _noted(self, submit: Callable[[dict], Order | None], request: dict) -> Order | None:
+        skips = len(self.skipped)
+        order = submit(request)
+        if order is not None:
+            self._submitted.append(Submission(order.number))
+        self._submitted += [Submission(None, str(code)) for *_, code in self.skipped[skips:]]
+        return order
+
+
+__all__ = ["LiveRunContext", "Submission"]

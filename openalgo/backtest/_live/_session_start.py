@@ -339,6 +339,7 @@ def _traders(session: Session, funds_available: float) -> tuple[Trader, ...]:
             close_ns=times.session_close,
             now=session.now,
             event=session.event,
+            decision=parts.logs.decision,
         )
         trader.lock(STARTING_LOCK)
         call(part.engine.cap_sizing_equity, float(funds_available))

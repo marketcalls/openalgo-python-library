@@ -10,7 +10,7 @@ at their close, the check against the broker's candles, and the health of the fe
   says which slices it closed, so the session releases exactly those to the kernel.
 - `candle_bar` reads a broker candle row as a bar, and `CandleCheck` compares a
   tick-built bar with the broker's candle of the same slice: the differences go to the
-  drift log, and indicators continue from the candle when it covers the same slice.
+  drift log, and the strategy keeps deciding on the tick-built bar.
 - `FeedHealth` tells a dead feed (no tick on any symbol: entries lock) from a quiet
   symbol (an illiquid one, while the others tick).
 

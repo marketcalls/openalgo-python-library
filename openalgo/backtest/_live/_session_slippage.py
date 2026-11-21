@@ -142,7 +142,7 @@ def _bar_at_or_after(session: Any, trader: Any, decided_at_ns: int) -> tuple[int
         if opened < decided_at_ns:
             continue
         if index < released:
-            bar = series.tick_bar(opened) or series.bar(opened)
+            bar = series.bar(opened)
             if bar is not None:
                 return opened, bar.open
             if series.missing_slices(opened, closed):

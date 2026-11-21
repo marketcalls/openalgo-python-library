@@ -159,9 +159,10 @@ def test_the_summary_holds_the_days_figures(day):
     assert (day.summary.closed_trades, day.summary.flat, day.flat) == (1, True, True)
 
 
-def test_the_paths_name_the_journal_the_log_and_the_event_stream(day):
-    assert set(day.paths) == {"journal", "log", "events"}
-    assert all(dt.date(2026, 11, 16).isoformat() in day.paths[k] for k in ("log", "events"))
+def test_the_paths_name_the_journal_the_log_the_event_stream_and_the_decisions_file(day):
+    assert set(day.paths) == {"journal", "log", "events", "decisions"}
+    named = ("log", "events", "decisions")
+    assert all(dt.date(2026, 11, 16).isoformat() in day.paths[k] for k in named)
 
 
 @pytest.mark.parametrize("table", list(COLUMNS))

@@ -42,7 +42,12 @@ not it has rows.
   order ID, purpose, how far it got at the broker and its final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
-- `drift`: each broker candle against the bar built from the feed's ticks. `unprotected`:
+- `drift`: each broker candle against the bar built from the feed's ticks. The strategy
+  decided, and kept deciding, on the bars built from ticks: a broker candle never
+  replaced one, and was the bar only of a minute with no ticks (one the feed was dead
+  in, the minute watching began in). A restart is the exception: the bars built from
+  ticks before it are not kept, so the restarted session, its strategy and its kernel
+  alike, holds the broker's candles for the minutes before it. `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
   broker's books that differed, and what was done; in a session with an instrument
@@ -64,7 +69,8 @@ not it has rows.
   False.
 - `mode_breach`: the mode guard's text when the analyzer switch changed, else None.
   `warnings`: what the reader must know, the mode first. `paths`: the journal, the day's
-  log and the event stream.
+  log, the event stream and the decisions file (each strategy bar: what was decided on,
+  the indicators, the position and what was submitted, or why no decision was made).
 - `flat`: True only when the session ended with no position open, a strategy of an
   earlier start included, and no leg the close names.
 

@@ -267,29 +267,29 @@ def test_compare_records_nothing():
     assert check.drifts == []
 
 
-def test_accepted_returns_the_candle_of_the_same_slice_and_keeps_its_drift():
+def test_a_candle_of_the_same_slice_covers_the_bar_and_its_drift_is_kept():
     check = CandleCheck()
     built = tick_bar("09:15", (800.0,) * 4, 10.0, 2)
     broker = candle("09:15", (800.0,) * 4, 10.0)
 
-    assert check.accepted(built, broker) is broker
+    assert check.covers(built, broker)
     assert check.drifts == [check.compare(built, broker)]
 
 
-def test_accepted_returns_the_tick_bar_and_keeps_nothing_for_a_candle_of_another_minute():
+def test_a_candle_of_another_minute_does_not_cover_the_bar_and_nothing_is_kept():
     check = CandleCheck()
     built = tick_bar("09:16", (800.0,) * 4, 10.0, 2)
 
-    assert check.accepted(built, candle("09:15", (800.0,) * 4, 10.0)) is built
+    assert not check.covers(built, candle("09:15", (800.0,) * 4, 10.0))
     assert check.drifts == []
 
 
-def test_a_candle_of_another_interval_is_never_accepted_for_the_bar():
+def test_a_candle_of_another_interval_never_covers_the_bar():
     check = CandleCheck()
     built = tick_bar("09:15", (800.0,) * 4, 10.0, 2)
     five_minutes = candle("09:15", (790.0, 830.0, 780.0, 820.0), 1e6, minutes=5)
 
-    assert check.accepted(built, five_minutes) is built
+    assert not check.covers(built, five_minutes)
     assert not check.compare(built, five_minutes).same_slice
     assert check.drifts == []
 
@@ -297,7 +297,7 @@ def test_a_candle_of_another_interval_is_never_accepted_for_the_bar():
 def test_the_drifts_of_a_session_are_kept_in_the_order_the_candles_were_accepted():
     check = CandleCheck()
     for clock in ("09:15", "09:16", "09:17"):
-        check.accepted(tick_bar(clock, (800.0,) * 4, 0.0, 1), candle(clock, (800.0,) * 4, 0.0))
+        check.covers(tick_bar(clock, (800.0,) * 4, 0.0, 1), candle(clock, (800.0,) * 4, 0.0))
 
     assert [d.ts_open_ns for d in check.drifts] == [ist("09:15"), ist("09:16"), ist("09:17")]
 
@@ -307,7 +307,7 @@ def test_a_candle_of_another_symbol_cannot_check_a_bar():
     other = LiveBar("INFY", "NSE", ist("09:15"), ist("09:16"), *(1500.0,) * 4, 0.0, 0, "candle")
 
     with pytest.raises(ConfigError, match="cannot check"):
-        CandleCheck().accepted(built, other)
+        CandleCheck().covers(built, other)
 
 
 def test_compare_refuses_the_bars_in_the_wrong_order():

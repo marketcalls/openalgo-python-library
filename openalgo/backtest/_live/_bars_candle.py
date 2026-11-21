@@ -2,9 +2,9 @@
 (08-live-trading section 5, rule 2; D27). Part of `bars`, which re-exports it.
 
 The broker's 1-minute candle of a slice verifies the bar built from that slice's ticks:
-every difference goes to the session's drift log, and indicators continue from the
-candle when it covers the same slice, so small differences do not accumulate. Times are
-UTC nanoseconds, prices rupees, volume units.
+every difference goes to the session's drift log. The strategy keeps deciding on the bar
+built from ticks (lead decision 2026-11-21, 2.4.0 item P2-1): a candle is the bar only of
+a slice that made no tick bar. Times are UTC nanoseconds, prices rupees, volume units.
 """
 
 from __future__ import annotations
@@ -253,16 +253,15 @@ class CandleCheck:
             ticks=tick_bar.ticks,
         )
 
-    def accepted(self, tick_bar: LiveBar, candle: LiveBar) -> LiveBar:
-        """The bar indicators continue from: the candle when it covers the tick bar's
-        slice (same open and close, so a candle of another interval never stands for
-        the bar), its drift then kept in `drifts`; else the tick bar, with nothing kept
-        (the session asks the broker again). Raises ConfigError as `compare` does."""
+    def covers(self, tick_bar: LiveBar, candle: LiveBar) -> bool:
+        """True when the candle covers the tick bar's slice (same open and close, so a
+        candle of another interval never checks the bar), its drift then kept in
+        `drifts`; False with nothing kept (the session asks the broker again). Either
+        way the bar stays the tick bar. Raises ConfigError as `compare` does."""
         drift = self.compare(tick_bar, candle)
-        if not drift.same_slice:
-            return tick_bar
-        self._drifts.append(drift)
-        return candle
+        if drift.same_slice:
+            self._drifts.append(drift)
+        return drift.same_slice
 
 
 __all__ = [
