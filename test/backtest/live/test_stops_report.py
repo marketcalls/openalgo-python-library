@@ -48,13 +48,15 @@ from openalgo.backtest._live.inbox import NotSentReason
 from openalgo.backtest._live.stops import StopsSupervisor
 
 #: The session of the supervisors built with no server: its reconciler's exit guard holds
-#: no cancel back, and no leg's books differ from the engine's, which is all they ask of it
-#: (`StopsSupervisor.cancelling`, `StopsSupervisor.broker_units`).
+#: no cancel back, no leg's books differ from the engine's, and each strategy is alone on
+#: its instrument, which is all they ask of it (`StopsSupervisor.cancelling`,
+#: `StopsSupervisor.broker_units`, `_stops_held_day.DayHolds.holder`).
 NOTHING_HELD = SimpleNamespace(
     reconcile=SimpleNamespace(
         guard=SimpleNamespace(held_cancels=lambda name: frozenset()),
         broker_units=lambda name: None,
-    )
+    ),
+    groups=SimpleNamespace(members=lambda trader: (trader,)),
 )
 
 

@@ -60,7 +60,7 @@ from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
 from ._session_trader import ist_instant
-from ._session_traders import STARTING_LOCK, traders
+from ._session_traders import build_traders
 from ._session_versions import record_versions
 from ._shared_alerts import SharedAlerts
 from ._types import LOGGER_NAME, AlertKind, Mode, Now, Sleep
@@ -86,6 +86,8 @@ LOGIN_ALERT_AT = "09:00"
 WORKER_READY_TIMEOUT_S = 30.0
 #: The product of every order of this release (Tier 1).
 PRODUCT = "MIS"
+#: The entry lock of the start phase (3.1 steps 11 to 15).
+STARTING_LOCK = "starting"
 #: The folder of the day's logs, under the account's folder.
 LOGS_FOLDER = "logs"
 #: The event naming the later days OpenAlgo's holidays and the package calendar disagree
@@ -224,7 +226,9 @@ def _open(
         emit=settings.emit,
         wait_max_s=settings.wait_max_s,
     )
-    session.traders = traders(session, report.funds_available)
+    session.traders = build_traders(session, report.funds_available)
+    for trader in session.traders:
+        trader.lock(STARTING_LOCK)
     _audit_records(session, report)
     session.figures = DayFigures.at_start(snapshot.rms_states, names)
     for envelope in start.deferred:

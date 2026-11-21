@@ -210,6 +210,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An order the engine rejects at submission is logged at INFO with the strategy, side,
     units and reject code, and so is the first decision per strategy skipped because its
     indicators are not ready (later ones at DEBUG).
+- An audit record of every live order (2.4.0, unit M11; design 18 section 12).
+  - Every order carries its strategy's version id: 12 hexadecimal characters of the SHA-256
+    of its source and parameter values, the same across days, restarts and processes. Each
+    start writes every strategy's run manifest and version id to the journal.
+    `SessionResult.versions` maps each strategy name to its manifest, `SessionResult.orders`
+    has a `version_id` column, the start banner has a Versions line, and the daily summary's
+    Strategies line names each version. A restart whose version differs from the day's
+    earlier start is allowed: the banner says so and the event `version_changed` records
+    both ids. The `strategy` field sent to OpenAlgo is still the plain class name.
+  - The live journal is schema version 2: a `versions` table and `version_id` on every
+    intent. A 2.3.0 (version 1) journal is upgraded in place when opened, its rows kept; a
+    newer file is still refused.
+  - Live preflight checks each futures and options contract's expiry in OpenAlgo's master
+    contract against the reference tables. A disagreement refuses the start, naming both
+    dates; a missing expiry is a banner warning.
+  - Live preflight compares OpenAlgo's market holidays (one `holidays` call, in every
+    session) with the package calendar for the session's exchanges, from today to the
+    year's end. A disagreement about today refuses the start; one about a later day is a
+    banner warning and the event `calendar_disagrees`.
+  - A backtest with a client checks each futures or options contract the server still
+    lists against the master contract's expiry, with a ReferenceDataWarning on a
+    disagreement or when the lookup fails. Expired contracts, clients without `symbol` and
+    cash equity make no call.
+  - `SessionResult.fill_comparison`: each fill of the day (every start) against the price
+    a backtest of the session's own bars fills the same order at. It names the strategy,
+    version, purpose (target and hand included), price type, live and backtest time and
+    price, the difference per unit against the trader, rupees, and whether it was compared
+    and why not. A MARKET order is set against the open of the bar that opens at its
+    decision, an engine target exit against its level, and a stop against its trigger (or the open of a
+    bar that gapped beyond it) in the bar that reached it. LIMIT orders, repriced stops and
+    fills adopted by hand are not compared. `summary.stop_slippage` totals the stop rows,
+    and the daily summary has a Stop fills line on a day a stop filled; a stop fill not
+    compared is counted there, with its reason in its `fill_comparison` row.
 - MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
   freeze quantity, 600 kg per order, is in the contract table from MCX circulars
   MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
@@ -264,6 +297,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside and what to pass, where it said only that it could not judge.
 - `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
   into the overfitting figures' array as they come back, not after all of them.
+- Live sessions no longer send a resting reversal (`reverse=True` on a LIMIT, SL or SL-M
+  order): the session rejects it with `venue` before it reaches the broker, the strategy sees
+  it rejected in `on_order` before its next decision, and a warning says to submit the
+  reversal as a MARKET order or to exit and enter separately. At the broker it worked beside
+  the position's stop, both on the closing side, and both could fill: a short of 10 with a
+  LIMIT buy of 20 resting ended long 20, not long 10. A MARKET reversal is sent as before,
+  and backtests are unchanged.
+  The reason a live result gives for the `venue` code now names both causes (the broker
+  refused the order, or the session refused a resting reversal) with the advice for each.
+- Live sessions: the day summary's slippage sets the engine's target exits against the
+  target's level with the run's slippage, as a backtest fills them, instead of the next
+  bar's open. This corrects the live figure (2.4.0, unit M11). It still equals the sum of
+  the compared MARKET rows of `SessionResult.fill_comparison`.
+- Live sessions: EXIT alerts and the event of each closing request name the exit reason,
+  for example "(exit: target level, order N)", "(square_off: square-off time, ...)" or
+  "(risk_exit: kill switch at the account daily loss limit, ...)" (2.4.0, unit M11). The
+  other alert texts are unchanged.
+- Live sessions: the combined page of `SessionResult.portfolio` no longer says "The
+  account refused no order and ended none." after the account's kill switch fired. When
+  the session set an account limit, an empty Refused card says what the account's trade
+  cap refused, that the entries its daily loss limit or profit target locked out are in
+  the strategies' orders as live_lock, and that the entries and adds its kill switch
+  cancelled are in their orders as cancelled (2.4.0, unit M11). The account note names the
+  kill switch's cancels. A backtest portfolio's page is unchanged.
 
 ### Fixed
 
@@ -293,6 +350,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
   market against a short. Only a MARKET reversal, which closes the position at once, now
   counts as covering it; before, a resting reversal hid the missing stop.
+- Live sessions: an entry or add the order worker had already taken off its queue when its
+  strategy's entries locked is no longer sent. The worker reads the strategy's locks just
+  before it sends an entry or add, and the strategy sees it rejected with `live_lock`; exits
+  and stops are never held by it. Before, such an order could still go out a few
+  milliseconds after the lock.
+- Live sessions: on an instrument held for the day (an order the order book cannot tell
+  apart from another, so nothing more can be sent for the instrument), the square-off no
+  longer reports a stop that still works at the broker as being cancelled, nor its position
+  as unprotected from 15:00. The stop is reported as working, and one ERROR alert per
+  strategy at its square-off says that nothing is sent for the position and what to do:
+  cancel its stop at the broker, then close the position by hand in OpenAlgo, the broker's
+  own MIS square-off remaining the backstop. The note of the position left open says the
+  same.
 
 ## [2.3.0] - 2026-11-20
 

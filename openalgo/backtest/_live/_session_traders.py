@@ -1,33 +1,31 @@
-"""Each strategy of a live session as the loop drives it (16-session-design 3.1 step 11; unit
-8): its `Trader`, with its venue map numbered with the session's request IDs and carrying
-the strategy's version id onto every intent (18-multi-strategy 12.1), its entries locked
-until trading begins (`STARTING_LOCK`), and its sizing capped by the funds OpenAlgo reported
-at the start (R18). Part of the start (`_session_start`). Amounts are rupees, times UTC
-nanoseconds.
+"""Each strategy's `Trader` at the start of a live session (16-session-design 3.1 step 11;
+unit 8), split from `_session_start` so each module keeps one job: its venue map, numbered
+with the session's request IDs and carrying the strategy's version id onto every intent
+(18-multi-strategy 12.1), its square-off and its exchange's close, its sizing capped
+by the funds available, and the order worker's record of locked entries
+(`_locked_entries`), which its entry locks are copied to.
+
+Times are UTC nanoseconds, amounts rupees.
 """
 
 from __future__ import annotations
 
 import itertools
-from typing import Any
 
 from .._engine import call
 from ..calendar import default_calendar
+from ._session_loop import Session
 from ._session_trader import Trader, ist_instant
 from .venue_map import VenueMap
 
-#: The entry lock of the start phase (3.1 steps 11 to 15).
-STARTING_LOCK = "starting"
 
-
-def traders(session: Any, funds_available: float) -> tuple[Trader, ...]:
-    """Each strategy's `Trader` of `session` (a `_session_loop.Session` whose plan is
-    built), in call order (module docstring); `funds_available` is the rupees OpenAlgo
-    reported available at the start."""
+def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...]:
+    """Each strategy's `Trader` (module docstring), in the plan's order; the caller locks
+    their entries until trading begins."""
     parts = session.parts
     calendar, day = default_calendar(), parts.spec.day
     numbers = itertools.count(1)
-    made = []
+    traders = []
     for part in parts.plan.strategies:
         venue = VenueMap(
             part.engine,
@@ -50,11 +48,12 @@ def traders(session: Any, funds_available: float) -> tuple[Trader, ...]:
             now=session.now,
             event=session.event,
             decision=parts.logs.decision,
+            warn=session.warn,
+            locked_entries=parts.worker.locked_entries,
         )
-        trader.lock(STARTING_LOCK)
         call(part.engine.cap_sizing_equity, float(funds_available))
-        made.append(trader)
-    return tuple(made)
+        traders.append(trader)
+    return tuple(traders)
 
 
-__all__ = ["STARTING_LOCK", "traders"]
+__all__ = ["build_traders"]

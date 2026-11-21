@@ -2,7 +2,9 @@
 broker-held stop, then `buy(..., reverse=True, stop=...)`. The reversing order is an entry
 (`venue_roles`: the part beyond the position opens the other side): its stop is cancelled
 first, the buy goes as one order, and the new leg gets its own stop. The session's
-invariants (16-session-design 7.1) follow the leg to its new side.
+invariants (16-session-design 7.1) follow the leg to its new side. A reversal that rests
+(a LIMIT, SL or SL-M order with `reverse=True`) is refused and never sent (2.4.0 item
+P3-2): beside the position's stop both could fill.
 
 The market and the script are `session_samples`': the session starts at 14:40:05 IST on
 Monday 2026-11-16 and SBIN trades 10 units every 10 s at 500.00. The strategy decides at
@@ -16,11 +18,11 @@ import logging
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from session_samples import alerts, ist
-from session_trace import MEMBERS_WITHIN, WITHIN
 from stops_samples import stop_world
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._reject_reasons import REASONS
 
 #: The short's units, and the stop's distance from each entry, points.
 UNITS = 10
@@ -162,7 +164,7 @@ def test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop(world, 
     # of 14:44:01. That decision rests the reversal, a buy below the market, which closes
     # nothing on a rise: the leg is bare all the same, so its stop is placed again over
     # the 5 units at once and an ERROR alert says so (not only by the safe stop's
-    # protect at 14:44:30, which cancels the resting entry).
+    # protect at 14:44:30). The reversal itself is refused in that same loop step.
     faults = world.fake.faults
 
     def refuse_the_first():
@@ -177,23 +179,17 @@ def test_a_resting_reversal_does_not_cover_a_short_left_without_its_stop(world, 
     world.script.at(ist(14, 43, 57) + 500_000_000, hold_the_words)
     world.script.at(ist(14, 44, 1), faults.release_order_updates)
     world.script.price = lambda now_ns: 498.0 if now_ns >= ist(14, 43, 50) else 500.0
-    why = (
-        "the kernel works a resting reversal beside the leg's stop, both on the closing side "
-        "(as for a strategy that rests one while its stop works, 2.3.0); reported to the "
-        "lead with item M8-X1"
-    )
-    for check in (WITHIN, MEMBERS_WITHIN):
-        world.trace.waive(check, why)
+    # The resting reversal itself is never sent (2.4.0 item P3-2), so no check of the
+    # session invariants is waived any more.
     world.run(ShortTwoTargetsThenRestingReverse, on_stop="keep")
 
-    reversal = next(o for o in world.orders() if o.price_type == "LIMIT")
+    assert [o for o in world.orders() if o.price_type == "LIMIT"] == []
     stops = [o for o in world.orders() if o.price_type == "SL-M"]
     assert [(o.quantity, o.status) for o in stops] == [
         (UNITS, "cancelled"),
         (UNITS // 2, "trigger pending"),
     ]
     assert ist(14, 44, 1) <= stops[-1].placed_ns < ist(14, 44, 5)
-    assert reversal.placed_ns < ist(14, 44, 5)
     assert [text for text in alerts(caplog, "error") if "had no stop" in text]
 
 
@@ -233,3 +229,163 @@ def test_a_reversal_after_the_entry_cut_off_is_refused_whole_as_in_a_backtest(
     ]
     assert refused == [("BUY", 2.0 * UNITS, "entry_window")]
     assert [o.quantity for o in world.orders() if o.price_type == "MARKET"] == [UNITS, UNITS]
+
+
+# ----- a resting reversal is refused in a live session (2.4.0 item P3-2) ---------------------
+
+
+class ShortThenRestingReverse(bt.Strategy):
+    """Sells `UNITS` with a stop 3 points above at its first decision (14:42:01, filled at
+    500.00: its SL-M buy at 503.00), then at its second (14:43:01) rests a reversal below
+    the market: a LIMIT buy of twice that at 495.00, `reverse=True`, meant to leave it long
+    `UNITS`. Keeps every order event it was given (the session builds the strategy, so a
+    test reads the class)."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+    seen: list[dict] = []
+
+    def init(self):
+        self.calls = 0
+
+    def on_order(self, order):
+        type(self).seen.append(dict(order))
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.sell(UNITS, stop=bt.points(STOP_POINTS))
+        elif self.calls == 2:
+            self.buy(2 * UNITS, price=495.0, reverse=True)
+
+
+#: SBIN rises through the short's stop (503.00) from 14:43:30, then falls through the
+#: reversal's limit (495.00) from 14:44: rested at the broker beside the stop, both fill
+#: and the account ends long 20, twice what the strategy meant.
+RISE_AT, FALL_AT = ist(14, 43, 30), ist(14, 44)
+
+
+def rise_then_fall(now_ns: int) -> float:
+    if now_ns >= FALL_AT:
+        return 494.0
+    return 504.0 if now_ns >= RISE_AT else 500.0
+
+
+@pytest.fixture
+def resting_world(world):
+    """The rise and the fall, the positions kept at Ctrl+C (14:44:30). No check of the
+    session invariants is waived: the stop and the resting reversal at the broker together
+    would hold 30 units to close a short of 10 ("exits within the position")."""
+    ShortThenRestingReverse.seen = []
+    world.script.price = rise_then_fall
+    return world
+
+
+def test_a_resting_reversal_is_never_sent_beside_the_positions_stop(resting_world):
+    resting_world.run(ShortThenRestingReverse, on_stop="keep")
+
+    # The short, then its stop, filled on the rise; nothing more reaches the broker, so the
+    # fall buys nothing and the account ends flat, not long 20.
+    assert placed(resting_world) == [
+        ("SELL", UNITS, "MARKET", "complete"),
+        ("BUY", UNITS, "SL-M", "complete"),
+    ]
+    assert resting_world.fake.position("SBIN", "NSE") == 0
+
+
+def test_the_strategy_sees_the_resting_reversal_rejected(resting_world):
+    outcome = resting_world.run(ShortThenRestingReverse, on_stop="keep")
+
+    # o1 is the short, o2 its stop, o3 the reversal: rejected by the venue, the session.
+    rejected = [
+        (e["order_id"], e["reject_code"])
+        for e in ShortThenRestingReverse.seen
+        if e["name"] == "Rejected"
+    ]
+    assert rejected == [(3, "venue")]
+    orders = outcome.outputs["ShortThenRestingReverse"]["orders"]
+    columns = ("side", "quantity_units", "order_type", "limit_rupees", "reject_code")
+    rows = zip(*(orders[name] for name in columns), strict=True)
+    refused = [row for row in rows if row[-1] is not None]
+    assert refused == [("BUY", 2.0 * UNITS, "LIMIT", 495.0, "venue")]
+
+
+def test_the_refusal_says_to_send_the_reversal_at_market_or_to_exit_and_enter(
+    resting_world, caplog
+):
+    resting_world.run(ShortThenRestingReverse, on_stop="keep")
+
+    (line,) = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "resting reversal" in record.getMessage()
+    ]
+    assert "MARKET" in line and "exit and enter separately" in line
+
+
+def test_the_log_names_the_refused_reversal_as_a_rejection_of_its_order(resting_world, caplog):
+    # The refusal comes as the loop step hands the decision's orders over, after on_bar
+    # returned (the kernel takes no venue result at a bar close), so the decisions file
+    # lists o3 as submitted: the log names it as it names a rejection at submission, with
+    # its side, units and reject code.
+    resting_world.run(ShortThenRestingReverse, on_stop="keep")
+
+    lines = [record.getMessage() for record in caplog.records if record.levelname == "INFO"]
+    assert (
+        "ShortThenRestingReverse: order o3 rejected before it was sent: BUY 20 units, venue "
+        "(a resting reversal, LIMIT)"
+    ) in lines
+
+
+def test_the_venue_reason_gives_a_brokers_refusal_and_a_resting_reversal_each_its_advice():
+    meaning, advice = REASONS["venue"]
+
+    assert "broker or the exchange refused" in meaning and "resting reversal" in meaning
+    assert advice == (
+        "for a broker's refusal, read its reason in the session's journal and the OpenAlgo "
+        "order book; for a resting reversal, which the session's warnings name, submit the "
+        "reversal as a MARKET order, or exit and enter separately"
+    )
+
+
+def resting_reverse(price: float | None, trigger: float | None, *, short_first: bool = True):
+    """A strategy that sells `UNITS` with a stop at its first decision (unless
+    `short_first` is False: it stays flat), then at its second buys twice that with
+    `reverse=True` at `price` and `trigger` (a LIMIT, an SL-M or an SL)."""
+
+    class RestingReverse(bt.Strategy):
+        symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+        def init(self):
+            self.calls = 0
+
+        def on_bar(self, bar):
+            self.calls += 1
+            if self.calls == 1 and short_first:
+                self.sell(UNITS, stop=bt.points(STOP_POINTS))
+            elif self.calls == 2:
+                self.buy(2 * UNITS, price=price, trigger_price=trigger, reverse=True)
+
+    return RestingReverse
+
+
+@pytest.mark.parametrize(
+    ("price", "trigger"),
+    [(495.0, None), (None, 506.0), (507.0, 506.0)],
+    ids=["LIMIT", "SL-M", "SL"],
+)
+def test_a_resting_reversal_of_any_order_type_is_never_sent(world, price, trigger):
+    world.run(resting_reverse(price, trigger), on_stop="keep")
+
+    assert placed(world) == [
+        ("SELL", UNITS, "MARKET", "complete"),
+        ("BUY", UNITS, "SL-M", "trigger pending"),
+    ]
+
+
+def test_a_resting_reversal_is_refused_while_flat_too(world):
+    # reverse=True says the order may open the other side: refused whatever the position.
+    outcome = world.run(resting_reverse(499.0, None, short_first=False), on_stop="keep")
+
+    assert placed(world) == []
+    orders = outcome.outputs["RestingReverse"]["orders"]
+    assert [code for code in orders["reject_code"] if code is not None] == ["venue"]

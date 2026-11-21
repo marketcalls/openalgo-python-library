@@ -217,10 +217,11 @@ class Session:
                 self.emit(warning_line(text))
 
     def hand_over(self, requests: Sequence[Request]) -> None:
-        """Give the order worker `requests`, in order, but those the reconciler's exit
-        guard holds; none after a guard lock (each is noted as not sent)."""
+        """Give the order worker `requests`, in order, but the square-off's cancels kept
+        for an instrument held for the day (`_stops_held_day`) and those the reconciler's
+        exit guard holds; none after a guard lock (each is noted as not sent)."""
         handed = []
-        for request in self.reconcile.guard.admit(requests):
+        for request in self.reconcile.guard.admit(self.stops.day.admit(requests)):
             fields = request_fields(request) | request_reason(self.traders, request)
             if self.locked:
                 self.event("not_sent_locked", **fields)

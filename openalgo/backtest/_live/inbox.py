@@ -152,7 +152,8 @@ class NotSentReason(enum.Enum):
     #: An entry or add the kernel cancelled while it waited in the worker's queue.
     CANCELLED = "cancelled"
     #: An entry or add that waited in the worker's queue when its strategy's entries
-    #: locked (`_venue_withdraw`).
+    #: locked (`_venue_withdraw`), or that the worker took after they locked
+    #: (`_locked_entries`).
     ENTRIES_LOCKED = "entries_locked"
 
 

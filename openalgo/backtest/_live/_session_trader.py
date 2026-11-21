@@ -22,17 +22,13 @@ venue map, the slices it releases live, its decisions and its broker candles.
   called no more. Every strategy bar gets a line in the decisions file, the one whose
   `on_bar` raised among them, and each order the strategy's code submitted is looked at
   for a rejection (`notes`, `_session_decisions.DecisionNotes`).
-- **Commands** (`commands`): the kernel's commands as the order worker's requests. A
-  placement the kernel cancelled before the loop took it (the safe stop's cancel of an
-  entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
-  told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
-  entries are locked (a reversal the kernel held for its stop's cancel) is refused,
-  never sent (`_session_unsent`); one that still waits for the order worker when they
-  lock is withdrawn (`_venue_withdraw`).
+- **Orders**: the kernel's commands as the order worker's requests, its position and
+  working orders, and the exits and cancels the session asks of it are
+  `_session_orders.TraderOrders`'.
 - **Candles**: the strategy's broker candles are `candles`, a `_session_candles.
   CandleKeeper`.
-- **Bookkeeping**: its entry locks and its saved `self.state` are
-  `_session_bookkeeping.Bookkeeping`'s.
+- **Bookkeeping**: its entry locks (shared with the order worker through
+  `locked_entries`) and its saved `self.state` are `_session_bookkeeping.Bookkeeping`'s.
 
 Times are UTC nanoseconds, prices rupees, quantities units. Used by the loop only.
 """
@@ -50,16 +46,14 @@ from .._calendar_convert import IST, format_ist
 from .._driver import deliver
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ..errors import LiveError
-from ._plan_catch_up import INSTRUMENT, StrategyPlan
+from ._locked_entries import LockedEntries
+from ._plan_catch_up import StrategyPlan
 from ._session_bookkeeping import Bookkeeping
 from ._session_candles import CandleKeeper
 from ._session_decisions import DecisionNotes
+from ._session_orders import TraderOrders
 from ._session_records import StrategyRecords
-from ._session_unsent import to_send
 from ._types import LOGGER_NAME, LiveBar, Now
-from ._venue_requests import LIVE_PRODUCT, OrderRequest
-from ._worker_queue import WithdrawPlace
 from .venue_map import VenueMap
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -102,11 +96,13 @@ def ist_instant(day: dt.date, hhmm: str) -> int:
     return int(dt.datetime.combine(day, clock, tzinfo=IST).timestamp()) * NANOS_PER_SECOND
 
 
-class Trader(Bookkeeping):
+class Trader(Bookkeeping, TraderOrders):
     """One strategy of the session (module docstring): `part`, its share of the plan,
     `venue`, its venue map; `square_off_ns` its MIS square-off and `close_ns` its
     exchange's session close (UTC nanoseconds); `now` the session's clock, `event` the
-    event stream's writer and `decision` the decisions file's."""
+    event stream's writer, `decision` the decisions file's and `warn` keeps a warning of
+    the session; `locked_entries` the order worker's record of the strategies whose
+    entries are locked (`_locked_entries`)."""
 
     def __init__(
         self,
@@ -118,8 +114,11 @@ class Trader(Bookkeeping):
         now: Now,
         event: Callable[..., None],
         decision: Callable[..., None],
+        warn: Callable[[str], None],
+        locked_entries: LockedEntries,
     ) -> None:
         self.part, self.venue = part, venue
+        self.locked_entries, self._warn = locked_entries, warn
         self.name, self.symbol = part.spec.name, part.spec.symbol
         self.exchange = part.spec.exchange
         self.square_off_ns, self.close_ns = square_off_ns, close_ns
@@ -308,84 +307,6 @@ class Trader(Bookkeeping):
             self.failed = True
             raise StrategyFailed(self.name, error, self.notes.submitted()) from error
         return self.notes.submitted()
-
-    # ----- orders and positions ----------------------------------------------------
-
-    def commands(self) -> list[OrderRequest | WithdrawPlace]:
-        """The kernel's commands since the last call, as the order worker's requests (a
-        placement the kernel cancelled before this call withdrawn: module docstring; one
-        it cancelled after, or that waits once its entries lock, withdrawn by the worker:
-        `WithdrawPlace`); the reason of each risk exit placed is kept (`reasons`), and the
-        position's units at each placement (`units_at_place`)."""
-        if self.finished:
-            return []
-        requests: list[OrderRequest | WithdrawPlace] = []
-        commands = call(self.engine.take_commands)
-        while commands:
-            kept = to_send(self.engine, self.name, commands, event=self._event)
-            for command in kept:
-                if command.get("command") != "place":
-                    continue
-                kernel_order = int(command["order_id"])
-                self.units_at_place[kernel_order] = round(abs(self.open_units()))
-                if command.get("reason"):
-                    self.reasons[kernel_order] = str(command["reason"])
-            requests += self.venue.requests(kept)
-            # A withdrawal or a refusal ends an order in the kernel, which may free an exit
-            # that waited for it: its commands go out in this same call.
-            commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
-        return requests + self.venue.withdraw_locked()
-
-    def open_units(self) -> float:
-        """The kernel's position in the strategy's instrument, signed units (0 flat)."""
-        position = call(self.engine.position, INSTRUMENT, LIVE_PRODUCT)
-        return 0.0 if position is None else float(position["quantity_units"])
-
-    def working(self) -> list[int]:
-        """The kernel orders that can still fill."""
-        return list(call(self.engine.working_orders))
-
-    def order_name(self, kernel_order: int) -> str:
-        """How an alert names a kernel order: the broker's order ID once bound, else
-        "o<n>" (also for an order the kernel made in this loop step, which the venue map
-        has not taken yet)."""
-        try:
-            order_id = self.venue.order_id_of(kernel_order)
-        # The venue map knows only the orders whose commands it has taken.
-        except LiveError:
-            order_id = ""
-        return order_id or f"o{kernel_order}"
-
-    def exit_orders(self) -> list[int]:
-        """The working orders that close the position (reduce-only)."""
-        entries = set(self.entry_orders())
-        return [kernel_order for kernel_order in self.working() if kernel_order not in entries]
-
-    @property
-    def flat(self) -> bool:
-        """True with no position and no working order."""
-        return self.open_units() == 0 and not self.working()
-
-    def entry_orders(self) -> list[int]:
-        """The working orders that open or add to the position: those not reduce-only
-        (the kernel classes a sale beyond what closes the position as an entry too)."""
-        return [
-            kernel_order
-            for kernel_order in self.working()
-            if not call(self.engine.order, kernel_order)["reduce_only"]
-        ]
-
-    def request_exit(self, reason: str) -> str | None:
-        """Ask the kernel to exit the position for `reason` (one of its RISK_EXIT_REASONS);
-        what it did (its EXIT_REQUESTS), or None once the kernel session finished."""
-        if self.finished:
-            return None
-        return str(call(self.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, reason))
-
-    def cancel(self, kernel_order: int) -> None:
-        """Ask the kernel to cancel a working order (nothing once it finished)."""
-        if not self.finished:
-            call(self.engine.cancel, kernel_order)
 
 
 __all__ = [

@@ -88,7 +88,7 @@ class DecisionNotes:
                     self._name,
                     submission.order,
                     order["side"],
-                    _units_text(order["quantity_units"]),
+                    units_text(order["quantity_units"]),
                     order["reject_code"],
                 )
         return listed
@@ -172,7 +172,7 @@ class DecisionNotes:
         self.skipped(decided_at_ns, reason)
 
 
-def _units_text(units: float) -> str:
+def units_text(units: float) -> str:
     """`units` as the log writes them: a whole number exactly, with no exponent."""
     return str(int(units)) if float(units).is_integer() else str(units)
 
@@ -185,4 +185,5 @@ __all__ = [
     "SKIPPED",
     "STOPPING",
     "DecisionNotes",
+    "units_text",
 ]
