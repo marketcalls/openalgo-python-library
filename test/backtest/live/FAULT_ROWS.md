@@ -314,9 +314,8 @@ still be needed: the end checks find a decided end that no check took
 7.1 lists F35, F36, F60, the F77 variant and F80 as the tests that end with a leg without a
 confirmed stop, and 18-multi-strategy 5.1 (I7) adds F105 and F118 (`LISTED_ROWS`; F105's
 tests use it for A, whose stop is the ambiguous order: B's stop is reported working since
-item P3-3). These merged tests end so by a decided end of
-16-session-design, named
-with `trace.left_unprotected_by_decision`; each leg is listed in `open_positions` with no
+item P3-3). These merged tests end so by a decided end of 16-session-design, named with
+`trace.left_unprotected_by_decision`; each leg is listed in `open_positions` with no
 confirmed stop and named by an ERROR alert, and only the protection check is lifted. They
 are for the lead to add to 7.1's list:
 

@@ -19,8 +19,7 @@ job.
 venue map (`venue`), the strategy's name, whether the kernel session finished
 (`finished`), the event stream's writer (`_event`), the session's warnings (`_warn`), and
 the risk exits' reasons and the position's units at each placement (`reasons`,
-`units_at_place`). Times are UTC
-nanoseconds, quantities units. Used by the loop only.
+`units_at_place`). Times are UTC nanoseconds, quantities units. Used by the loop only.
 """
 
 from __future__ import annotations

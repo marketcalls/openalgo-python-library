@@ -10,7 +10,7 @@ of `venue_map.VenueMap`).
   no answer yet also asks the worker to withdraw that placement (`withdrawal`, a
   `WithdrawPlace`): while it still waits the worker answers `NotSent(cancelled)`, and the
   kernel is told it was cancelled (`cancelled_place`, `apply_cancel`), as for a placement
-  cancelled in the batch that made it (`_session_trader`). Once the worker has taken it,
+  cancelled in the batch that made it (`_session_orders`). Once the worker has taken it,
   nothing changes: the cancel goes when the placement binds. A stop or an exit is never
   withdrawn this way: the throttle takes them first, and a closing order is never dropped.
 - **An entry or add waiting when the strategy's entries lock** (2.4.0 item M8-X2). The
@@ -19,7 +19,7 @@ of `venue_map.VenueMap`).
   stop entries at submission only. An entry decided before such a lock, and held back by
   the order rate, would still go after it. So once the strategy's entries are locked,
   each placement of an entry or add handed over with no answer yet is withdrawn too
-  (`withdraw_locked`, which `_session_trader.Trader.commands` adds to the commands of
+  (`withdraw_locked`, which `_session_orders.TraderOrders.commands` adds to the commands of
   each loop step): while it still waits the worker answers
   `NotSent(entries_locked)`, and the kernel takes it as an entry refused under the lock
   (`locked_place`, `apply_reject` with `live_lock`, the code a submission gets then).

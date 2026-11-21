@@ -15,8 +15,7 @@ and posts `inbox.WorkerReady`. Then each `step`:
    journal stop first (`_worker_stops`), and any terminal news settles the order
    (`_worker_settle`);
 2. executes every ready request of priority 0 (stops, exits, protective modifies and
-   cancels), draining the updates before each (`_worker_send`, which also refuses an entry
-   or add of a strategy whose entries the loop has locked: `locked_entries`);
+   cancels), draining the updates before each (`_worker_send`);
 3. polls the mode guard (it reads only every 5 s), after priority 0, so a protective send
    never waits behind a guard read; a lock is posted once as `inbox.GuardLocked`;
 4. runs the order path's polling round, posting its news;
@@ -25,14 +24,16 @@ and posts `inbox.WorkerReady`. Then each `step`:
 7. settles the orders whose modify or cancel was unanswered or refused, posting the
    check's news and `inbox.Settled` (an expired modify with an ERROR alert; one the order
    path cannot read at all, refused at once: `_worker_send`);
-8. executes one ready request of any priority, after draining the updates.
+8. executes one ready request of any priority, after draining the updates; an entry or
+   add of a strategy whose entries the loop has locked since it was queued is refused just
+   before it would be sent (`locked_entries`, 2.4.0 item P3-1).
 
 A `JournalError` (any but a refused stop record, which is only alerted) is posted as
 `inbox.WorkerFailed`, after which nothing is sent: an intent can no longer be written
 first. So is any exception nothing expected, inline (`step`) as on the thread (`run`,
 `_worker_thread`). `close` lets the step under way end without taking another request;
-`withdraw_put_back`
-drops what was put back before the session's last lines (3.3 step 5). The loop reads
+`withdraw_put_back` drops what was put back before the session's last lines (3.3 step 5).
+The loop reads
 `busy_since_ns` (set around every call that may reach the server), `raw_pending` (the
 order words not yet posted: `_worker_news`) (4.2), `unfinished` (the close's last wait)
 and the order path's silence (`silent_since_ns`, `asked_ns`, 4.9). Times are UTC ns.
