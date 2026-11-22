@@ -14,6 +14,20 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
+@pytest.fixture(scope="session")
+def run_bars_cache(tmp_path_factory):
+    """One empty bars cache folder for the whole test run."""
+    return tmp_path_factory.mktemp("bars-cache")
+
+
+@pytest.fixture(autouse=True)
+def isolated_bars_cache(run_bars_cache, monkeypatch):
+    """Every test uses the run's own bars cache, never the user's
+    `~/.openalgo/backtest/cache`: a test that found real bars there would pass on a
+    developer's machine and fail on a clean one, as CI is."""
+    monkeypatch.setenv("OPENALGO_BT_CACHE", str(run_bars_cache))
+
+
 @pytest.fixture(autouse=True)
 def fresh_unverified_rate_announcements():
     """A run announces unverified charge rates once per process (`_market.announce_once`);

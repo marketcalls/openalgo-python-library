@@ -3,7 +3,8 @@ client's master contract (`_expiry_check.py`; 18-multi-strategy 12.2, unit M11).
 
 The contract is the NIFTY future of December 2026 on NFO, whose reference tables' listed
 expiry and last trading day are both Tuesday 2026-12-29 (OpenAlgo writes "29-DEC-26").
-The run is one NFO session, Monday 2026-11-16, on the user's own 1-minute bars, with a
+The run is one NFO session, Monday 2026-11-16, on the user's own 1-minute bars (which also
+hold Friday 2026-10-30, whose close fixes the contract's tick for November), with a
 client of the data layer's fakes that also answers `symbol` as OpenAlgo's master contract
 does. A run made after 2026-12-29 finds the contract expired: the server no longer lists
 it, so it is not asked about.
@@ -125,12 +126,26 @@ class Future(bt.Strategy):
         pass
 
 
+#: Friday 2026-10-30, the last session before November: its close fixes the contract's
+#: tick for the month (`_slab_ticks`), and the run's own data must hold it.
+TICK_REFERENCE_DAY = dt.date(2026, 10, 30)
+RUN_DAY = dt.date(2026, 11, 16)
+MINUTES_PER_SESSION = 375
+
+
 def session_bars() -> pd.DataFrame:
-    first = dt.datetime(2026, 11, 16, 9, 15, tzinfo=IST)
-    index = pd.DatetimeIndex([first + dt.timedelta(minutes=k) for k in range(375)])
-    opens = 24_000.0 + np.arange(375) * 0.1
+    """The future's 1-minute bars of the tick's reference session and of the run's day."""
+    days = (TICK_REFERENCE_DAY, RUN_DAY)
+    index = pd.DatetimeIndex(
+        [
+            dt.datetime(day.year, day.month, day.day, 9, 15, tzinfo=IST) + dt.timedelta(minutes=k)
+            for day in days
+            for k in range(MINUTES_PER_SESSION)
+        ]
+    )
+    opens = 24_000.0 + np.tile(np.arange(MINUTES_PER_SESSION) * 0.1, len(days))
     columns = {"open": opens, "high": opens + 1, "low": opens - 1, "close": opens + 0.5}
-    return pd.DataFrame(columns | {"volume": np.full(375, 1_000.0)}, index=index)
+    return pd.DataFrame(columns | {"volume": np.full(len(index), 1_000.0)}, index=index)
 
 
 def run(client) -> list[str]:
