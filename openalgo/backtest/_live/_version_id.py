@@ -48,9 +48,8 @@ class StrategyVersion:
     their type alone (`by_type`: objects with no fixed text of their value; its
     parameters, and when its compiled code was hashed its class attributes, default
     arguments and callables, as `_version_code` names them), and the Python its compiled
-    code was
-    hashed under when its source was not (`compiled_under`, such as "CPython 3.12"; None
-    when its source was hashed or its code could not be read)."""
+    code was hashed under when its source was not (`compiled_under`, such as "CPython
+    3.12"; None when its source was hashed or its code could not be read)."""
 
     version_id: str
     source_hashed: bool

@@ -238,6 +238,23 @@ def test_the_accounts_profit_target_exits_every_strategy_and_locks_their_entries
     assert names.count("account_profit_hit") == 2
 
 
+def test_none_for_a_strategy_of_a_list_leaves_it_without_the_cap():
+    # First and InAndOutTwice each enter at bar 1, exit at bar 3 and enter again at bar 5
+    # (decided at 09:20). First, given None, has no cap: its second entry goes. The cap of 1
+    # refuses InAndOutTwice's second entry trade_limit.
+    pf = bt.backtest(
+        [First, InAndOutTwice],
+        data=flat_bars(100.0),
+        capital=CAPITAL,
+        max_trades_per_day={"First": None, "InAndOutTwice": 1},
+        **no_costs(),
+    )
+    assert codes(pf.strategy("First")) == [None, None, None]
+    assert codes(pf.strategy("InAndOutTwice")) == [None, None, "trade_limit"]
+    assert "max_trades_per_day" not in pf.strategy("First").assumptions
+    assert pf.strategy("InAndOutTwice").assumptions["max_trades_per_day"] == 1
+
+
 def test_each_strategy_of_a_list_takes_its_own_cap_by_name():
     pf = bt.backtest(
         [First, Second],

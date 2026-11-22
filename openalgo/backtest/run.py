@@ -244,17 +244,17 @@ def backtest(
     class attribute of the same name still wins. None for a strategy in such a dict leaves
     it without `max_positions`, `drawdown_halt`, `cooldown` or that daily limit (each off
     when None). `params` is a dict by strategy class name (one left out keeps its
-    defaults); a list of one strategy takes
-    that strategy's own values, as a class does. Every other argument is the run's: one
-    value. Of those keyed by what is traded, each strategy is given the entries of what it
-    trades: `data` by symbol, `instrument` by symbol on the strategy's exchange (a
-    strategy on a futures underlying the contracts of that underlying, never the share of
-    its name), `corporate_actions` by symbol to the strategies on NSE and BSE shares only,
-    and `margin` by underlying; an instrument or corporate action no strategy takes is
-    refused, a `margin=` no strategy uses is a warning of the run, one table of bars is
-    refused when the strategies trade more than one series between them (a share and the
-    futures of its name are two), and one list of corporate actions unless they trade
-    exactly one share. Every strategy's settings are checked before any data is loaded.
+    defaults); a list of one strategy takes that strategy's own values, as a class does.
+    Every other argument is the run's: one value. Of those keyed by what is traded, each
+    strategy is given the entries of what it trades: `data` by symbol, `instrument` by
+    symbol on the strategy's exchange (a strategy on a futures underlying the contracts of
+    that underlying, never the share of its name), `corporate_actions` by symbol to the
+    strategies on NSE and BSE shares only, and `margin` by underlying; an instrument or
+    corporate action no strategy takes is refused, a `margin=` no strategy uses is a
+    warning of the run, one table of bars is refused when the strategies trade more than
+    one series between them (a share and the futures of its name are two), and one list of
+    corporate actions unless they trade exactly one share. Every strategy's settings are
+    checked before any data is loaded.
 
     pool: "shared" (the default): one account; an opening fill needs its margin within the
         strategy's own free cash and within the account's free cash (else it is refused

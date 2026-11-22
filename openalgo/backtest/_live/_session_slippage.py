@@ -59,8 +59,6 @@ from .._strategy_orders import LEG_TARGET
 from ._plan_catch_up import INSTRUMENT
 from ._types import OrderIntent, Purpose
 
-#: The price types of the orders priced at their trigger: stops.
-TRIGGERED = frozenset({"SL-M", "SL"})
 #: The sign of a fill's slippage by its side: a buy that paid more is worse.
 AGAINST_THE_TRADER = {"BUY": 1, "SELL": -1}
 #: The kernel's exit reason (an `ExitReason` code) of the time exit, the one risk exit
@@ -322,7 +320,6 @@ __all__ = [
     "NOT_REACHED",
     "NO_BAR",
     "NO_LEVEL",
-    "TRIGGERED",
     "Priced",
     "Slippage",
     "StopTriggers",

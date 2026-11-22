@@ -298,7 +298,8 @@ def test_a_backtest_dict_of_a_setting_none_does_not_turn_off_keeps_its_words(set
 
 @pytest.mark.parametrize("resolve", [backtest_values, live_values], ids=["backtest", "live"])
 @pytest.mark.parametrize("setting", OFF_WHEN_NONE)
-def test_none_in_a_dict_leaves_that_strategy_without_the_setting(resolve, setting):
+def test_none_in_a_dict_is_that_strategys_value(resolve, setting):
+    # A run with None for one strategy's trade cap is in test_daily_limits.py.
     assert resolve(setting, {"capital": CAPITAL, setting: {"Alpha": None, "Beta": 2}}) == {
         "Alpha": None,
         "Beta": 2,

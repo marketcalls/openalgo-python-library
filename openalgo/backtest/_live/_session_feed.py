@@ -96,7 +96,7 @@ def take_other_fill(session: Any, message: OtherFill) -> None:
 
 
 #: The market's messages, each with its handler, for the loop's dispatch (`_session_news`).
-MARKET: Mapping[type, Callable[[Any, Any], None]] = MappingProxyType(
+MARKET_DATA_HANDLERS: Mapping[type, Callable[[Any, Any], None]] = MappingProxyType(
     {
         FeedTick: take_tick,
         Quote: take_quote,
@@ -109,7 +109,7 @@ MARKET: Mapping[type, Callable[[Any, Any], None]] = MappingProxyType(
 
 
 __all__ = [
-    "MARKET",
+    "MARKET_DATA_HANDLERS",
     "take_candles",
     "take_data_failed",
     "take_feed_event",
