@@ -169,10 +169,36 @@ def test_an_object_called_as_a_method_is_named_in_the_banner_by_its_type(world):
     world.stop_at(ist(14, 41))
     live(world, Ruled)
     assert (
-        "Ruled: rule has no text of its value (an object shown by its memory address): its "
-        "version id hashes its type only, so a change to its value does not change the id"
+        "Ruled: rule has no fixed text of its value (an object shown by its memory address, "
+        "or one that can change as the strategy runs, such as a list, a dict or a DataFrame): "
+        "its version id hashes its type only, so a change to its value does not change the id"
     ) in world.lines
     assert not any("its source was not hashed" in line for line in world.lines)
+
+
+def remembering(self, bar):
+    """BuyAndHold's decision, after noting the bar's close in the class's `seen` list."""
+    self.seen.append(bar.close)
+    BuyAndHold.on_bar(self, bar)
+
+
+def test_a_list_the_strategy_appends_to_does_not_change_its_version_at_a_restart(world):
+    # A class built at run time, as a notebook cell builds one: its first start appends a
+    # close to `seen` at each decision, which the restart in the same process still holds.
+    Remembers = type("Remembers", (BuyAndHold,), {"seen": [], "on_bar": remembering})
+    world.stop_at(ist(14, 43))
+    live(world, Remembers)
+    assert Remembers.seen
+    world.stop = StopFlag()
+    world.stop_at(ist(14, 45))
+    live(world, Remembers)
+    assert events(world, "version_changed") == []
+    assert (
+        "Remembers: seen has no fixed text of its value (an object shown by its memory "
+        "address, or one that can change as the strategy runs, such as a list, a dict or a "
+        "DataFrame): its version id hashes its type only, so a change to its value does not "
+        "change the id"
+    ) in world.lines
 
 
 def test_a_class_whose_code_cannot_be_read_at_all_is_named_in_the_banner_as_before(world):

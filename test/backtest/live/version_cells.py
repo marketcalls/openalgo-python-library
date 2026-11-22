@@ -9,16 +9,19 @@ tests edit: `Cell` buys 10 SBIN when its symbol is on a list (a set of names, wh
 keeps as a constant whose own order depends on the process's hash seed) and the bar closes
 above 500.00, and holds what a notebook's strategy often holds: a method cached with
 `functools.lru_cache`, a static method cached with `functools.cache`, a builtin as a
-static method, and class attributes of times, a duration and the SDK's clock rules. Each
-edit of `EDITS` changes one thing of it; `with_member` adds a member to it. The cell also
-defines `Rule`, an object called as a method, and `Model`, an object with no text of its
-value (its text names its memory address), for the members the tests add.
+static method, and class attributes of times, a duration, a stop distance and the SDK's
+clock rules, every one immutable (a mutable value, such as a list or a dict, is hashed by
+its type alone). Each edit of `EDITS` changes one thing of it; `with_member` adds a member
+to it. The cell also defines `Rule`, an object called as a method, `Model`, an object with
+no text of its value (its text names its memory address), and `State`, a dataclass whose
+values can change (Python cannot hash it), for the members the tests add.
 """
 
 from typing import Any
 
 #: The cell of `Cell` as first written.
 CELL = """
+import dataclasses
 import datetime as dt
 import functools
 import math
@@ -43,11 +46,16 @@ class Model:
     pass
 
 
+@dataclasses.dataclass
+class State:
+    count: int = 0
+
+
 class Cell(bt.Strategy):
     symbol, exchange, interval = "SBIN", "NSE", "1m"
     fast = 9
     watch = ("SBIN", "INFY")
-    rules = {"stop": bt.points(3)}
+    stop_distance = bt.points(3)
     entry_from = dt.time(9, 20)
     cooldown = dt.timedelta(minutes=5)
     window = bt.time_between("09:20", "15:00")

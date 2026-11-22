@@ -48,7 +48,7 @@ from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
 from ._order_throttle import throttled_news
-from ._session_feed import MARKET
+from ._session_feed import MARKET_DATA_HANDLERS
 from ._session_records import fill_record
 from ._session_resolved import ResolutionNews, order_words
 from ._session_trader import Trader
@@ -99,7 +99,7 @@ class News(ResolutionNews):
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
-        market = MARKET.get(type(message))
+        market = MARKET_DATA_HANDLERS.get(type(message))
         if market is not None:
             market(self._session, message)
             return

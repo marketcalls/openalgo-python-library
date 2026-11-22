@@ -3,7 +3,8 @@ one rule for its values, and the JSON text every hash of a version id is taken o
 
 A value is a parameter's, and, for a class whose source cannot be read (`_version_code`),
 a class attribute's, a default argument's or that of a callable whose code Python does not
-keep. `canonical_value` reads each the same way: its JSON-ready copy (`_manifest.plain`: a
+keep (there a value Python cannot hash is known by its type alone before this rule reads
+the others). `canonical_value` reads each the same way: its JSON-ready copy (`_manifest.plain`: a
 date as its ISO text, a tuple as a list, a number, a string, a bool or None as itself, any
 other object as its text, such as "datetime.time(9, 20)"), a set's items sorted (a set's
 own order depends on the process's hash seed), and an object whose text names its memory

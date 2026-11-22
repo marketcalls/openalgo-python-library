@@ -171,6 +171,210 @@ def test_a_default_argument_known_by_its_type_alone_is_named_for_the_banner():
     assert version.by_type == ("sized's default model",)
 
 
+# ----- values that can change as the strategy runs (2.4.0 item P6-3) -----------------------
+
+#: The imports a cell of these tests adds before `Cell` (they change no compiled code of it).
+PRELUDE = "import enum\nimport typing\n\nimport numpy as np\nimport pandas as pd\n"
+
+#: Class attributes Python cannot hash, each with an edit of its contents only: (the
+#: member, its value as first written, the value edited).
+MUTABLE = {
+    "a list": ("seen", "[500.0, 501.25]", "[500.0, 502.5]"),
+    "a dict": ("rules", '{"stop": bt.points(3)}', '{"stop": bt.points(4)}'),
+    "a set": ("names", '{"SBIN", "INFY"}', '{"SBIN", "TCS"}'),
+    "a bytearray": ("buffer", 'bytearray(b"ab")', 'bytearray(b"ac")'),
+    "a DataFrame": (
+        "frame",
+        'pd.DataFrame({"close": [500.0]})',
+        'pd.DataFrame({"close": [501.0]})',
+    ),
+    "an ndarray": ("closes", "np.array([500.0, 501.25])", "np.array([500.0, 502.5])"),
+    "a dataclass that is not frozen": ("state", "State(3)", "State(4)"),
+    "a writable memoryview": (
+        "view",
+        'memoryview(bytearray(b"ab"))',
+        'memoryview(bytearray(b"ac"))',
+    ),
+}
+
+
+def with_value(member: str, value: str) -> type:
+    """`Cell` with the class attribute `member = value` added."""
+    return from_cell(PRELUDE + with_member(f"{member} = {value}"))
+
+
+def test_a_list_the_strategy_appends_to_keeps_the_version_id_and_is_named_for_the_banner():
+    cell = with_value("seen", "[]")
+    before = version_of(cell, None)
+    cell.seen.append(1)
+    after = version_of(cell, None)
+    assert after.version_id == before.version_id
+    assert "seen" in after.by_type
+
+
+@pytest.mark.parametrize("value", list(MUTABLE.values()), ids=list(MUTABLE))
+def test_a_value_python_cannot_hash_is_hashed_by_its_type_alone(value):
+    member, first, edited_value = value
+    version = version_of(with_value(member, first), None)
+    assert version.by_type == (member,)
+    assert version_of(with_value(member, edited_value), None).version_id == version.version_id
+
+
+def test_a_value_of_another_type_gives_another_version_id():
+    listed = version_of(with_value("seen", "[500.0]"), None)
+    assert version_of(with_value("seen", "{500.0}"), None).version_id != listed.version_id
+
+
+#: Immutable class attributes, each with an edit: (the member, its value as first
+#: written, the value edited).
+IMMUTABLE = {
+    "a tuple": ("pair", '("SBIN", 5)', '("SBIN", 6)'),
+    "a frozenset": ("names", 'frozenset({"SBIN", "INFY"})', 'frozenset({"SBIN", "TCS"})'),
+    "bytes": ("raw", 'b"ab"', 'b"ac"'),
+    "a complex number": ("gain", "1 + 2j", "1 + 3j"),
+    "a date": ("start", "dt.date(2026, 11, 23)", "dt.date(2026, 11, 24)"),
+    "a tuple of stop distances": (
+        "stops",
+        "(bt.points(3), bt.pct(1))",
+        "(bt.points(3), bt.pct(2))",
+    ),
+}
+
+
+@pytest.mark.parametrize("value", list(IMMUTABLE.values()), ids=list(IMMUTABLE))
+def test_an_edit_of_an_immutable_value_still_changes_the_version_id(value):
+    member, first, edited_value = value
+    version = version_of(with_value(member, first), None)
+    assert version.by_type == ()
+    assert version_of(with_value(member, edited_value), None).version_id != version.version_id
+
+
+def test_a_list_inside_a_tuple_is_hashed_by_its_type_and_the_rest_by_value():
+    version = version_of(with_value("pair", '("SBIN", [5])'), None)
+    assert version.by_type == ("pair",)
+    assert version_of(with_value("pair", '("SBIN", [6])'), None).version_id == version.version_id
+    assert version_of(with_value("pair", '("INFY", [5])'), None).version_id != version.version_id
+
+
+def test_a_mutable_default_argument_is_hashed_by_its_type_and_named_for_the_banner():
+    member = "def remember(self, bar, seen=[]):\n        seen.append(bar)\n        return seen"
+    cell = from_cell(with_member(member))
+    before = version_of(cell, None)
+    cell.remember(None, 500.0)
+    assert version_of(cell, None).version_id == before.version_id
+    assert before.by_type == ("remember's default seen",)
+
+
+# ----- classes nested in the strategy class (2.4.0 item P6-4) ------------------------------
+
+#: A class nested in `Cell`: its levels above a price.
+LEVELS = (
+    "class Levels:\n"
+    "        width = 2\n"
+    "\n"
+    "        def above(self, price):\n"
+    "            return price + self.width\n"
+    "\n"
+    "        class Band:\n"
+    "            def wide(self, price):\n"
+    "                return price * 2\n"
+)
+
+
+def nested_id(source: str = LEVELS) -> str:
+    """The version id of `Cell` holding the nested class of `source`."""
+    return cell_id(with_member(source))
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        ("return price + self.width", "return price - self.width"),
+        ("width = 2", "width = 3"),
+        ("return price * 2", "return price * 3"),
+        ("class Levels:", "class Levels(dict):"),
+    ],
+    ids=["its method's body", "its attribute", "a class nested in it", "its base"],
+)
+def test_an_edit_of_a_nested_class_gives_a_new_version_id(edit):
+    old, new = edit
+    assert LEVELS.count(old) == 1
+    assert nested_id(LEVELS.replace(old, new)) != nested_id()
+
+
+def test_the_same_nested_class_built_twice_gets_the_same_version_id():
+    first, second = from_cell(with_member(LEVELS)), from_cell(with_member(LEVELS))
+    assert first.Levels is not second.Levels
+    assert version_of(first, None).version_id == version_of(second, None).version_id
+
+
+def test_a_value_of_a_nested_class_known_by_its_type_is_named_with_its_class():
+    nested = "class Levels:\n        seen = []\n        model = Model()\n"
+    version = version_of(from_cell(with_member(nested)), None)
+    assert version.by_type == ("Levels.model", "Levels.seen")
+
+
+def test_a_nested_class_held_under_two_names_is_read_once():
+    # `Alias` comes first in name order, so the class is read and named there.
+    nested = "class Levels:\n        model = Model()\n    Alias = Levels\n"
+    version = version_of(from_cell(with_member(nested)), None)
+    assert version.by_type == ("Alias.model",)
+
+
+#: An Enum nested in `Cell`, with a hook a trader writes for it.
+SIDE = (
+    "class Side(enum.Enum):\n"
+    "        BUY = 1\n"
+    "        SELL = 2\n"
+    "\n"
+    "        @classmethod\n"
+    "        def _missing_(cls, value):\n"
+    "            return cls.BUY\n"
+)
+#: A named tuple nested in `Cell`, with a default.
+POINT = "class Point(typing.NamedTuple):\n        price: float = 500.0\n"
+#: Edits of a class Python builds entries of from its body: (the class, the text replaced,
+#: its replacement).
+BUILT_EDITS = {
+    "an Enum member's value": (SIDE, "SELL = 2", "SELL = 3"),
+    "an Enum hook's body": (SIDE, "return cls.BUY", "return cls.SELL"),
+    "a named tuple's default": (POINT, "= 500.0", "= 505.0"),
+}
+
+
+def holding(nested: str) -> type:
+    """`Cell` holding the nested class of `nested`."""
+    return from_cell(PRELUDE + with_member(nested))
+
+
+@pytest.mark.parametrize("nested", [SIDE, POINT], ids=["an Enum", "a named tuple"])
+def test_the_entries_python_builds_for_a_nested_class_are_not_named_for_the_banner(nested):
+    # An Enum's member tables and a named tuple's defaults are built from the class body,
+    # which the id reads: they are not values known by their type alone.
+    assert version_of(holding(nested), None).by_type == ()
+
+
+@pytest.mark.parametrize("nested", [SIDE, POINT], ids=["an Enum", "a named tuple"])
+def test_an_enum_or_a_named_tuple_built_twice_gets_the_same_version_id(nested):
+    first, second = holding(nested), holding(nested)
+    assert version_of(first, None).version_id == version_of(second, None).version_id
+
+
+@pytest.mark.parametrize("edit", list(BUILT_EDITS.values()), ids=list(BUILT_EDITS))
+def test_an_edit_of_a_nested_enum_or_named_tuple_gives_a_new_version_id(edit):
+    nested, old, new = edit
+    assert nested.count(old) == 1
+    before = version_of(holding(nested), None).version_id
+    assert version_of(holding(nested.replace(old, new)), None).version_id != before
+
+
+def test_a_class_defined_outside_the_strategy_is_hashed_by_its_name_only():
+    # Model is defined in the cell, not in Cell: an edit of it keeps Cell's id.
+    source = with_member("kind = Model")
+    edited_model = source.replace("class Model:\n    pass\n", "class Model:\n    size = 2\n")
+    assert cell_id(edited_model) == cell_id(source)
+
+
 class Rule:
     """An object a class calls as a method: Python keeps no compiled code of it there."""
 

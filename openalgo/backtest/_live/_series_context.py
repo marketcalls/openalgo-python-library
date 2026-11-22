@@ -31,6 +31,7 @@ from .._orders import Order
 from .._series import SeriesStore
 from ..errors import ConfigError
 from ..reference import Instrument
+from ._types import MARKET
 
 if TYPE_CHECKING:
     from ._series_indicators import LiveView
@@ -52,7 +53,7 @@ class Submission:
 def _rests_and_reverses(request: Mapping[str, Any]) -> bool:
     """True for an order request that may reverse the position and rests at the broker:
     `reverse=True` on any order type but MARKET."""
-    return bool(request.get("reverse")) and request.get("order_type") != "MARKET"
+    return bool(request.get("reverse")) and request.get("order_type") != MARKET
 
 
 def _latest(view: LiveView) -> float | bool | None:

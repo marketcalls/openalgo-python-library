@@ -136,6 +136,35 @@ def test_the_banner_names_the_daily_limits_and_the_order_rate(world):
     assert any("Order rate: at most 6 order calls a second" in line for line in lines)
 
 
+def test_the_banner_and_the_summary_state_rupees_in_indian_digit_grouping(world):
+    # The broker's funds are Rs 2,50,000, HoldSbin's capital Rs 2,00,000 and the order value
+    # cap Rs 40,00,000: written as the session's summary and reports write rupees.
+    outcome = run(
+        world,
+        [HoldSbin, HoldInfy],
+        capital={"HoldSbin": 200_000, "HoldInfy": 50_000},
+        daily_profit_target=150_000,
+        max_order_value=4_000_000,
+        account_max_daily_loss=120_000,
+        account_daily_profit_target=250_000,
+    )
+    lines = world.lines
+    assert "Funds available: Rs 2,50,000.00" in lines
+    assert any(
+        line.startswith(
+            "HoldSbin: NSE:SBIN every 1m, capital Rs 2,00,000.00, daily loss limit Rs 5,000.00,"
+        )
+        for line in lines
+    )
+    assert (
+        "HoldSbin daily limits: profit target Rs 1,50,000.00, orders of at most Rs "
+        "40,00,000.00 each"
+    ) in lines
+    assert "Account daily loss limit: Rs 1,20,000.00" in lines
+    assert "Account daily profit target: Rs 2,50,000.00" in lines
+    assert outcome.summary.limits[-1] == "account daily profit target Rs 2,50,000.00"
+
+
 def test_a_session_without_daily_limits_names_none_but_the_order_rate(world):
     run(world, HoldSbin)
     assert not [line for line in world.lines if "daily limits" in line or "Account trade" in line]

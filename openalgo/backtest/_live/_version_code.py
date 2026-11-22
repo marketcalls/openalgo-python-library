@@ -19,14 +19,29 @@ own, in name order:
 - a member that holds another callable, whose code Python does not keep: a builtin (such
   as `staticmethod(math.floor)`) by its module and name, any other (an object called as
   a method) as a value;
+- a class defined inside the class read (its qualified name continues the class's, such
+  as `Grid.Levels` in `Grid`), read the same way, recursively, with the qualified names of
+  its bases; a class met again is named, not read again. Any other class (one defined
+  elsewhere) is a value: its qualified name;
 - any other member as a value, such as 5, ("SBIN", "INFY"), bt.points(3) or
   datetime.time(9, 20). Python's own entries (`__module__`, `__doc__` and the like) are
-  not hashed.
+  not hashed, nor those Python derives from the rest of a class it builds: an Enum's
+  `_sunder_` entries (its member tables and the like) other than the functions a trader
+  writes there (such as `_missing_`), and a named tuple's `_field_defaults` (its
+  `__new__`'s default values, hashed with `__new__`). An Enum's members and their values
+  are hashed, so an edit of them still changes the hash.
 
-A value is hashed by the rule a parameter is (`_version_values.canonical_value`); one known
-by its type alone (its text names a memory address) is named in `CompiledCode.by_type`, so
-the start banner names it: a default argument as "sized's default model", any other by its
-member's name.
+A value Python cannot hash, at any depth (a list, dict, set or bytearray, a writable
+memoryview, a DataFrame, an ndarray, a dataclass that is not frozen: a value the strategy
+may change as it runs, such as a list it appends to in `on_bar`), is hashed by its type
+alone, so a second start in the same process keeps the id. Any other value is hashed by
+the rule a parameter is (`_version_values.canonical_value`): str, int, float, bool, None,
+bytes, complex, tuples and frozensets of those, dates, times and durations, and frozen
+dataclasses such as bt.points(3) by their value. A value known by its type alone (one
+Python cannot hash, or one whose text names a memory address) is named in
+`CompiledCode.by_type`, so the start banner names it: a default argument as "sized's
+default model", a member of a nested class as "Levels.seen", any other by its member's
+name.
 
 Line numbers are not part of compiled code, so moving the class down its cell or adding a
 comment keeps the hash, while an edit of a method's body, a constant, a default argument
@@ -40,6 +55,7 @@ None: its version id hashes its name instead (`_version_id`).
 
 from __future__ import annotations
 
+import enum
 import functools
 import hashlib
 import inspect
@@ -69,12 +85,15 @@ class CompiledCode:
 @dataclass
 class _Reading:
     """What reading a class's members has found so far: the values known by their type
-    alone (`by_type`), and how many callables were Python functions (`functions`) and how
-    many held code Python does not keep (`opaque`)."""
+    alone (`by_type`), how many callables were Python functions (`functions`) and how
+    many held code Python does not keep (`opaque`), and the nested classes read
+    (`nested`)."""
 
     by_type: list[str] = field(default_factory=list)
     functions: int = 0
     opaque: int = 0
+    #: The nested classes read so far, by identity: one met again is not read again.
+    nested: set[int] = field(default_factory=set)
 
 
 def python_version() -> str:
@@ -99,18 +118,55 @@ def compiled_code(strategy: type) -> CompiledCode | None:
     return CompiledCode(COMPILED_PREFIX + digest, tuple(dict.fromkeys(reading.by_type)))
 
 
-def _class(klass: type, reading: _Reading) -> dict[str, Any]:
+def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
     """`klass`'s own members as JSON types (module docstring): those holding callables
-    under `functions`, the others under `attributes`."""
+    under `functions`, the others, a nested class among them, under `attributes`. `prefix`
+    leads each member's name where the banner names it ("Levels." in a nested class)."""
     functions: dict[str, Any] = {}
     attributes: dict[str, Any] = {}
     for name, value in sorted(vars(klass).items(), key=lambda item: item[0]):
+        member = prefix + name
         held = _callables(value)
+        if _derived(klass, name, held):
+            continue
         if held:
-            functions[name] = [_callable(name, each, reading) for each in held]
+            functions[name] = [_callable(member, each, reading) for each in held]
+        elif _is_nested(value, klass):
+            attributes[name] = _nested(member, value, reading)
         elif not (name.startswith("__") and name.endswith("__")):
-            attributes[name] = _value(name, value, reading)
+            attributes[name] = _value(member, value, reading)
     return {"attributes": attributes, "functions": functions, "name": klass.__qualname__}
+
+
+def _derived(klass: type, name: str, held: list[Any]) -> bool:
+    """True for an entry `name` of `klass` that Python derives from the rest of a class it
+    builds (module docstring): an Enum's `_sunder_` entry that holds no Python function
+    (`held` are the callables it holds), or a named tuple's `_field_defaults`."""
+    if isinstance(klass, enum.EnumType) and _is_sunder(name):
+        return not any(isinstance(each, FunctionType) for each in held)
+    return name == "_field_defaults" and issubclass(klass, tuple)
+
+
+def _is_sunder(name: str) -> bool:
+    """True for a name of one underscore on each side, which Python reserves for an Enum's
+    own entries, such as `_member_map_`."""
+    return len(name) > 2 and name[0] == name[-1] == "_" and "_" not in (name[1], name[-2])
+
+
+def _is_nested(value: Any, klass: type) -> bool:
+    """True for a class defined inside `klass`: its qualified name continues klass's."""
+    return isinstance(value, type) and value.__qualname__.startswith(klass.__qualname__ + ".")
+
+
+def _nested(member: str, nested: type, reading: _Reading) -> dict[str, Any]:
+    """A class nested in the class read, held as `member`, as JSON types: the qualified
+    names of its bases and its own members read as a class's; one met again (a class held
+    under two names) by its qualified name."""
+    if id(nested) in reading.nested:
+        return {"again": nested.__qualname__}
+    reading.nested.add(id(nested))
+    bases = [f"{base.__module__}.{base.__qualname__}" for base in nested.__bases__]
+    return {"bases": bases, "class": _class(nested, reading, f"{member}.")}
 
 
 def _callables(value: Any) -> list[Any]:
@@ -146,12 +202,41 @@ def _callable(member: str, value: Any, reading: _Reading) -> Any:
 
 
 def _value(name: str, value: Any, reading: _Reading) -> Any:
-    """`value` by the rule a parameter's is hashed by, its `name` noted when it is known by
-    its type alone."""
-    text, typed = canonical_value(value)
+    """`value` as JSON types (module docstring: a value Python cannot hash by its type
+    alone, any other by the rule a parameter's is hashed by), its `name` noted when it is
+    known by its type alone."""
+    text, typed = _member_value(value)
     if typed:
         reading.by_type.append(name)
     return text
+
+
+def _member_value(value: Any) -> tuple[Any, bool]:
+    """`value` as JSON types and whether a part of it was known by its type alone: a
+    tuple's and a frozenset's items read the same way, a value Python cannot hash by its
+    type's qualified name, any other as `canonical_value` reads it."""
+    if isinstance(value, tuple | frozenset):
+        items = [_member_value(item) for item in value]
+        texts = [text for text, _ in items]
+        if isinstance(value, frozenset):
+            texts.sort(key=canonical_json)
+        return texts, any(typed for _, typed in items)
+    if not _hashable(value):
+        kind = type(value)
+        return {"type": f"{kind.__module__}.{kind.__qualname__}"}, True
+    return canonical_value(value)
+
+
+def _hashable(value: Any) -> bool:
+    """Whether Python can hash `value`. A type that sets `__hash__` to None (a list, a
+    dict, a DataFrame, a dataclass that is not frozen) refuses with TypeError, as does an
+    immutable holder of a mutable value (a frozen dataclass holding a list); a writable
+    memoryview refuses with ValueError."""
+    try:
+        hash(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _function(member: str, function: FunctionType, outer: set[int], reading: _Reading) -> Any:

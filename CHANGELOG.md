@@ -170,7 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     one strategy prints its lines as before (2.4.0, item P5).
 - Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
   M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
-  attribute of the same name wins.
+  attribute of the same name wins. A dict names every strategy of the run: None leaves a
+  strategy without the limit, as the refusal of a dict that leaves one out says (item P6).
   - `max_trades_per_day`: the entries of a session day. An entry is an order that opens a
     position from flat, or a reversal; adds, exits and the engine's own exits never count.
     An entry counts from submission while it works, and for good once any part fills. At the
@@ -226,8 +227,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     id. That id is the same in every process of one Python version and changes with the
     Python version, as the start banner says. Only a class whose callables are all builtins
     or objects called as methods hashes its name and parameters, and the banner says its
-    source was not hashed (item P5). Each start writes every strategy's run manifest and
-    version id to the journal.
+    source was not hashed (item P5). A class attribute or default argument Python cannot hash
+    (a list, dict, set, DataFrame, ndarray, or a dataclass that is not frozen) is hashed by
+    its type alone and named in the banner, so a list the strategy appends to does not move
+    the id; a class nested in the strategy class is read with it, so an edit of its methods
+    gives a new id (item P6). Each start writes every strategy's run manifest and version id
+    to the journal.
     `SessionResult.versions` maps each strategy name to its manifest, `SessionResult.orders`
     has a `version_id` column, the start banner has a Versions line, and the daily summary's
     Strategies line names each version. A restart whose version differs from the day's
@@ -353,6 +358,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Indian digit grouping, as `summary_text()` does: "net P&L Rs 2,00,000.00" (it was
   "200,000.00"), and a loss below half a paisa as "Rs 0.00" (it was "-0.00"). A
   `PortfolioResult`'s text does the same (2.4.0, item P5).
+- Live sessions write rupees with Indian digit grouping (Rs 40,00,000.00, it was
+  4,000,000.00) in the start banner, the daily summary's Limits line, the preflight's
+  capital, loss limit and funds lines, the account kill switch alert and the refusal of a
+  class `max_daily_loss` that differs from the argument (which wrote 15 lakh as 1.5e+06),
+  as the reports already did (2.4.0, item P6).
 
 ### Fixed
 

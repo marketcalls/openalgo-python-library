@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._types import OrderIntent, OrderStatus, OrderUpdate, Purpose
+from ._types import MARKET, OrderIntent, OrderStatus, OrderUpdate, Purpose
 
 #: An order with no word 2 seconds after it was sent is polled (08-live-trading 6.1) ...
 POLL_AFTER_NS = 2 * NANOS_PER_SECOND
@@ -34,8 +34,6 @@ ENTRY_BACKOFF_NS = (1 * NANOS_PER_SECOND, 2 * NANOS_PER_SECOND)
 CANCEL_POLL_FOR_NS = 10 * NANOS_PER_SECOND
 #: The purposes that open or add to a position: an entry and an add.
 ENTRY_PURPOSES = frozenset({Purpose.ENTRY, Purpose.ADD})
-#: A market order reported open is working, not resting: it is polled every second.
-_MARKET = "MARKET"
 
 
 @dataclass(frozen=True)
@@ -168,7 +166,8 @@ class Followed:
         cancelled_ns = self.cancel_accepted_ns
         if cancelled_ns is not None and last_ns < cancelled_ns + CANCEL_POLL_FOR_NS:
             return max(last_ns, cancelled_ns) + POLL_EVERY_NS
-        rests = word.status is OrderStatus.TRIGGER_PENDING or self.price_type != _MARKET
+        # A market order reported open is working, not resting: it is polled every second.
+        rests = word.status is OrderStatus.TRIGGER_PENDING or self.price_type != MARKET
         if not rests:
             return last_ns + POLL_EVERY_NS
         if self.streamed:

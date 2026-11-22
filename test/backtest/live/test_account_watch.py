@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from openalgo.backtest._live._account_watch import account_measure, reached
+from openalgo.backtest._live._account_watch import AccountRules, account_measure, reached
+from openalgo.backtest._live._types import AlertKind
 
 TABLE = Path(__file__).resolve().parent.parent / "data" / "account_rule_cases.json"
 CASES = json.loads(TABLE.read_text(encoding="utf-8"))["cases"]
@@ -53,3 +55,54 @@ def test_the_table_holds_cases_of_both_rules():
 )
 def test_a_rule_is_reached_in_whole_paise(measure, limit, target, rule):
     assert reached(measure, limit, target) == rule
+
+
+def account_session(limit: float | None, target: float | None, measures: list[float]):
+    """A session of strategies whose daily loss measures are `measures` (rupees), with the
+    account's daily loss `limit` and profit `target`, recording its alerts and the rules
+    the kill switch is fired for."""
+    arguments = SimpleNamespace(account_max_daily_loss=limit, account_daily_profit_target=target)
+    traders = [
+        SimpleNamespace(engine=SimpleNamespace(daily_loss_measure=lambda m=m: m)) for m in measures
+    ]
+    session = SimpleNamespace(
+        parts=SimpleNamespace(spec=SimpleNamespace(arguments=arguments)),
+        traders=traders,
+        locked=False,
+        alerts=[],
+        fired=[],
+        event=lambda *_, **__: None,
+    )
+    session.alert = lambda kind, text: session.alerts.append((kind, text))
+    kill = SimpleNamespace(fire=lambda trader, rule: session.fired.append(rule))
+    return session, kill
+
+
+def test_the_accounts_loss_alert_states_rupees_in_indian_digit_grouping():
+    # Two strategies down Rs 75,000.00 and Rs 50,000.50: the account's Rs 1,25,000.50 is
+    # past its limit of Rs 1,20,000.00, and the kill switch fires for both.
+    session, kill = account_session(120_000.0, None, [-75_000.0, -50_000.5])
+    AccountRules(session, kill).duties()
+    assert session.alerts == [
+        (
+            AlertKind.ERROR,
+            "the account's daily loss Rs 1,25,000.50 is at or past its limit Rs 1,20,000.00: "
+            "every strategy's entries are locked for the day and the kill switch exits every "
+            "strategy's position",
+        )
+    ]
+    assert session.fired == ["account_loss", "account_loss"]
+
+
+def test_the_accounts_profit_alert_states_rupees_in_indian_digit_grouping():
+    # Rs 12,00,000.00 and Rs 34,567.89 up: Rs 12,34,567.89 is past a target of Rs 10,00,000.
+    session, kill = account_session(None, 1_000_000.0, [1_200_000.0, 34_567.89])
+    AccountRules(session, kill).duties()
+    assert session.alerts == [
+        (
+            AlertKind.ERROR,
+            "the account's daily profit Rs 12,34,567.89 is at or past its target Rs "
+            "10,00,000.00: every strategy's entries are locked for the day and the kill switch "
+            "exits every strategy's position",
+        )
+    ]

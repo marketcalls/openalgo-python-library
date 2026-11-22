@@ -7,10 +7,12 @@ every one of them but `product` and `base`, which a live session refuses. A key 
 no strategy of the call is refused, naming the strategies it may name. A strategy the dict
 leaves out is refused where the setting must be given for each one (`capital`, and every
 setting but `params` and, in `bt.live`, `max_daily_loss`, which its plan checks for each
-strategy); `params` leaves a strategy it does not name on its class defaults. A strategy
-class attribute of the same name still wins over the run argument, as for one strategy
-(`_settings`). With one strategy, `params` holds that strategy's own values, as
-`bt.backtest` takes them.
+strategy); `params` leaves a strategy it does not name on its class defaults. None for a
+strategy in a dict is its value: for a setting off when None (`OFF_WHEN_NONE`) it leaves
+that strategy without the setting, and the refusal of a dict that leaves a strategy out
+says so. A strategy class attribute of the same name still wins over the run argument, as
+for one strategy (`_settings`). With one strategy, `params` holds that strategy's own
+values, as `bt.backtest` takes them.
 
 The account's settings (`ACCOUNT_SETTINGS`) are one value for all the strategies of a call
 together. They describe the account of a list of strategies: a run of one strategy leaves
@@ -57,6 +59,10 @@ PER_STRATEGY = (
     *RISK_SETTINGS,
     *DAILY_LIMITS,
 )
+#: The per-strategy settings that are off for a strategy given None (no cap on positions,
+#: no drawdown halt, no cooldown, no daily limit). None for the others is a default (the
+#: calendar's times, the lock after a risk exit), and `max_daily_loss` is mandatory live.
+OFF_WHEN_NONE = ("max_positions", "drawdown_halt", "cooldown", *DAILY_LIMITS)
 #: The pool of a portfolio run when none is given: one account the strategies share.
 SHARED_POOL = "shared"
 #: The account's settings of a list of strategies and their defaults, which a run of one
@@ -116,7 +122,8 @@ def by_name(
     ("this session", "this backtest"); `required`, when given, is why a strategy the dict
     leaves out is refused (`MANDATORY`, `EVERY_STRATEGY`), and without it such a strategy
     takes None. Raises ConfigError for a key that names no strategy of the call, and for a
-    strategy left out when `required`."""
+    strategy left out when `required`; for a setting of `OFF_WHEN_NONE` the refusal adds
+    that None leaves a strategy without it."""
     if not isinstance(value, Mapping):
         return dict.fromkeys(names, value)
     unknown = [key for key in value if key not in names]
@@ -127,7 +134,9 @@ def by_name(
         )
     missing = [name for name in names if name not in value]
     if required is not None and missing:
-        raise ConfigError(f"{what} {required}, and the dict gives none for {missing}")
+        # None is a value a dict may give: say so where it means "without the setting".
+        how = f": give None for a strategy that has no {what}" if what in OFF_WHEN_NONE else ""
+        raise ConfigError(f"{what} {required}, and the dict gives none for {missing}{how}")
     return {name: value.get(name) for name in names}
 
 
@@ -254,6 +263,7 @@ __all__ = [
     "DAILY_LIMITS",
     "EVERY_STRATEGY",
     "MANDATORY",
+    "OFF_WHEN_NONE",
     "PER_STRATEGY",
     "RISK_SETTINGS",
     "SHARED_POOL",

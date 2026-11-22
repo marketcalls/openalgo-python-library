@@ -15,6 +15,7 @@ from .._protocols import COVERAGE_LEVELS
 from .._series import ist_time
 from ..calendar import Calendar, IntradayTimes, SessionInfo
 from ..errors import CalendarError
+from ..report._format import indian_digits
 from ._preflight_plan import WARNING, Check, positive_amount
 from ._types import AlertsLike, Mode
 
@@ -99,7 +100,7 @@ def _required(name: str, value: Any, meaning: str) -> Check:
             f"{name} is required and must be a positive number of rupees, not {value!r}: "
             f"pass {name}=..., {meaning}",
         )
-    return Check(name, True, f"{name} is {amount:,.2f} rupees")
+    return Check(name, True, f"{name} is {indian_digits(amount)} rupees")
 
 
 def _account_limit(value: Any) -> Check:
@@ -114,7 +115,8 @@ def _account_limit(value: Any) -> Check:
             f"{name} must be a positive number of rupees when given, not {value!r}: pass "
             "the daily loss limit of all the account's strategies together, or leave it out",
         )
-    return Check(name, True, f"{name} is {amount:,.2f} rupees, over all the account's strategies")
+    words = f"{name} is {indian_digits(amount)} rupees, over all the account's strategies"
+    return Check(name, True, words)
 
 
 def _trading_day(exchange: str, day: dt.date, now_ns: int, calendar: Calendar) -> Check:

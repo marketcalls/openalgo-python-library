@@ -27,6 +27,7 @@ import httpx
 from .._layout import NANOS_PER_MINUTE, parse_interval
 from ..errors import ConfigError
 from ..reference.symbols import INDEX_EXCHANGES
+from ..report._format import indian_digits
 from ._answers import server_answer
 from ._guard_answers import SUCCESS
 from ._order_trades import UNSUPPORTED_BROKERS, UNVERIFIED_BROKERS
@@ -197,11 +198,12 @@ def _mode_check(funds: Mapping[str, Any], mode: Mode) -> Check:
 
 
 def _funds_check(available: float, capital: float, mode: Mode) -> Check:
+    cash, needed = indian_digits(available), indian_digits(capital)
     if available >= capital:
         return Check(
             "funds",
             True,
-            f"{available:,.2f} rupees of available cash cover the capital of {capital:,.2f} rupees",
+            f"{cash} rupees of available cash cover the capital of {needed} rupees",
         )
     where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
     # Some brokers answer an expired login with zeros instead of an error.
@@ -214,8 +216,8 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
     return Check(
         "funds",
         False,
-        f"OpenAlgo reports {available:,.2f} rupees of available cash (collateral not "
-        f"counted), less than the capital of {capital:,.2f} rupees: lower capital, or add "
+        f"OpenAlgo reports {cash} rupees of available cash (collateral not "
+        f"counted), less than the capital of {needed} rupees: lower capital, or add "
         f"funds to {where}{expired}",
         # The sandbox's funds never reach the broker: only a broker's zero hints at it.
         login=available == 0 and mode is Mode.LIVE,

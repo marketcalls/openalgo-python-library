@@ -130,6 +130,7 @@ def test_an_object_known_only_by_its_address_is_hashed_by_its_type_and_named():
 def test_the_banner_names_a_parameter_hashed_by_its_type():
     started = Started("Cross", "0123456789ab", True, {}, by_type=("model",))
     assert StartVersions((started,)).banner_lines()[-1] == (
-        "Cross: model has no text of its value (an object shown by its memory address): its "
-        "version id hashes its type only, so a change to its value does not change the id"
+        "Cross: model has no fixed text of its value (an object shown by its memory address, "
+        "or one that can change as the strategy runs, such as a list, a dict or a DataFrame): "
+        "its version id hashes its type only, so a change to its value does not change the id"
     )

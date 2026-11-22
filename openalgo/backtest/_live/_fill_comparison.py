@@ -44,10 +44,8 @@ from ._plan_catch_up import INSTRUMENT
 from ._session_records import EXTERNAL, FillRecord
 from ._session_slippage import (
     AGAINST_THE_TRADER,
-    MARKET,
     NO_LEVEL,
     NOT_KNOWN,
-    TRIGGERED,
     Priced,
     Slippage,
     Unpriced,
@@ -56,7 +54,8 @@ from ._session_slippage import (
     stop_price,
     target_price,
 )
-from ._types import Purpose
+from ._types import MARKET, Purpose
+from ._venue_requests import STOP_TYPES
 
 #: The key of a strategy's saved state that holds its rows (`_session_saved`).
 COMPARED = "fill_comparison"
@@ -184,7 +183,7 @@ def _order_row(
         )
     elif kind == MARKET:
         priced = market_price(session, trader, kernel_order, intent)
-    elif kind in TRIGGERED and terms.price_type in TRIGGERED:
+    elif kind in STOP_TYPES and terms.price_type in STOP_TYPES:
         priced = _stop(session, trader, fill, kernel_order, venue)
     else:
         stop = intent.purpose is Purpose.STOP

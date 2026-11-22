@@ -43,9 +43,9 @@ def live(
     strict_config: bool = True,
     live_dir: str | os.PathLike[str] | None = None,
     on_stop: str = "flatten",
-    max_trades_per_day: int | Mapping[str, int] | None = None,
-    daily_profit_target: float | Distance | Mapping[str, float | Distance] | None = None,
-    max_order_value: float | Distance | Mapping[str, float | Distance] | None = None,
+    max_trades_per_day: int | Mapping[str, int | None] | None = None,
+    daily_profit_target: float | Distance | Mapping[str, float | Distance | None] | None = None,
+    max_order_value: float | Distance | Mapping[str, float | Distance | None] | None = None,
     account_max_trades_per_day: int | None = None,
     account_daily_profit_target: float | Distance | None = None,
     max_orders_per_second: int = 8,
@@ -81,15 +81,17 @@ def live(
     after_risk_exit, entry_from, entry_until, square_off, max_positions, drawdown_halt,
         cooldown: each strategy's, as in `bt.backtest` given a list, with the same
         defaults: one value for every strategy, or a dict naming each by class name; a
-        class attribute of the same name wins.
+        class attribute of the same name wins. None for a strategy in a dict leaves it
+        without `max_positions`, `drawdown_halt` or `cooldown`.
     live_dir: the absolute folder of the accounts' journals, logs and locks (default: the
         OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
     on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
         "keep" (leave them with their stops at the broker).
     max_trades_per_day, daily_profit_target, max_order_value: each strategy's daily
         limits, as in `bt.backtest` (one value or a dict naming each by class name; a class
-        attribute wins), each off when None. The daily profit target is held on ticks, as
-        the daily loss limit is: its exits go at once and entries stay locked for the day.
+        attribute wins), each off when None: None for a strategy in a dict leaves it
+        without that limit. The daily profit target is held on ticks, as the daily loss
+        limit is: its exits go at once and entries stay locked for the day.
     account_max_trades_per_day, account_daily_profit_target: the account's, for all
         strategies together: at the trade cap every strategy's entries are refused; at the
         profit target the kill switch exits every strategy and locks its entries for the

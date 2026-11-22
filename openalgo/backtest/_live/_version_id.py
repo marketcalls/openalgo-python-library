@@ -19,8 +19,10 @@ set's items are sorted (a set's own order depends on the process's hash seed), a
 object that has no text of its value (its text names its memory address, which differs
 from run to run) is hashed by that text without the address, its type alone; the start
 banner names such a parameter, and such a value of a class hashed by its compiled code,
-since a change to it does not change the id. The banner's lines and each start's record of
-the versions are `StartVersions` (written by `_session_versions`).
+where a value Python cannot hash (one the strategy may change as it runs, such as a list)
+is also known by its type alone (`_version_code`), since a change to it does not change the
+id. The banner's lines and each start's record of the versions are `StartVersions`
+(written by `_session_versions`).
 """
 
 from __future__ import annotations
@@ -43,11 +45,11 @@ VERSION_ID_LENGTH = 12
 class StrategyVersion:
     """A strategy's version (module docstring): its `version_id`, whether its source was
     hashed (`source_hashed`: False for a class built at run time), the values hashed by
-    their type alone (`by_type`: objects with no text of their value; its parameters, and
-    when its compiled code was hashed its class attributes, default arguments and
-    callables, as `_version_code` names them), and the Python its compiled code was
-    hashed under when its source was not (`compiled_under`, such as "CPython 3.12"; None
-    when its source was hashed or its code could not be read)."""
+    their type alone (`by_type`: objects with no fixed text of their value; its
+    parameters, and when its compiled code was hashed its class attributes, default
+    arguments and callables, as `_version_code` names them), and the Python its compiled
+    code was hashed under when its source was not (`compiled_under`, such as "CPython
+    3.12"; None when its source was hashed or its code could not be read)."""
 
     version_id: str
     source_hashed: bool
@@ -138,9 +140,10 @@ class StartVersions:
         ]
         lines += [_not_hashed_line(one) for one in self.started if not one.source_hashed]
         lines += [
-            f"{one.name}: {', '.join(one.by_type)} has no text of its value (an object shown "
-            "by its memory address): its version id hashes its type only, so a change to its "
-            "value does not change the id"
+            f"{one.name}: {', '.join(one.by_type)} has no fixed text of its value (an object "
+            "shown by its memory address, or one that can change as the strategy runs, such as "
+            "a list, a dict or a DataFrame): its version id hashes its type only, so a change to "
+            "its value does not change the id"
             for one in self.started
             if one.by_type
         ]

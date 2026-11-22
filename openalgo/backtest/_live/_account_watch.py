@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .._engine import call
+from ..report._format import indian_digits
 from ._kill_switch import ACCOUNT_LOSS, ACCOUNT_PROFIT
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind
@@ -121,8 +122,9 @@ class AccountRules:
         figure = -measure if rule == ACCOUNT_LOSS else measure
         self._session.alert(
             AlertKind.ERROR,
-            f"the account's {what} Rs {figure:,.2f} is at or past its {setting} Rs "
-            f"{amount:,.2f}: every strategy's entries are locked for the day and {exits}",
+            f"the account's {what} Rs {indian_digits(figure)} is at or past its {setting} Rs "
+            f"{indian_digits(amount)}: every strategy's entries are locked for the day and "
+            f"{exits}",
         )
 
 

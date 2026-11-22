@@ -24,6 +24,11 @@ LOGGER_NAME = "openalgo.backtest.live"
 #: (sandbox) mode; a live response carries no `mode`, or "live" on an order update.
 SANDBOX_MODE_FIELD = "analyze"
 
+#: The price type of an order with no limit and no trigger (OpenAlgo's `pricetype`, an
+#: `OrderIntent.price_type` and a kernel order's `order_type`): it fills at the market and
+#: never rests at the broker.
+MARKET = "MARKET"
+
 
 class Mode(enum.Enum):
     """The mode OpenAlgo is in, set by its analyzer switch (D21). Never chosen in code."""
@@ -269,6 +274,7 @@ class AlertsLike(Protocol):
 
 __all__ = [
     "LOGGER_NAME",
+    "MARKET",
     "SANDBOX_MODE_FIELD",
     "AlertKind",
     "AlertsLike",

@@ -1,6 +1,7 @@
 """The start banner of a live session (16-session-design 3.1 step 13; units 8 and 13): the
-lines the operator reads before the countdown, the mode first. Amounts are rupees, times
-IST.
+lines the operator reads before the countdown, the mode first. Amounts are rupees, written
+with Indian digit grouping as every report writes them (`report._format.indian_digits`),
+times IST.
 
 Whether an entry carries a stop is known only when it is placed (`stop=` is an argument of
 each `self.buy` or `self.sell`), so the banner states the rule once (`STOPS_LINE`), and the
@@ -16,6 +17,7 @@ from typing import Any
 
 from .._calendar_convert import format_ist
 from ..calendar import default_calendar
+from ..report._format import indian_digits
 from ._groups import shared_lines
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
@@ -48,7 +50,7 @@ def banner_lines(session: Any) -> list[str]:
     parts = session.parts
     spec, report = parts.spec, parts.report
     lines = [parts.banner, *restart_lines(session)]
-    lines.append(f"Funds available: Rs {report.funds_available:,.2f}")
+    lines.append(f"Funds available: Rs {indian_digits(report.funds_available)}")
     facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
     calendar = default_calendar()
     shown: set[tuple[str, str]] = set()
@@ -59,7 +61,8 @@ def banner_lines(session: Any) -> list[str]:
             until = ist_instant(spec.day, each.plan.entry_until)
         lines.append(
             f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
-            f"Rs {each.capital:,.2f}, daily loss limit Rs {each.max_daily_loss:,.2f}, "
+            f"Rs {indian_digits(each.capital)}, daily loss limit "
+            f"Rs {indian_digits(each.max_daily_loss)}, "
             f"entries until {_clock(until)} IST, square-off {_clock(trader.square_off_ns)} IST"
         )
         limits = daily_limit_words(each.plan.risk)
@@ -75,7 +78,7 @@ def banner_lines(session: Any) -> list[str]:
     lines.append(STOPS_LINE)
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss
-        lines.append(f"Account daily loss limit: Rs {limit:,.2f}")
+        lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
     lines += account_limit_lines(spec.arguments)
     lines.append(
         f"Order rate: at most {spec.arguments.max_orders_per_second} order calls a second "
@@ -99,9 +102,9 @@ def daily_limit_words(risk: Mapping[str, Any]) -> str:
     if risk["max_trades_per_day"] is not None:
         words.append(f"at most {risk['max_trades_per_day']} trades a day")
     if risk["daily_profit_target"] is not None:
-        words.append(f"profit target Rs {risk['daily_profit_target']:,.2f}")
+        words.append(f"profit target Rs {indian_digits(risk['daily_profit_target'])}")
     if risk["max_order_value"] is not None:
-        words.append(f"orders of at most Rs {risk['max_order_value']:,.2f} each")
+        words.append(f"orders of at most Rs {indian_digits(risk['max_order_value'])} each")
     return ", ".join(words)
 
 
@@ -113,7 +116,7 @@ def account_limit_lines(arguments: Any) -> list[str]:
         lines.append(f"Account trade cap: {arguments.account_max_trades_per_day} trades a day")
     if arguments.account_daily_profit_target is not None:
         target = arguments.account_daily_profit_target
-        lines.append(f"Account daily profit target: Rs {target:,.2f}")
+        lines.append(f"Account daily profit target: Rs {indian_digits(target)}")
     return lines
 
 
@@ -132,7 +135,8 @@ def limit_lines(session: Any) -> tuple[str, ...]:
     if arguments.account_max_trades_per_day is not None:
         account.append(f"trade cap {arguments.account_max_trades_per_day} trades a day")
     if arguments.account_daily_profit_target is not None:
-        account.append(f"daily profit target Rs {arguments.account_daily_profit_target:,.2f}")
+        target = arguments.account_daily_profit_target
+        account.append(f"daily profit target Rs {indian_digits(target)}")
     if account:
         lines.append("account " + ", ".join(account))
     return tuple(lines)

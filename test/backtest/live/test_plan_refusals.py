@@ -188,6 +188,16 @@ def test_a_class_limit_that_differs_from_the_argument_is_refused():
         specify(subclass(max_daily_loss=1_500), max_daily_loss=5_000)
 
 
+def test_the_refusal_of_a_differing_class_limit_states_both_in_indian_digit_grouping():
+    with pytest.raises(ConfigError) as refused:
+        specify(subclass(max_daily_loss=1_250_000), max_daily_loss=1_500_000)
+    assert str(refused.value) == (
+        "Variant: max_daily_loss of Rs 15,00,000.00 differs from the class attribute "
+        "max_daily_loss of Rs 12,50,000.00: give bt.live the same value, or remove the class "
+        "attribute, so the live limit is the one you pass"
+    )
+
+
 def test_a_class_limit_equal_to_the_argument_is_the_limit():
     spec = specify(subclass(max_daily_loss=1_500), max_daily_loss=bt.rupees(1_500))
     assert spec.strategies[0].max_daily_loss == 1_500
