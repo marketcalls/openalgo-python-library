@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-22
+
 ### Added
 
 - Groundwork for running several strategies on one account (2.4.0, kernel unit M1; `bt.backtest`
