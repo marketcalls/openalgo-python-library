@@ -174,7 +174,7 @@ def test_a_default_argument_known_by_its_type_alone_is_named_for_the_banner():
 # ----- values that can change as the strategy runs (2.4.0 item P6-3) -----------------------
 
 #: The imports a cell of these tests adds before `Cell` (they change no compiled code of it).
-PRELUDE = "import numpy as np\nimport pandas as pd\n"
+PRELUDE = "import enum\nimport typing\n\nimport numpy as np\nimport pandas as pd\n"
 
 #: Class attributes Python cannot hash, each with an edit of its contents only: (the
 #: member, its value as first written, the value edited).
@@ -190,6 +190,11 @@ MUTABLE = {
     ),
     "an ndarray": ("closes", "np.array([500.0, 501.25])", "np.array([500.0, 502.5])"),
     "a dataclass that is not frozen": ("state", "State(3)", "State(4)"),
+    "a writable memoryview": (
+        "view",
+        'memoryview(bytearray(b"ab"))',
+        'memoryview(bytearray(b"ac"))',
+    ),
 }
 
 
@@ -314,6 +319,53 @@ def test_a_nested_class_held_under_two_names_is_read_once():
     nested = "class Levels:\n        model = Model()\n    Alias = Levels\n"
     version = version_of(from_cell(with_member(nested)), None)
     assert version.by_type == ("Alias.model",)
+
+
+#: An Enum nested in `Cell`, with a hook a trader writes for it.
+SIDE = (
+    "class Side(enum.Enum):\n"
+    "        BUY = 1\n"
+    "        SELL = 2\n"
+    "\n"
+    "        @classmethod\n"
+    "        def _missing_(cls, value):\n"
+    "            return cls.BUY\n"
+)
+#: A named tuple nested in `Cell`, with a default.
+POINT = "class Point(typing.NamedTuple):\n        price: float = 500.0\n"
+#: Edits of a class Python builds entries of from its body: (the class, the text replaced,
+#: its replacement).
+BUILT_EDITS = {
+    "an Enum member's value": (SIDE, "SELL = 2", "SELL = 3"),
+    "an Enum hook's body": (SIDE, "return cls.BUY", "return cls.SELL"),
+    "a named tuple's default": (POINT, "= 500.0", "= 505.0"),
+}
+
+
+def holding(nested: str) -> type:
+    """`Cell` holding the nested class of `nested`."""
+    return from_cell(PRELUDE + with_member(nested))
+
+
+@pytest.mark.parametrize("nested", [SIDE, POINT], ids=["an Enum", "a named tuple"])
+def test_the_entries_python_builds_for_a_nested_class_are_not_named_for_the_banner(nested):
+    # An Enum's member tables and a named tuple's defaults are built from the class body,
+    # which the id reads: they are not values known by their type alone.
+    assert version_of(holding(nested), None).by_type == ()
+
+
+@pytest.mark.parametrize("nested", [SIDE, POINT], ids=["an Enum", "a named tuple"])
+def test_an_enum_or_a_named_tuple_built_twice_gets_the_same_version_id(nested):
+    first, second = holding(nested), holding(nested)
+    assert version_of(first, None).version_id == version_of(second, None).version_id
+
+
+@pytest.mark.parametrize("edit", list(BUILT_EDITS.values()), ids=list(BUILT_EDITS))
+def test_an_edit_of_a_nested_enum_or_named_tuple_gives_a_new_version_id(edit):
+    nested, old, new = edit
+    assert nested.count(old) == 1
+    before = version_of(holding(nested), None).version_id
+    assert version_of(holding(nested.replace(old, new)), None).version_id != before
 
 
 def test_a_class_defined_outside_the_strategy_is_hashed_by_its_name_only():

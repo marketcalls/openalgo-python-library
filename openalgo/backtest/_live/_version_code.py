@@ -25,18 +25,23 @@ own, in name order:
   elsewhere) is a value: its qualified name;
 - any other member as a value, such as 5, ("SBIN", "INFY"), bt.points(3) or
   datetime.time(9, 20). Python's own entries (`__module__`, `__doc__` and the like) are
-  not hashed.
+  not hashed, nor those Python derives from the rest of a class it builds: an Enum's
+  `_sunder_` entries (its member tables and the like) other than the functions a trader
+  writes there (such as `_missing_`), and a named tuple's `_field_defaults` (its
+  `__new__`'s default values, hashed with `__new__`). An Enum's members and their values
+  are hashed, so an edit of them still changes the hash.
 
-A value Python cannot hash, at any depth (a list, dict, set or bytearray, a DataFrame, an
-ndarray, a dataclass that is not frozen: a value the strategy may change as it runs, such
-as a list it appends to in `on_bar`), is hashed by its type alone, so a second start in the
-same process keeps the id. Any other value is hashed by the rule a parameter is
-(`_version_values.canonical_value`): str, int, float, bool, None, bytes, complex, tuples
-and frozensets of those, dates, times and durations, and frozen dataclasses such as
-bt.points(3) by their value. A value known by its type alone (one Python cannot hash, or
-one whose text names a memory address) is named in `CompiledCode.by_type`, so the start
-banner names it: a default argument as "sized's default model", a member of a nested class
-as "Levels.seen", any other by its member's name.
+A value Python cannot hash, at any depth (a list, dict, set or bytearray, a writable
+memoryview, a DataFrame, an ndarray, a dataclass that is not frozen: a value the strategy
+may change as it runs, such as a list it appends to in `on_bar`), is hashed by its type
+alone, so a second start in the same process keeps the id. Any other value is hashed by
+the rule a parameter is (`_version_values.canonical_value`): str, int, float, bool, None,
+bytes, complex, tuples and frozensets of those, dates, times and durations, and frozen
+dataclasses such as bt.points(3) by their value. A value known by its type alone (one
+Python cannot hash, or one whose text names a memory address) is named in
+`CompiledCode.by_type`, so the start banner names it: a default argument as "sized's
+default model", a member of a nested class as "Levels.seen", any other by its member's
+name.
 
 Line numbers are not part of compiled code, so moving the class down its cell or adding a
 comment keeps the hash, while an edit of a method's body, a constant, a default argument
@@ -50,6 +55,7 @@ None: its version id hashes its name instead (`_version_id`).
 
 from __future__ import annotations
 
+import enum
 import functools
 import hashlib
 import inspect
@@ -121,6 +127,8 @@ def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
     for name, value in sorted(vars(klass).items(), key=lambda item: item[0]):
         member = prefix + name
         held = _callables(value)
+        if _derived(klass, name, held):
+            continue
         if held:
             functions[name] = [_callable(member, each, reading) for each in held]
         elif _is_nested(value, klass):
@@ -128,6 +136,21 @@ def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
         elif not (name.startswith("__") and name.endswith("__")):
             attributes[name] = _value(member, value, reading)
     return {"attributes": attributes, "functions": functions, "name": klass.__qualname__}
+
+
+def _derived(klass: type, name: str, held: list[Any]) -> bool:
+    """True for an entry `name` of `klass` that Python derives from the rest of a class it
+    builds (module docstring): an Enum's `_sunder_` entry that holds no Python function
+    (`held` are the callables it holds), or a named tuple's `_field_defaults`."""
+    if isinstance(klass, enum.EnumType) and _is_sunder(name):
+        return not any(isinstance(each, FunctionType) for each in held)
+    return name == "_field_defaults" and issubclass(klass, tuple)
+
+
+def _is_sunder(name: str) -> bool:
+    """True for a name of one underscore on each side, which Python reserves for an Enum's
+    own entries, such as `_member_map_`."""
+    return len(name) > 2 and name[0] == name[-1] == "_" and "_" not in (name[1], name[-2])
 
 
 def _is_nested(value: Any, klass: type) -> bool:
@@ -207,10 +230,11 @@ def _member_value(value: Any) -> tuple[Any, bool]:
 def _hashable(value: Any) -> bool:
     """Whether Python can hash `value`. A type that sets `__hash__` to None (a list, a
     dict, a DataFrame, a dataclass that is not frozen) refuses with TypeError, as does an
-    immutable holder of a mutable value (a frozen dataclass holding a list)."""
+    immutable holder of a mutable value (a frozen dataclass holding a list); a writable
+    memoryview refuses with ValueError."""
     try:
         hash(value)
-    except TypeError:
+    except (TypeError, ValueError):
         return False
     return True
 
