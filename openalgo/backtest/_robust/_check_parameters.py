@@ -13,7 +13,10 @@ objective above break-even and the median keeping at least `keep` (half) of the 
 Not judged when the run has too few closed trades or did not make money, when its
 objective is undefined, has no break-even or is not above it, when the strategy has no
 number parameter to move and no range is given, when the run's parameters are not a
-combination of the ranges searched, or when no neighbour's objective is defined.
+combination of the ranges searched (a `params=` value outside the range given or
+declared: the note names that range and the keyword form of a range around the value, or,
+for a value off a value of its range by a float residue only, that value to pass), or
+when no neighbour's objective is defined.
 
 Charts: the heatmap of the first two parameters that vary (the others held at the chosen
 values) with the chosen cell outlined; the same grid as an isometric surface; the
@@ -24,6 +27,7 @@ marked; the equity of an equal-weight blend of the chosen setting and its neighb
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -33,20 +37,27 @@ import pandas as pd
 from . import _words as words
 from ._bar_common import RerunSet, break_even, joined, real_path, rerun_set
 from ._blocks import LIMIT, REAL, REFERENCE, HistogramBlock, Mark, PathGroup, PathsBlock
-from ._grid import DEFAULT_STEP, Grid, cube
+from ._grid import DEFAULT_STEP, Grid, around, cube, is_number
 from ._neighbourhood import DEFAULT_KEEP, figure_words, plateau, rule_words
 from ._part_objective import objective_name
 from ._reruns import Family
 from ._search_common import (
     grid_block,
     objective_unjudged,
-    params_text,
     search_unjudged,
+    value_text,
 )
 from ._search_setup import SearchRun
 from ._setting import Setting, between
 from ._trade_common import ENOUGH_TRADES
 from ._verdict import FAILED, PASSED, Outcome, not_judged
+
+#: The most values of a range a note lists one by one; a longer range reads as its ends.
+LISTED_VALUES = 6
+#: Significant digits a neighbour in a note's keyword range is written to: enough to keep
+#: it apart from the run's value, not so many that a float residue shows (0.27, not
+#: 0.26999999999999996).
+NEIGHBOUR_DIGITS = 12
 
 SETTINGS = (
     ENOUGH_TRADES,
@@ -98,15 +109,99 @@ def unjudged(subject: SearchRun, settings: Mapping[str, Any], objective: Any) ->
         )
     chosen = grid.chosen()
     if chosen is None:
-        shown = params_text({name: grid.run_params[name] for name in grid.names})
-        return not_judged(
-            text,
-            f"The run's parameters ({shown}) are not a combination of the ranges searched; "
-            "give or declare ranges that hold them.",
-        )
+        return not_judged(text, _off_the_grid(grid, settings["step"]))
     if not grid.neighbours(chosen):
         return not_judged(text, "The chosen parameters have no neighbour in the grid.")
     return None
+
+
+def _off_the_grid(grid: Grid, step: float) -> str:
+    """Why the run's parameters are not judged when they are not a combination of the
+    ranges searched: each value its range does not hold and that range, then the keyword
+    form of a range around each such value (the run's value and `step` either side,
+    `_grid.around`) that would let the check judge it, or, for a value off a value of its
+    range by a float residue only, that value to pass in `params=` instead. The grid holds
+    every combination of its ranges' values, so a combination it lacks has at least one
+    value off its range. Values are written as Python writes them (`_exact`), so the
+    advice holds the very value the run has."""
+    shown = ", ".join(f"{name} {_exact(grid.run_params[name])}" for name in grid.names)
+    lead = f"The run's parameters ({shown}) are not a combination of the ranges searched"
+    off = [name for name in grid.names if grid.run_params[name] not in grid.axis(name)]
+    near = {name: _residue_of(grid.run_params[name], grid.axis(name)) for name in off}
+    where = "; ".join(
+        _off_words(name, grid.run_params[name], grid.axis(name), near[name]) for name in off
+    )
+    apart = [name for name in off if near[name] is None]
+    advice = []
+    if apart:
+        examples = ", ".join(
+            f"{name}={_keyword_range(grid.run_params[name], step)}" for name in apart
+        )
+        whom = "it" if len(apart) == 1 else "each"
+        advice.append(
+            f"Give {whom} a range that holds it as a keyword named after the parameter, for "
+            f"example {examples}."
+        )
+    close = ", ".join(f"{name!r}: {_exact(near[name])}" for name in off if near[name] is not None)
+    if close:
+        advice.append(f"Pass the range's value in params=, for example params={{{close}}}.")
+    return f"{lead}: {where}. {' '.join(advice)}"
+
+
+def _off_words(name: str, value: Any, values: tuple[Any, ...], near: Any) -> str:
+    """How parameter `name`'s run value `value` stands off its range `values`; `near` is
+    the value of the range it is off by a float residue only, else None."""
+    if near is None:
+        return (
+            f"{name} {_exact(value)} is not among the values of its range ({_range_text(values)})"
+        )
+    return (
+        f"{name} {_exact(value)} differs from {_exact(near)}, a value of its range "
+        f"({_range_text(values)}), by a float residue only"
+    )
+
+
+def _residue_of(value: Any, values: tuple[Any, ...]) -> Any:
+    """The value of a range `value` is off by a float residue only (`math.isclose` at its
+    default tolerance, a part in a thousand million), else None. For example 0.3 in
+    `params=` against a range made by np.arange(0.1, 0.7, 0.1), whose third value is
+    0.30000000000000004."""
+    if not is_number(value):
+        return None
+    return next(
+        (each for each in values if is_number(each) and math.isclose(float(value), float(each))),
+        None,
+    )
+
+
+def _exact(value: Any) -> str:
+    """A parameter value as Python writes it: a fraction to every digit it needs to read
+    back as itself (0.1 + 0.2 is 0.30000000000000004, 2.3456789 stays whole), anything
+    else as `value_text` writes it."""
+    return repr(float(value)) if isinstance(value, float) else value_text(value)
+
+
+def _range_text(values: tuple[Any, ...]) -> str:
+    """A range's values in a note: each of them up to `LISTED_VALUES`, else its first and
+    last and how many."""
+    if len(values) <= LISTED_VALUES:
+        return ", ".join(_exact(value) for value in values)
+    return f"{_exact(values[0])} to {_exact(values[-1])}, {len(values)} values"
+
+
+def _keyword_range(value: Any, step: float) -> str:
+    """A range around `value` as a keyword's list: the value (as `_exact` writes it) and
+    `step` either side (to `NEIGHBOUR_DIGITS`) for a number, the value alone (as Python
+    writes it) otherwise."""
+    if not is_number(value):
+        return f"[{value!r}]"
+    texts = [_exact(each) if each == value else _neighbour(each) for each in around(value, step)]
+    return "[" + ", ".join(texts) + "]"
+
+
+def _neighbour(value: Any) -> str:
+    """A neighbour in a keyword range (`NEIGHBOUR_DIGITS`)."""
+    return f"{value:.{NEIGHBOUR_DIGITS}g}" if isinstance(value, float) else value_text(value)
 
 
 def _families(subject: SearchRun, grid: Grid) -> list[Family]:

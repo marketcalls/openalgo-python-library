@@ -16,7 +16,7 @@ import pandas as pd
 from accounting_runs import CAPITAL, at, daily_bars, round_trip, session_bars
 
 import openalgo.backtest as bt
-from openalgo.backtest._reject_reasons import PRODUCT_RULE_CASES, REASONS
+from openalgo.backtest._reject_reasons import PRODUCT_RULE_CASES, REASONS, RUN_RULE_CODES
 from openalgo.backtest._rejections import entry_window_warning, reject_warnings
 from openalgo.backtest.reference import Instrument
 
@@ -24,9 +24,15 @@ from openalgo.backtest.reference import Instrument
 # rust/oa_bt/src/exec/checks.rs): those of its checks, "venue", a live session's broker
 # refusing an order, "exit_cover", a live session's reduce-only order that would leave
 # more units resting to close a position than it has, "live_lock" and "live_in_flight",
-# a live session's entry gates, and "delay_past_close", an order a run's delay held past
-# the last close it could fill after. `RejectCode::RateLimit` is left out: no
-# kernel check makes it, because no order rate limit is enforced in a backtest.
+# a live session's entry gates, "delay_past_close", an order a run's delay held past
+# the last close it could fill after, "account_margin" and "account_loss_gate", a
+# portfolio run's account refusing an opening fill its free cash cannot cover and an
+# entry after its daily loss limit, "group_other_side" and "shared_resting", a live
+# session's gates on an instrument several of its strategies trade, and the daily limits
+# of 18-multi-strategy 2.5a: "trade_limit", "account_trade_limit", "daily_profit_gate",
+# "account_profit_gate" and "order_value_limit". `RejectCode::RateLimit`
+# is left out: no kernel check makes it, because no order rate limit is enforced in a
+# backtest.
 KERNEL_REJECT_CODES = {
     "quantity_rule",
     "tick",
@@ -47,6 +53,15 @@ KERNEL_REJECT_CODES = {
     "live_lock",
     "live_in_flight",
     "delay_past_close",
+    "account_margin",
+    "account_loss_gate",
+    "group_other_side",
+    "shared_resting",
+    "trade_limit",
+    "account_trade_limit",
+    "daily_profit_gate",
+    "account_profit_gate",
+    "order_value_limit",
 }
 NIFTY_INDEX = Instrument(
     symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"
@@ -104,6 +119,20 @@ def test_every_kernel_reject_code_has_a_meaning_and_what_to_do():
     # The product rule has one meaning per case; the entry window's line is its own.
     assert set(REASONS) | {"product_rule", "entry_window"} == KERNEL_REJECT_CODES
     assert set(PRODUCT_RULE_CASES) == {"delivery_short", "gtt_on_mis", "index"}
+
+
+def test_the_daily_limits_refuse_as_rules_working():
+    # A cap or target refusing an entry is the limit working, told in result.warnings
+    # only, as the entry window is (18-multi-strategy 2.5a rule 9).
+    daily = {"trade_limit", "account_trade_limit", "daily_profit_gate", "account_profit_gate"}
+    assert daily | {"order_value_limit"} <= RUN_RULE_CODES
+
+
+def test_the_accounts_loss_gate_is_a_rule_working_and_its_margin_refusal_is_not():
+    # The end-of-run notice leaves out the refusals of a run rule working as it intends:
+    # the account's daily loss limit is one, the account running short of margin is not.
+    assert "account_loss_gate" in RUN_RULE_CODES
+    assert "account_margin" not in RUN_RULE_CODES
 
 
 def test_an_order_rejected_for_margin_is_a_warning_with_what_to_do():

@@ -34,6 +34,7 @@ from openalgo.backtest._live._session_figures import (
 )
 from openalgo.backtest._live._session_slippage import Slippage
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._version_id import version_of
 from openalgo.backtest.errors import LiveError
 
 # ----- the figures, with stand-ins for the session --------------------------------------
@@ -329,7 +330,8 @@ def test_the_days_summary_names_a_strategy_the_restart_drops(
     world.run([HoldSBIN, IdleINFY])
     summary = restart(world, [IdleINFY], stop_ns=ist(14, 45)).summary
     strategies = next(line for line in summary_text(summary).splitlines() if "Strategies" in line)
-    assert strategies.endswith(": IdleINFY; earlier today: HoldSBIN")
+    idle = version_of(IdleINFY, None).version_id
+    assert strategies.endswith(f": IdleINFY (version {idle}); earlier today: HoldSBIN")
 
 
 def test_a_position_a_dropped_strategy_kept_leaves_the_day_not_flat(

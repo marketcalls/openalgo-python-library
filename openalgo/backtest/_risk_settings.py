@@ -2,8 +2,10 @@
 (a number or `bt.rupees`), `drawdown_halt` in percent (`bt.pct(x)` or a number of
 percent), `cooldown`, `max_hold` and `max_positions` as whole numbers (base bars,
 positions), the scale-in limits as `_scale_in` reads them, and `reinvest` and
-`size_caps` as `_size_controls` reads them. The combined rules of a run are refused
-until Phase 3 builds them.
+`size_caps` as `_size_controls` reads them. The daily limits of 18-multi-strategy 2.5a:
+`max_trades_per_day` a whole number of entries a session day, `daily_profit_target` and
+`max_order_value` rupees (a number or `bt.rupees`); each off when None. The combined
+rules of a run are refused until Phase 3 builds them.
 """
 
 from __future__ import annotations
@@ -16,7 +18,11 @@ from ._size_controls import size_controls
 from .errors import ConfigError
 from .units import Distance
 
-RISK_BASES = ("gross", "net")
+#: The risk bases of the daily loss limit: P&L before charges ("gross") or after them
+#: ("net").
+GROSS_BASIS = "gross"
+NET_BASIS = "net"
+RISK_BASES = (GROSS_BASIS, NET_BASIS)
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
 # Combined rules of a run, class attributes for strategies that open single positions
 # (14-strategy-api 2.1); refused until Phase 3 builds them.
@@ -94,6 +100,13 @@ def risk_settings(
         "max_positions": _count(args["max_positions"], "max_positions", "positions"),
         "drawdown_halt": _percent(overrides["drawdown_halt"], "drawdown_halt"),
         "cooldown_bars": _bars(overrides["cooldown"], "cooldown"),
+        "max_trades_per_day": _count(
+            overrides["max_trades_per_day"], "max_trades_per_day", "entries a day"
+        ),
+        "daily_profit_target": rupees_amount(
+            overrides["daily_profit_target"], "daily_profit_target"
+        ),
+        "max_order_value": rupees_amount(overrides["max_order_value"], "max_order_value"),
         "max_hold_bars": _bars(getattr(strategy, "max_hold", None), "max_hold"),
         "risk_basis": choice(args["risk_basis"], RISK_BASES, "risk_basis"),
         "after_risk_exit": choice(args["after_risk_exit"], AFTER_RISK_EXIT, "after_risk_exit"),
@@ -107,6 +120,8 @@ def risk_settings(
 __all__ = [
     "AFTER_RISK_EXIT",
     "COMBINED_RULES",
+    "GROSS_BASIS",
+    "NET_BASIS",
     "RISK_BASES",
     "choice",
     "refuse_combined_rules",

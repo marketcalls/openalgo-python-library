@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._margin_reject import HELD_FOR_READ
 from ._session_trader import Trader
 from ._stops_kernel import PROTECT_PLACED, order_of, protect
 from ._stops_orders import IN_FLIGHT, LegOrders, Sent
@@ -178,8 +179,14 @@ class Protection:
         elif state == EXIT_IN_FLIGHT:
             self._in_flight_alert(trader, leg)
         elif state == NO_COVER and not self._gave_up(trader):
-            outcome = protect(trader)
+            # Through the margin gate: a position a rejection holds on a shared instrument
+            # waits for a book read that agrees (`_margin_reject`), asked once meanwhile.
+            earlier = self._outcome.get(trader.name)
+            held = self._session.margin.defers_protect(trader)
+            outcome = HELD_FOR_READ if held else protect(trader)
             self._outcome[trader.name] = outcome
+            if outcome == earlier == HELD_FOR_READ:
+                return
             self._session.event("protect", strategy=trader.name, outcome=outcome)
             if outcome not in PROTECT_PLACED:
                 logger.warning("%s: no stop could be placed again (%s)", trader.name, outcome)

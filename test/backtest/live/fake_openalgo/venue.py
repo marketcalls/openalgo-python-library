@@ -27,6 +27,7 @@ from openalgo.backtest._live._types import Mode
 from .book import FILLED, Book, Change, OrderTerms
 from .clock import ManualClock
 from .feed import Feed
+from .holidays import HOLIDAYS_2026
 from .ids import BrokerIds, SandboxIds
 from .log import FILL, SWITCH, FakeLog
 from .market import Instrument, MarketState
@@ -76,6 +77,8 @@ class Venue:
         self.broker, self.username = broker, username
         self.lock = threading.RLock()
         self.markets: dict[tuple[str, str], MarketState] = {}
+        #: The market holidays OpenAlgo answers `market/holidays` with (`holidays`).
+        self.holidays: tuple[dict[str, Any], ...] = HOLIDAYS_2026
         self.books = {
             Mode.LIVE: Book(Mode.LIVE, BrokerIds(), live_cash),
             Mode.SANDBOX: Book(Mode.SANDBOX, SandboxIds(), sandbox_cash),

@@ -83,7 +83,8 @@ def test_the_saved_position_stop_and_day_locks_are_read_back():
 
 
 def test_only_the_locks_that_last_the_day_are_set_again():
-    assert {"reconciliation", "exit_failed", "account_loss"} == DAY_LOCKS
+    # The account's daily profit target locks for the day too (18-multi-strategy 2.5a).
+    assert {"reconciliation", "exit_failed", "account_loss", "account_profit"} == DAY_LOCKS
 
 
 def test_nothing_saved_reads_as_nothing():

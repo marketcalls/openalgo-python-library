@@ -11,6 +11,10 @@
 //!    as the observed value), moves the strategy to REDUCING until the next session
 //!    whatever `after_risk_exit` says, and exits every position, reason
 //!    `daily_loss_limit`.
+//!    Then the daily profit target (18-multi-strategy 2.5a rule 5, `daily_caps`): the same
+//!    measure at or beyond `+daily_profit_target` while ACTIVE does the same under its own
+//!    names (`daily_profit_hit`, scope session, the target as the level; REDUCING until the
+//!    next session; exits with the reason `daily_profit_target`).
 //! 2. Drawdown halt: unless HALTED, equity at or below the peak less the limit writes
 //!    `risk_halt` (scope strategy, the floor as the level, the equity as observed),
 //!    latches HALTED for the rest of the run and exits every position, reason
@@ -85,6 +89,15 @@ impl Engine {
             });
             self.change_trading_state(stamp, TradingStateCause::DailyLossBreach);
             exit = Some(EngineExit::Risk(RiskExitReason::DailyLoss));
+        }
+        if let Some(event) = self.daily_profit_reached() {
+            self.emit(Event::Risk {
+                stamp,
+                instrument: None,
+                event,
+            });
+            self.change_trading_state(stamp, TradingStateCause::DailyProfitTarget);
+            exit = Some(EngineExit::Risk(RiskExitReason::DailyProfit));
         }
         if let Some(event) = self.drawdown_breach() {
             self.emit(Event::Risk {
@@ -197,9 +210,16 @@ impl Engine {
     }
 
     /// Cancel every working order that would open or add, in id order.
-    fn cancel_working_entries(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
-        let entries: Vec<OrderId> = self
-            .book
+    pub(super) fn cancel_working_entries(&mut self, stamp: EventStamp) -> Result<(), KernelError> {
+        for id in self.working_entries() {
+            self.withdraw_order(stamp, id)?;
+        }
+        Ok(())
+    }
+
+    /// The working orders that would open or add, in id order.
+    pub(super) fn working_entries(&self) -> Vec<OrderId> {
+        self.book
             .working()
             .filter(|order| {
                 let key = PositionKey {
@@ -211,11 +231,7 @@ impl Engine {
                 !order.request.reduce_only && adds
             })
             .map(|order| order.id)
-            .collect();
-        for id in entries {
-            self.withdraw_order(stamp, id)?;
-        }
-        Ok(())
+            .collect()
     }
 
     /// Exit every open position, in instrument registration order, with the exit reason
@@ -229,6 +245,24 @@ impl Engine {
         exit: EngineExit,
     ) -> Result<(), KernelError> {
         let reason = exit.exit_reason();
+        for key in self.positions_to_exit() {
+            if self.is_external() {
+                let at = SendAt {
+                    slice: *slice,
+                    step: stamp.step,
+                    decided_at,
+                };
+                self.request_engine_exit(at, key, exit, None)?;
+            } else {
+                self.exit_at_step_six(slice, stamp, key, reason)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The open positions with no exit waiting, in instrument registration order: what an
+    /// aggregate rule exits.
+    pub(super) fn positions_to_exit(&self) -> Vec<PositionKey> {
         let mut open: Vec<PositionKey> = self
             .portfolio
             .positions()
@@ -237,21 +271,25 @@ impl Engine {
             .map(|position| position.key)
             .collect();
         open.sort_by_key(|key| key.instrument);
-        for key in open {
-            if self.is_external() {
-                let at = SendAt {
-                    slice: *slice,
-                    step: stamp.step,
-                    decided_at,
-                };
-                self.request_engine_exit(at, key, exit, None)?;
-            } else if slice.closes_session {
-                self.exit_at_last_close(stamp, key, reason)?;
-            } else {
-                self.risk.queue_exit(key, reason);
-            }
+        open
+    }
+
+    /// A backtest's exit of a whole position by step 6's rule (module docs): at once at
+    /// its instrument's last close when `slice` closes the session, otherwise queued for
+    /// its next open.
+    pub(super) fn exit_at_step_six(
+        &mut self,
+        slice: &SliceInfo,
+        stamp: EventStamp,
+        key: PositionKey,
+        reason: ExitReason,
+    ) -> Result<(), KernelError> {
+        if slice.closes_session {
+            self.exit_at_last_close(stamp, key, reason)
+        } else {
+            self.risk.queue_exit(key, reason);
+            Ok(())
         }
-        Ok(())
     }
 
     /// Close a position at its instrument's last close, flagged.

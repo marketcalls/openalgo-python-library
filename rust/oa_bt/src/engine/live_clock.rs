@@ -118,12 +118,16 @@ impl Engine {
             .rebuild_strategy_bars(&spec, instrument, closes, &self.calendar, &self.config)
     }
 
-    /// Index of the next slice to run: the paused or timer slice completes first.
+    /// Index of the next slice to run: the slice begun (opened, paused or at its timers)
+    /// completes first.
     fn next_slice(&self) -> usize {
         match self.phase {
             Phase::Ready(index) => index,
             Phase::Ahead(slice) => slice.index,
-            Phase::Paused(slice) | Phase::Timers(slice) | Phase::Closing(slice) => slice.index + 1,
+            Phase::Opened(slice)
+            | Phase::Paused(slice)
+            | Phase::Timers(slice)
+            | Phase::Closing(slice) => slice.index + 1,
             Phase::Finished => self.timeline.len(),
         }
     }

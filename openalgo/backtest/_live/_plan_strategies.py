@@ -14,7 +14,9 @@ limit: live it is the `max_daily_loss=` of the call, in rupees, and a class attr
 must agree with it) and learns what history its indicators need by running `init` on the engine's
 reference bars, as a backtest does before it loads data (`_warm_up_probe`): that run is
 also the strategy layer's causality and window-stability check, and the one that finds
-a condition strategy, since conditions are declared in `init`.
+a condition strategy, since conditions are declared in `init`. Its version, the id of its
+code and parameters every order carries, is read then too (`_version_id`; 18-multi-strategy
+12.1).
 """
 
 from __future__ import annotations
@@ -42,7 +44,9 @@ from .._warm_up_probe import ProbeContext, history_needs, probe_setup
 from ..calendar import Calendar
 from ..errors import ConfigError
 from ..reference import Instrument
+from ..report._format import indian_digits
 from ..strategy import Strategy
+from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
 #: The product of every live order in this release (16-session-design 1.1, Tier 1).
@@ -62,6 +66,7 @@ class StrategySpec:
     the arguments of the backtest of today they were resolved from, `instruments` its
     instruments from the reference tables, `needs` the bars its indicators need before
     today and `measured` the warm-ups measured to learn them, by indicator label.
+    `version` is its version: the id of its code and parameters (`_version_id`).
     """
 
     strategy: type[Strategy]
@@ -76,6 +81,7 @@ class StrategySpec:
     instruments: tuple[Instrument, ...]
     needs: tuple[SeriesNeed, ...]
     measured: Mapping[str, WarmUp]
+    version: StrategyVersion
 
     @property
     def params(self) -> Mapping[str, Any] | None:
@@ -179,23 +185,8 @@ def strategy_spec(
         instruments=tuple(instruments),
         needs=needs,
         measured=measured,
+        version=version_of(strategy, arguments["params"]),
     )
-
-
-def refuse_shared_legs(specs: tuple[StrategySpec, ...]) -> None:
-    """Raise NotImplementedError when two strategies trade one symbol on one exchange:
-    each leg (a symbol and product) has one strategy, whose orders and broker-held stop
-    the session matches to it."""
-    seen: dict[tuple[str, str], str] = {}
-    for spec in specs:
-        key = (spec.symbol, spec.exchange)
-        if key in seen:
-            raise not_supported(
-                f"two strategies on {spec.exchange}:{spec.symbol} ({seen[key]} and "
-                f"{spec.name}) in one session",
-                "run one strategy per symbol",
-            )
-        seen[key] = spec.name
 
 
 def ist_day(present_ns: int) -> dt.date:
@@ -223,9 +214,9 @@ def _live_daily_loss_limit(
         )
     if resolved != given:
         raise ConfigError(
-            f"{name}: max_daily_loss={given:g} differs from the class attribute "
-            f"max_daily_loss={resolved:g}: give bt.live the same value, or remove the class "
-            "attribute, so the live limit is the one you pass"
+            f"{name}: max_daily_loss of Rs {indian_digits(given)} differs from the class "
+            f"attribute max_daily_loss of Rs {indian_digits(resolved)}: give bt.live the same "
+            "value, or remove the class attribute, so the live limit is the one you pass"
         )
     return given
 
@@ -237,7 +228,6 @@ __all__ = [
     "ist_day",
     "probe",
     "refuse_conditions",
-    "refuse_shared_legs",
     "refuse_unsupported",
     "strategy_spec",
 ]

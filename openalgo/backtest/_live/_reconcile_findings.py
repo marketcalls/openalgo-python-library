@@ -23,40 +23,62 @@ position difference keeps it (`late`) for the close, which names its figures as 
 saw them, neither carried nor confirmed (16-session-design 5.4, the unit 12 follow-up).
 One that comparisons in time confirmed and acted on while it lasted is kept and named the
 same way, but marked counted (`late_counted`): it was a mismatch of the day then, and the
-close counts it no more (the unit 13 follow-up, lead's rule of 2026-11-18).
+close counts it no more (the unit 13 follow-up, lead's rule of 2026-11-18). A member of
+an instrument several strategies of the session share keeps, with its sighting, its group
+as that comparison judged it (18-multi-strategy 4.11): OpenAlgo's figure is the group's
+net, which the close weighs against the members' sum.
 
 Quantities are signed units, times UTC nanoseconds. Used by the loop only.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
-from ._reconcile_act import Corrections, Finding
+from ._group_rules import GroupFigure, and_join
+from ._reconcile_act import Corrections
 from ._reconcile_rules import Kind, LegBooks
+from ._reconcile_steps import Finding
 from ._session_trader import Trader
 from ._types import AlertKind
 
 #: What a row says was done of a late comparison's finding after the close's last lines.
 NAMED_AT_THE_CLOSE = "named at the close"
+#: What the "reconcile" event of a leg says it found when a fill of the leg's own orders
+#: landed during the read: nothing judged (module docstring).
+FILL_DURING_READ = "fill_during_read"
+#: What a row that is no act made of a group: no allocation, no stop cut.
+NOTHING_MADE = ("", "")
 
 
 @dataclass(frozen=True)
 class Sighting:
     """A position difference a comparison saw for the first time: the engine's signed
-    units as compared and OpenAlgo's books'."""
+    units as compared and OpenAlgo's books'; for a member of a shared instrument, its
+    `group` as the comparison judged it, whose net OpenAlgo's books showed (None alone)."""
 
     engine_units: int
     broker_units: int
+    group: GroupFigure | None = None
 
 
 @dataclass(frozen=True)
 class Reconciliation:
     """A difference found: when, the strategy, what differed (`kind`, a
     `_reconcile_rules.Kind` value or "orphan", "foreign", "stop_terms"), the engine's and
-    the broker's units (None: not read), and what was done ("noted" at first sight)."""
+    the broker's units (None: not read), and what was done ("noted" at first sight).
+
+    Of a member of an instrument several strategies of the session share
+    (18-multi-strategy 4.11; empty, or None, for a strategy alone): its `group`, the
+    members in call order ("A, B"), as the comparison judged it, their sum (`group_units`,
+    which `broker_units`, the group's net, was judged against) and each one's units
+    (`member_units`, "A 100, B 50"), the signed units of other orders' trades not taken in
+    yet (`external_units`, None when the trade book was not read), and, on the row of an
+    act, the `allocation` made of a difference those trades explain ("B -50 to 0, A -10 to
+    90") and the member's own stop cut (`stops_cut`, "stop 2 cut to 90 units", "stop 3
+    cancelled")."""
 
     at_ns: int
     strategy: str
@@ -64,6 +86,12 @@ class Reconciliation:
     engine_units: int
     broker_units: int | None
     action: str
+    group: str = ""
+    group_units: int | None = None
+    member_units: str = ""
+    external_units: int | None = None
+    allocation: str = ""
+    stops_cut: str = ""
 
 
 class Findings:
@@ -136,18 +164,22 @@ class Findings:
         own: frozenset[str],
         *,
         stale: bool = False,
+        group: GroupFigure | None = None,
     ) -> None:
         """A restart's difference of `trader`'s journal position (`journal_units`) from the
         broker's: acted on at once, as two comparisons in a row would be (5.5); `stale`
         when the restored engine holds other units, so it is only locked and alerted
-        (`Corrections.stale`) and the next comparisons judge the leg."""
+        (`Corrections.stale`) and the next comparisons judge the leg; `group` the leg's
+        group on a shared instrument, as the restart judged it."""
         finding = (kind, journal_units, books.units)
+        made = NOTHING_MADE
         if stale:
             action = self._corrections.stale(trader, finding, books, own)
         else:
             self._acted.add((trader.name, finding))
             action = self._corrections.act(trader, finding, books, own)
-        self._row(trader.name, kind.value, journal_units, books.units, action)
+            made = self._made(trader.name, group)
+        self._row(trader.name, kind.value, journal_units, books.units, action, group, made)
 
     def judged(
         self,
@@ -157,11 +189,13 @@ class Findings:
         own: frozenset[str],
         *,
         late: bool,
+        group: GroupFigure | None = None,
     ) -> bool:
         """Take one comparison's `findings` of `trader`'s leg (module docstring); `late` for
         a leg compared while in flight past the limit (alerted at once, nothing done, no
-        sighting taken, its position difference kept for the close). True when a finding
-        was seen for the first time: a read soon confirms it."""
+        sighting taken, its position difference kept for the close); `group` the leg's
+        group on a shared instrument, as the comparison judged it. True when a finding was
+        seen for the first time: a read soon confirms it."""
         name = trader.name
         last, self._last[name] = self._last.get(name, set()), findings
         confirmed = self._confirmed.setdefault(name, set())
@@ -169,24 +203,26 @@ class Findings:
         if not any(finding[0] is Kind.UNEXPLAINED for finding in findings):
             self._lag_since.pop(name, None)
         if books.units is not None and books.trades is not None and not late:
-            self._sighted(name, findings, last)
+            self._sighted(name, findings, last, group)
             self._unjudged.discard(name)
         if books.units is not None:
-            self._late_difference(name, findings, confirmed, late=late)
+            self._late_difference(name, findings, confirmed, late=late, group=group)
         for finding in sorted(findings, key=repr):
             if finding[0] is Kind.UNEXPLAINED:
                 self._lag(trader, books)
             if finding in confirmed:
                 continue
+            made = NOTHING_MADE
             if late:
                 if finding in last:
                     confirmed.add(finding)
                 action = self._alert_once(trader, finding, books, own)
             else:
-                action = self._act_when_seen_twice(trader, finding, books, own, last)
+                action, acted = self._act_when_seen_twice(trader, finding, books, own, last)
+                made = self._made(name, group) if acted else NOTHING_MADE
             kind = finding[0].value if isinstance(finding[0], Kind) else finding[0]
             engine = finding[1] if isinstance(finding[0], Kind) else round(trader.open_units())
-            self._row(name, kind, engine, books.units, action)
+            self._row(name, kind, engine, books.units, action, group, made)
         return bool(findings - last)
 
     def _act_when_seen_twice(
@@ -196,16 +232,21 @@ class Findings:
         books: LegBooks,
         own: frozenset[str],
         last: set[Finding],
-    ) -> str:
+    ) -> tuple[str, bool]:
         """A finding of a comparison in time: noted when first seen, acted on once when the
-        comparison before saw it too. What was done."""
+        comparison before saw it too. What was done, and whether it was acted on now."""
         if finding not in last:
-            return "noted"
+            return "noted", False
         self._confirmed[trader.name].add(finding)
         if (trader.name, finding) in self._acted:
-            return "acted"
+            return "acted", False
         self._acted.add((trader.name, finding))
-        return self._corrections.act(trader, finding, books, own)
+        return self._corrections.act(trader, finding, books, own), True
+
+    def _made(self, name: str, group: GroupFigure | None) -> tuple[str, str]:
+        """What the act just made of strategy `name`'s group (`Corrections.done`): the
+        allocation and its stop's cut; nothing for a strategy alone."""
+        return NOTHING_MADE if group is None else self._corrections.done(name)
 
     def _alert_once(
         self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]
@@ -221,7 +262,13 @@ class Findings:
         return "alerted"
 
     def _late_difference(
-        self, name: str, findings: set[Finding], confirmed: set[Finding], *, late: bool
+        self,
+        name: str,
+        findings: set[Finding],
+        confirmed: set[Finding],
+        *,
+        late: bool,
+        group: GroupFigure | None,
     ) -> None:
         """Keep the position difference of a late comparison for the close; a comparison
         in time, or a late one that agrees, ends it. One that comparisons in time confirmed
@@ -230,7 +277,7 @@ class Findings:
         in-time path takes no sighting of it either)."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
         if late and position is not None:
-            self._late[name] = Sighting(position[1], position[2])
+            self._late[name] = Sighting(position[1], position[2], group)
             if position in confirmed and (name, position) in self._acted:
                 self._late_counted.add(name)
             else:
@@ -239,21 +286,43 @@ class Findings:
             self._late.pop(name, None)
             self._late_counted.discard(name)
 
-    def _sighted(self, name: str, findings: set[Finding], last: set[Finding]) -> None:
+    def _sighted(
+        self, name: str, findings: set[Finding], last: set[Finding], group: GroupFigure | None
+    ) -> None:
         """A comparison that judged the position: its difference, when the comparison
         before did not show it, is the leg's first sighting; none otherwise."""
         position = next((f for f in findings if isinstance(f[0], Kind)), None)
         if position is None or position in last:
             self._first.pop(name, None)
         else:
-            self._first[name] = Sighting(position[1], position[2])
+            self._first[name] = Sighting(position[1], position[2], group)
 
     def _row(
-        self, name: str, kind: str, engine_units: int, broker_units: int | None, action: str
+        self,
+        name: str,
+        kind: str,
+        engine_units: int,
+        broker_units: int | None,
+        action: str,
+        group: GroupFigure | None = None,
+        made: tuple[str, str] = ("", ""),
     ) -> None:
-        self.rows.append(
-            Reconciliation(self._session.now(), name, kind, engine_units, broker_units, action)
-        )
+        """A row of the day's reconciliations; of a member of a shared instrument, with its
+        `group` as the comparison judged it and what an act just `made` of it (the
+        allocation and the member's stop cut, `Corrections.done`)."""
+        row = Reconciliation(self._session.now(), name, kind, engine_units, broker_units, action)
+        if group is not None:
+            allocation, cut = made
+            row = replace(
+                row,
+                group=", ".join(group.members),
+                group_units=group.units,
+                member_units=group.member_units(),
+                external_units=group.external,
+                allocation=allocation,
+                stops_cut=cut,
+            )
+        self.rows.append(row)
         self._session.event("mismatch", strategy=name, found=kind, action=action)
 
     def _lag(self, trader: Trader, books: LegBooks) -> None:
@@ -263,14 +332,17 @@ class Findings:
         since = self._lag_since.setdefault(trader.name, now_ns)
         if now_ns - since > self._lag_after_ns and trader.name not in self._lag_alerted:
             self._lag_alerted.add(trader.name)
+            engine = f"the engine's {round(trader.open_units())}"
+            group = self._corrections.figures.get(trader.name)
+            if group is not None:
+                engine = f"the {group.units} {and_join(group.members)} hold together"
             self._session.alert(
                 AlertKind.ERROR,
                 f"{trader.name}: OpenAlgo's books have shown {books.units} units of "
-                f"{trader.symbol} {trader.exchange} against the engine's "
-                f"{round(trader.open_units())} for over "
+                f"{trader.symbol} {trader.exchange} against {engine} for over "
                 f"{self._lag_after_ns / NANOS_PER_SECOND:g} s with no trade to explain it: "
                 "check the account in OpenAlgo",
             )
 
 
-__all__ = ["NAMED_AT_THE_CLOSE", "Findings", "Reconciliation", "Sighting"]
+__all__ = ["FILL_DURING_READ", "NAMED_AT_THE_CLOSE", "Findings", "Reconciliation", "Sighting"]

@@ -28,6 +28,7 @@ from session_hooks import trace_sessions
 from session_invariants import assert_session_invariants
 from session_samples import Hold, Rig, Script, alerts, ist
 from stops_samples import at_price, check_invariants, events, stop_world
+from test_session_figures import IdleINFY
 from test_stops_exits import TwoTrades, journal_stop, rising
 
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -215,6 +216,60 @@ def test_F53_a_broker_position_on_a_traded_symbol_refuses_a_fresh_start(world):
     with pytest.raises(LiveError, match="10 units of SBIN NSE"):
         world.run(StopWhenFlat)
     assert [o.strategy for o in world.orders()] == ["manual"]
+
+
+# ----- a strategy whose saved state is of another instrument -----------------------------
+
+
+@pytest.fixture
+def two_symbols(make_fake_openalgo, monkeypatch, tmp_path, caplog):
+    """The rig of `world` with INFY trading beside SBIN."""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path, symbols=("SBIN", "INFY"))
+    crashing(monkeypatch)
+    return world
+
+
+#: `StopWhenFlat` moved to INFY under the same class name, so its saved state is SBIN's.
+MOVED = type("StopWhenFlat", (StopWhenFlat,), {"symbol": "INFY"})
+#: What the restart says of it: the strategy, both instruments and what to do.
+MOVED_REFUSAL = (
+    "StopWhenFlat: its saved state is of SBIN on NSE, and this session trades INFY on NSE: "
+    "the restart cannot resume it, and does not start it afresh, since a saved state may "
+    "hold working orders. For a new instrument or contract, give the strategy class a new "
+    "name (its state is saved under its name); to resume it, keep its symbol SBIN on NSE. "
+    "Check its positions and orders in OpenAlgo"
+)
+
+
+@pytest.mark.parametrize(
+    "crashed_ns", [ist(14, 41, 30), CRASHED], ids=["flat", "holding with its stop working"]
+)
+def test_a_restart_of_a_strategy_moved_to_another_instrument_says_what_to_do(
+    two_symbols, crashed_ns
+):
+    crash_at(two_symbols, crashed_ns)
+    run_to_crash(two_symbols, StopWhenFlat)
+    sent = list(two_symbols.orders())
+    with pytest.raises(LiveError) as refused:
+        restart(two_symbols, MOVED, stop_ns=ist(14, 45), on_stop="keep")
+    assert str(refused.value) == MOVED_REFUSAL
+    assert two_symbols.orders() == sent
+
+
+def test_a_restart_names_every_strategy_moved_to_another_instrument_at_once(two_symbols):
+    # StopWhenFlat (SBIN) and IdleINFY (INFY) swap their symbols under the same class
+    # names: the one refusal names both, so the trader fixes them in one go.
+    crash_at(two_symbols, ist(14, 41, 30))
+    run_to_crash(two_symbols, [StopWhenFlat, IdleINFY])
+    sent = list(two_symbols.orders())
+    swapped = [MOVED, type("IdleINFY", (IdleINFY,), {"symbol": "SBIN"})]
+    with pytest.raises(LiveError) as refused:
+        restart(two_symbols, swapped, stop_ns=ist(14, 45), on_stop="keep")
+    message = str(refused.value)
+    assert message.startswith(MOVED_REFUSAL + ". IdleINFY: its saved state is of INFY on NSE")
+    assert "keep its symbol INFY on NSE" in message
+    assert two_symbols.orders() == sent
 
 
 # ----- F54: an unbound intent at the restart -------------------------------------------

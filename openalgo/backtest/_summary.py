@@ -10,7 +10,9 @@
 Net profit is rupees with Indian digit grouping (`report._format.indian_digits`; a loss
 below half a paisa reads "Rs 0.00"); the return and the maximum drawdown are those of the
 time-weighted wealth index, in percent (`metrics` keys `net_profit`, `total_return`,
-`max_drawdown`). The win rate is winning trades over closed trades, in whole percent
+`max_drawdown`), a percent that rounds to zero read without a minus sign as the
+tearsheet reads it (`report._format.fixed`: -0.00003 is "0.00%"). The win rate is
+winning trades over closed trades, in whole percent
 unless that would read 0% or 100% for a rate that is neither (then with the fewest
 decimals that do not: "0.4% won" for 1 winner in 250). It is undefined (NaN) for a run
 with no closed trade, such as a buy-and-hold or rebalanced portfolio or a run whose
@@ -26,14 +28,16 @@ as a Series or DataFrame. A figure that is undefined reads "n/a".
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._result_report import GIVEN_BENCHMARK
-from .report._format import MISSING, indian_digits, is_missing
+from .report._format import MISSING, fixed, indian_digits, is_missing
 
 # The width of the longest label, "Max drawdown", so the colons line up.
 LABEL_WIDTH = 12
+# What a line under another starts with (a portfolio's strategy under "Overfitting").
+INDENT = "  "
 GIVEN_CLOSES = "given closes"
 # The most decimals a win rate is shown with. k winners of n trades sit at least 1/n
 # from 0 and from 1, which shows at about log10(n) decimals of a percent, so this covers
@@ -44,7 +48,9 @@ BOUNDS_PERCENT = (0.0, 100.0)
 
 
 def _percent(fraction: float, decimals: int) -> str:
-    return MISSING if is_missing(fraction) else f"{fraction:.{decimals}%}"
+    """A fraction as a percent at `decimals` places, through the report's rule
+    (`report._format.fixed`): one that rounds to zero there reads without a minus sign."""
+    return MISSING if is_missing(fraction) else f"{fixed(fraction * 100, decimals)}%"
 
 
 def _win_rate(rate: float) -> str:
@@ -72,11 +78,24 @@ def _trades(metrics: Mapping[str, Any]) -> str:
     return f"{text}, {still_open} still open" if closed else f"{text} ({still_open} still open)"
 
 
-def summary_text(metrics: Mapping[str, Any], benchmark: str | None, overfitting: str) -> str:
+def _indented(details: Sequence[tuple[str, str]]) -> list[str]:
+    """(name, text) lines indented under the line before them, their colons lined up
+    with the summary's own unless a name is too long for that."""
+    width = max([LABEL_WIDTH - len(INDENT), *(len(name) for name, _ in details)])
+    return [f"{INDENT}{name:<{width}} : {text}" for name, text in details]
+
+
+def summary_text(
+    metrics: Mapping[str, Any],
+    benchmark: str | None,
+    overfitting: str,
+    details: Sequence[tuple[str, str]] = (),
+) -> str:
     """The summary of the module docstring, one line per figure. `metrics` is
     `Result.metrics`; `benchmark` the run's benchmark as `_result_report.benchmark_name`
     names it (None without one); `overfitting` the quick checks' line
-    (`QuickChecks.summary_line`)."""
+    (`QuickChecks.summary_line`), and `details` (name, text) lines indented under it (a
+    portfolio's checks, a line per strategy)."""
     lines = [
         ("Net profit", _rupees(metrics["net_profit"])),
         ("Return", _percent(metrics["total_return"], 2)),
@@ -84,11 +103,12 @@ def summary_text(metrics: Mapping[str, Any], benchmark: str | None, overfitting:
         ("Trades", _trades(metrics)),
         ("Overfitting", overfitting),
     ]
+    text = [f"{label:<{LABEL_WIDTH}} : {value}" for label, value in lines] + _indented(details)
     if benchmark is not None:
         name = GIVEN_CLOSES if benchmark == GIVEN_BENCHMARK else benchmark
         returned = _percent(metrics["benchmark_total_return"], 2)
-        lines.append(("Benchmark", f"{returned} return ({name})"))
-    return "\n".join(f"{label:<{LABEL_WIDTH}} : {value}" for label, value in lines)
+        text.append(f"{'Benchmark':<{LABEL_WIDTH}} : {returned} return ({name})")
+    return "\n".join(text)
 
 
 __all__ = ["summary_text"]

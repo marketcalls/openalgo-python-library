@@ -49,6 +49,19 @@ def test_rupees_and_percentages():
     assert fmt.percent(0.05, 1) == "5.0%"
 
 
+@pytest.mark.parametrize(
+    ("value", "decimals", "text"),
+    [
+        (-0.0004, 1, "0.0%"),  # -0.04 percent reads 0.0 at one place, unsigned
+        (-0.00003, 2, "0.00%"),  # -0.003 percent at two places
+        (-0.0, 2, "0.00%"),
+        (-0.0006, 1, "-0.1%"),  # -0.06 percent rounds to -0.1 and keeps its sign
+    ],
+)
+def test_a_negative_percentage_that_rounds_to_zero_has_no_sign(value, decimals, text):
+    assert fmt.percent(value, decimals) == text
+
+
 def test_undefined_and_infinite_figures():
     assert fmt.rupees(math.nan) == "n/a"
     assert fmt.number(math.inf) == "&#8734;"

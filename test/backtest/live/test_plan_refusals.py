@@ -60,7 +60,7 @@ NOT_LIVE_NAMES = (
     "data", "start", "end", "now", "source", "base", "fill", "delay_entries",
     "delay_exits", "slippage", "margin",
     "quantity_mode", "instrument", "product", "roll", "benchmark", "calendar", "tz",
-    "corporate_actions",
+    "corporate_actions", "pool", "account_capital",
 )  # fmt: skip
 
 
@@ -134,11 +134,11 @@ def test_two_strategies_with_the_same_name_are_refused():
         specify([first, second])
 
 
-def test_two_strategies_on_one_symbol_are_refused():
-    with pytest.raises(
-        NotImplementedError, match="two strategies on NSE:SBIN .* one strategy per symbol"
-    ):
-        specify([EmaTrend, subclass("Other")])
+def test_two_strategies_on_one_symbol_run_as_a_list_and_the_preflight_checks_it_once():
+    spec = specify([EmaTrend, subclass("Other")])
+    assert [each.name for each in spec.strategies] == ["EmaTrend", "Other"]
+    assert [(each.symbol, each.exchange) for each in spec.strategies] == [("SBIN", "NSE")] * 2
+    assert spec.instruments == (("SBIN", "NSE"),)
 
 
 def test_several_strategies_run_as_a_list_each_on_its_own_symbol():
@@ -186,6 +186,16 @@ def test_a_daily_loss_limit_set_only_on_the_class_is_refused_live():
 def test_a_class_limit_that_differs_from_the_argument_is_refused():
     with pytest.raises(ConfigError, match="differs from the class attribute"):
         specify(subclass(max_daily_loss=1_500), max_daily_loss=5_000)
+
+
+def test_the_refusal_of_a_differing_class_limit_states_both_in_indian_digit_grouping():
+    with pytest.raises(ConfigError) as refused:
+        specify(subclass(max_daily_loss=1_250_000), max_daily_loss=1_500_000)
+    assert str(refused.value) == (
+        "Variant: max_daily_loss of Rs 15,00,000.00 differs from the class attribute "
+        "max_daily_loss of Rs 12,50,000.00: give bt.live the same value, or remove the class "
+        "attribute, so the live limit is the one you pass"
+    )
 
 
 def test_a_class_limit_equal_to_the_argument_is_the_limit():

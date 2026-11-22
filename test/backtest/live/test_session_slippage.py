@@ -2,8 +2,10 @@
 16-session-design 1.4 and decided item 11 of 10.0): each MARKET fill against the price a
 backtest fills the same order at, the open of the base bar opening at its decision with
 the run's modelled slippage, signed against the trader, times the units. An order the
-engine makes on an event while it waits inside a minute (a target's exit, a risk exit,
-Ctrl+C) is decided when the session places it, so its bar is the next minute's.
+engine makes on an event while it waits inside a minute (a risk exit, Ctrl+C) is decided
+when the session places it, so its bar is the next minute's; the engine's exit at a leg's
+target is set against the target's level in the minute of the tick that reached it
+(18-multi-strategy 12.3).
 
 The market and the script are `session_samples`': the session starts at 14:40:05 IST on
 Monday 2026-11-16 and SBIN (tick 0.05) trades every 10 s, five seconds past each tenth
@@ -40,7 +42,9 @@ from test_live_result import BuyEarlySellLate
 from test_session_figures import DAY_ENDS, TwoRoundTrips, world_of
 from watch_samples import HoldWithTarget
 
+import openalgo.backtest as bt
 from openalgo.backtest._live._alerts_summary import summary_text
+from openalgo.backtest.errors import ConfigError
 
 #: The day's slippage of the round trip of the module docstring, rupees.
 ROUND_TRIP = -2.50
@@ -79,17 +83,54 @@ def moved_at_14_44_30(make_fake_openalgo, monkeypatch, tmp_path, price: float):
     return world
 
 
-def test_a_targets_exit_on_a_tick_is_set_against_the_bar_opening_after_it(
+def test_a_targets_exit_on_a_tick_is_set_against_its_level(
     make_fake_openalgo, monkeypatch, tmp_path
 ):
     # `HoldWithTarget` buys 10 at 500.00 (-1.00, as above) with a target 5 points above the
     # fill, 505.00. The 14:44:35 trade at 505.00 reaches it, and the engine's MARKET sale,
-    # placed then, fills at 505.00. The bar opening after it is 14:45's, at 505.00: the
-    # backtest sells at 504.85, so the live sale did 0.15 better a unit (-1.50). Against
-    # the 14:44 bar, which opened at 500.00 before the tick, it would read -51.00.
+    # placed then, fills at 505.00. A backtest fills the target at its level less 2 bps,
+    # 504.899, rounded down to the tick, 504.85, so the live sale did 0.15 better a unit
+    # (-1.50). Against the open of the 14:44 bar, 500.00, it would read -51.00
+    # (test_session_fill_comparison sets a target whose fill differs from its level).
     world = moved_at_14_44_30(make_fake_openalgo, monkeypatch, tmp_path, 505.0)
     summary = live(world, HoldWithTarget).summary
     assert (summary.slippage, summary.slippage_not_compared) == (-1.00 - 1.50, 0)
+
+
+class ExitsAsATarget(bt.Strategy):
+    """Buys 10 SBIN at its first decision and, once it holds them, exits naming the reason
+    of the engine's own target exit."""
+
+    symbol, exchange, interval = "SBIN", "NSE", "1m"
+
+    def on_bar(self, bar):
+        if not self.position.qty:
+            self.buy(10)
+        else:
+            self.exit(reason="leg_target")
+
+
+def placed_purposes(world) -> list[str]:
+    """The purpose of each order the session handed to its order worker, in order."""
+    return [
+        event["purpose"]
+        for run in world.trace.runs
+        for event in run.events
+        if event["kind"] == "request" and event["type"] == "PlaceRequest"
+    ]
+
+
+def test_a_strategys_exit_cannot_pass_for_the_engines_target_exit(world):
+    # The summary sets an exit with the reason leg_target against the bar after its
+    # placing, as the engine's exit on a tick; a strategy's exit decided at a bar close and
+    # naming that reason would be set a minute late. It is refused where it is made: the
+    # strategy stops the session at its second decision, 14:43, with the refusal, and the
+    # one sale after it is the safe stop's flatten (a risk exit), not the strategy's exit.
+    world.stop_at(ist(14, 46))
+    with pytest.raises(ConfigError, match="'leg_target' is the reason of the engine's own exit"):
+        live(world, ExitsAsATarget)
+    assert placed_purposes(world) == ["entry", "risk_exit"]
+    assert [o.action for o in world.fake.orders()] == ["BUY", "SELL"]
 
 
 def test_a_daily_loss_exit_on_a_tick_is_set_against_the_bar_opening_after_it(

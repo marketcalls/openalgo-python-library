@@ -8,7 +8,8 @@
 //! - Trading state (item 6): REDUCING after a daily loss breach rejects with
 //!   `daily_loss_gate` until the next session (SPEC-18; the gate is always on and there
 //!   is no check against the limit before a breach, lead rulings); HALTED rejects with
-//!   `halted`.
+//!   `halted`. Then, in a portfolio run, the account's daily loss lock rejects with
+//!   `account_loss_gate` for the rest of its session day (`account_breach`).
 //! - Cooldown and maximum positions (item 7), for an entry from flat only: `cooldown`
 //!   while fewer than `cooldown` base bars have closed after the bar of the
 //!   instrument's last exit, `max_positions` when the positions open or with an entry
@@ -49,6 +50,7 @@ impl Engine {
         slice: &SliceInfo,
     ) -> Result<(), RejectCode> {
         self.risk.lock.entry_gate()?;
+        self.account_entry_gate(slice)?;
         if held_units != 0.0 {
             return Ok(());
         }
@@ -109,7 +111,8 @@ impl Engine {
         Ok(())
     }
 
-    /// The fill hook: called by `execute_fill` after every fill is recorded.
+    /// The fill hook: called by `execute_fill` after every fill is recorded. A fill of an
+    /// entry the trade count waits on keeps it counted for good (`daily_caps`).
     pub(super) fn risk_after_fill(
         &mut self,
         stamp: EventStamp,
@@ -117,6 +120,9 @@ impl Engine {
         fill: &Fill,
         effect: &FillEffect,
     ) {
+        if let Some(order) = fill.order {
+            self.risk.trades.filled(order);
+        }
         let facts = FillFacts {
             slice: stamp.slice as usize,
             key,

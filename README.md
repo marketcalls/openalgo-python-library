@@ -10,6 +10,61 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.4.0
+
+Several strategies on one account, in backtests and live, including two strategies on one
+symbol; daily limits; an audit record of every live order; and custom tearsheets. A single
+strategy's backtest gives the same figures as 2.3.0.
+
+- **Several strategies on one account.** `bt.backtest([A, B, C], ...)` runs a list of
+  strategies together on one account and returns a `bt.PortfolioResult`: the account's
+  equity, free cash, margin and daily loss each round, its metrics, `summary()`, a combined
+  `tearsheet()` with a Strategies and a Portfolio section, every strategy's tables in one with
+  a `strategy` column, and each strategy's own `Result` (`pf.strategy(name)`). The account is
+  one shared pool by default (`pool="separate"` for fixed allocations), with
+  `account_capital` and `account_max_daily_loss`. Every per-strategy setting (`capital`,
+  `params`, `max_daily_loss`, `entry_until` and the others) takes one value or a dict by
+  strategy class name.
+- **Several strategies in one live session, two on one symbol.** `bt.live` takes the same
+  list. On a symbol two strategies share, each keeps its own position and its own stop at the
+  broker while OpenAlgo holds one net position: one side at a time (`group_other_side`),
+  MARKET orders only (`shared_resting`), and the reconciler, the restart and the kill switch
+  judge the strategies together against OpenAlgo's net. A closing order the broker refuses on
+  a shared symbol holds the position and alerts you to close by hand. Fill lines name the
+  strategy, and `SessionResult.portfolio` gives the session's account view.
+- **Daily limits.** `max_trades_per_day`, `daily_profit_target` and `max_order_value` per
+  strategy, and `account_max_trades_per_day` and `account_daily_profit_target` for the
+  account, in `bt.backtest` and `bt.live`. Each is off unless set. Live sessions send at most
+  `max_orders_per_second=8` order calls a second, leaving room for your own orders.
+- **An audit record of every live order.** Every order carries its strategy's version id (a
+  hash of its code and parameters) and each start records the run's manifest. Preflight checks
+  each contract's expiry in OpenAlgo's master contract and the market holidays against the
+  package's own tables. `SessionResult.fill_comparison` sets each live fill against the price a
+  backtest of the same bars gives, and a decisions file records what each strategy saw and
+  submitted on every bar.
+- **Custom tearsheets.** `result.tearsheet(layout=report.Layout(...))` hides or shows the
+  built-in sections, adds sections of your own (charts, tables, tiles, text, and checked HTML
+  or SVG) and sets the page's colours (`report.Theme`). The built-in tearsheet stays the
+  default and is unchanged.
+- **MCX silver mini and silver micro** can be backtested and traded live.
+
+Changes in live sessions:
+
+- The strategy decides on the bars built from ticks; a broker candle read after a decision no
+  longer replaces the tick bar, so a crossing is seen by exactly one decision.
+- A resting reversal (`reverse=True` on a LIMIT, SL or SL-M order), and a resting order
+  against a position its stop already closes, are refused before they reach the broker
+  (`venue`): at the broker both could fill. Use `target=` on the entry, or MARKET orders.
+- Rupee figures in the start banner, preflight checks and alerts use Indian digit grouping
+  (Rs 2,00,000.00), as the reports do.
+- A trade closed by the account's daily loss limit records the exit reason
+  `account_loss_limit` (it was `manual`).
+- Upgrade between sessions, not during one: a restart cannot resume a state that 2.3.0 saved
+  earlier the same day. A 2.3.0 journal is upgraded in place.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md); the docs are at docs.openalgo.in (Backtesting:
+Several Strategies on One Account and Custom Tearsheets; Live Trading: lessons 12 and 13).
+
 ## What's New in 2.3.0
 
 Live trading, overfitting checks and walk-forward. Three fixes change some backtest

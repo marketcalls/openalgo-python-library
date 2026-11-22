@@ -18,6 +18,16 @@ position: there is nothing to close by hand, and whatever of it still works at t
 broker (its stop for the engine's units, say) is the operator's to cancel
 (`NOTHING_TO_CLOSE`).
 
+**A member of a shared instrument** (18-multi-strategy 4.11): OpenAlgo's books show the
+net of every strategy of the session that trades the instrument, so the figure is the
+group's: carried by every member's own fills since (`Differing.group_units`), named with
+the members and their sum (`DIFFERS_SHARED`, `SINCE_SHARED`), never weighed against one
+member's units. No member's share of it is known before the allocation a later read
+would make, so each member is listed open at its own units (`Differing.open_units`),
+unless the net is flat by then: nothing is left to close by hand. The DAILY_SUMMARY names
+the group's difference once, whichever member's sighting holds it
+(`Differing.group_summary`, `late_group_summary`; unit M7).
+
 A leg no comparison judged after a fill of its own orders landed during a read
 (`Reconciler.unjudged`, round 9) is never called flat or agreeing unqualified: the close
 names the engine's units, and the carried figure when a sighting exists, as not confirmed
@@ -35,6 +45,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ._group_rules import and_join
 from ._reconcile_findings import Sighting
 from ._session_trader import Trader
 from ._types import AlertKind
@@ -55,6 +66,17 @@ SINCE = (
 )
 #: How the DAILY_SUMMARY names OpenAlgo's figure carried by those fills.
 SINCE_SUMMARY = " by {read} and the engine's own fills since"
+#: How the close names it for a member of a shared instrument (module docstring): the
+#: group's net against the members' sum, and every member's own fills since.
+DIFFERS_SHARED = (
+    "OpenAlgo's books showed {broker} for {members} together, who held {held}, at "
+    "{read}{since}, and the session ended before they agreed: nothing was sent for the "
+    "difference"
+)
+SINCE_SHARED = (
+    "; their own fills ({fills}) came after it, which would leave {broker} in OpenAlgo's "
+    "books against their {held}"
+)
 #: How the close qualifies a leg no read judged after a fill of its own orders landed
 #: during a read (round 9).
 NOT_CONFIRMED = (
@@ -80,27 +102,42 @@ class Differing:
     """A leg's difference with OpenAlgo's books at the close (module docstring): `seen`,
     as its last comparison saw it, `engine_units`, the engine's signed units now, and
     `unjudged`, True when no read judged the leg after a fill of its own orders landed
-    during a read (`NOT_CONFIRMED`)."""
+    during a read (`NOT_CONFIRMED`). For a member of a shared instrument (a `seen` with a
+    group), `group_units` is the signed units its group's members hold now and `symbol`
+    the instrument's."""
 
     seen: Sighting
     engine_units: int
     unjudged: bool = False
+    group_units: int | None = None
+    symbol: str = ""
 
     @property
     def fills_since(self) -> int:
         """The signed units of the engine's own fills since the comparison (a sale takes
-        units away)."""
+        units away); of a member of a shared instrument, every member's."""
+        if self.seen.group is not None and self.group_units is not None:
+            return self.group_units - self.seen.group.units
         return self.engine_units - self.seen.engine_units
 
     @property
     def broker_units(self) -> int:
-        """OpenAlgo's signed units by the comparison and the engine's own fills since."""
+        """OpenAlgo's signed units by the comparison and the engine's own fills since; of a
+        member of a shared instrument, the group's net."""
         return self.seen.broker_units + self.fills_since
 
     @property
     def flat_at_openalgo(self) -> bool:
         """True when OpenAlgo's books hold no position of the leg by then."""
         return self.broker_units == 0
+
+    @property
+    def open_units(self) -> int:
+        """The signed units the close lists the leg open at (module docstring): OpenAlgo's;
+        a member of a shared instrument its own, unless the group's net is flat."""
+        if self.seen.group is None or self.group_units is None:
+            return self.broker_units
+        return 0 if self.flat_at_openalgo else self.engine_units
 
     @property
     def read(self) -> str:
@@ -112,28 +149,49 @@ class Differing:
         figures, then, when the engine's own fills came after it, those fills and the
         figures they leave; last, when no read judged the leg after a fill, that it is not
         confirmed."""
+        if self.seen.group is not None and self.group_units is not None:
+            words = self._shared_words(self.seen.group.members, self.seen.group.units)
+        else:
+            since = ""
+            if self.fills_since:
+                since = SINCE.format(
+                    fills=_fills(self.fills_since),
+                    broker=_held(self.broker_units),
+                    engine=self.engine_units,
+                )
+            words = DIFFERS.format(
+                broker=_held(self.seen.broker_units),
+                engine=self.seen.engine_units,
+                read=self.read,
+                since=since,
+            )
+        return f"{words}; {NOT_CONFIRMED}" if self.unjudged else words
+
+    def _shared_words(self, members: tuple[str, ...], held: int) -> str:
+        """`words` of a member of a shared instrument (`DIFFERS_SHARED`): the group's net
+        against the `held` units of its `members` at the read."""
         since = ""
         if self.fills_since:
-            since = SINCE.format(
+            since = SINCE_SHARED.format(
                 fills=_fills(self.fills_since),
                 broker=_held(self.broker_units),
-                engine=self.engine_units,
+                held=self.group_units,
             )
-        words = DIFFERS.format(
-            broker=_held(self.seen.broker_units),
-            engine=self.seen.engine_units,
-            read=self.read,
-            since=since,
+        broker = f"{_held(self.seen.broker_units)} of {self.symbol}"
+        return DIFFERS_SHARED.format(
+            broker=broker, members=and_join(members), held=held, read=self.read, since=since
         )
-        return f"{words}; {NOT_CONFIRMED}" if self.unjudged else words
 
     def figures(self) -> str:
         """OpenAlgo's figure now, and how it is known when the engine's own fills came
-        after the read."""
+        after the read; of a member of a shared instrument, the group's net, named."""
         how = SINCE_SUMMARY.format(read=self.read) if self.fills_since else ""
         if self.unjudged and not how:
             how = f" by {self.read}"
-        return f"{_held(self.broker_units)} in OpenAlgo's books{how}"
+        whose = ""
+        if self.seen.group is not None and self.group_units is not None:
+            whose = f" of {self.symbol} for {and_join(self.seen.group.members)} together"
+        return f"{_held(self.broker_units)}{whose} in OpenAlgo's books{how}"
 
     def summary(self, trader: Trader) -> str:
         """`trader`'s leg in the DAILY_SUMMARY's words: OpenAlgo's figure now (`figures`),
@@ -144,15 +202,26 @@ class Differing:
         )
         return f"{words}, {NOT_CONFIRMED}" if self.unjudged else words
 
+    def group_summary(self, trader: Trader) -> str:
+        """The difference of `trader`'s shared instrument in the DAILY_SUMMARY's words,
+        named once for its group (module docstring): the instrument, OpenAlgo's net now
+        (`figures`), the members' units now, and whether it is confirmed."""
+        words = f"{trader.symbol} {trader.exchange} {self.figures()}, their {self.group_units}"
+        return f"{words}, {NOT_CONFIRMED}" if self.unjudged else words
+
 
 def differing(reconcile: Any, trader: Trader) -> Differing | None:
     """`trader`'s difference with OpenAlgo's books that no later read will confirm, once the
     close has printed its last lines (`Reconciler.unconfirmed`), with the engine's units
-    now; else None. `reconcile` is the session's `reconcile.Reconciler`."""
+    now (and its group's, for a member of a shared instrument); else None. `reconcile` is
+    the session's `reconcile.Reconciler`."""
     seen = reconcile.unconfirmed(trader.name)
     if seen is None:
         return None
-    return Differing(seen, round(trader.open_units()), reconcile.unjudged(trader.name))
+    units, unjudged = round(trader.open_units()), reconcile.unjudged(trader.name)
+    if seen.group is None:
+        return Differing(seen, units, unjudged)
+    return Differing(seen, units, unjudged, reconcile.group_units(trader), trader.symbol)
 
 
 def not_confirmed_summary(trader: Trader, engine_units: int) -> str:
@@ -180,22 +249,49 @@ def not_confirmed_alert(trader: Trader, engine_units: int, differs: Differing | 
 
 def late_alert(trader: Trader, seen: Sighting) -> str:
     """The ERROR alert of a leg whose last comparison was late and saw a difference
-    (`LATE_READ`): the engine's and OpenAlgo's units as that read saw them, neither carried
-    nor confirmed, and the books to check."""
+    (`LATE_READ`): the engine's and OpenAlgo's units as that read saw them (of a member of
+    a shared instrument, the group's net against the members' sum), neither carried nor
+    confirmed, and the books to check."""
     return (
         f"{trader.name} {trader.symbol} {trader.exchange}: OpenAlgo's books showed "
-        f"{_held(seen.broker_units)} against the engine's {seen.engine_units} {LATE_READ}, "
-        f"{NEITHER}; nothing was sent for the difference: check the position and the order "
-        "book in OpenAlgo"
+        f"{_against(trader, seen)} {LATE_READ}, {NEITHER}; nothing was sent for the "
+        "difference: check the position and the order book in OpenAlgo"
     )
 
 
 def late_summary(trader: Trader, seen: Sighting) -> str:
     """Such a leg in the DAILY_SUMMARY's words (`late_alert`): a mismatch, its figures
     as the late read saw them."""
+    if seen.group is None:
+        return (
+            f"{trader.name} {trader.symbol} {trader.exchange} {_held(seen.broker_units)} in "
+            f"OpenAlgo's books against the engine's {seen.engine_units} {LATE_READ}, {NEITHER}"
+        )
     return (
-        f"{trader.name} {trader.symbol} {trader.exchange} {_held(seen.broker_units)} in "
-        f"OpenAlgo's books against the engine's {seen.engine_units} {LATE_READ}, {NEITHER}"
+        f"{trader.name} {trader.symbol} {trader.exchange} OpenAlgo's books showed "
+        f"{_against(trader, seen)} {LATE_READ}, {NEITHER}"
+    )
+
+
+def late_group_summary(trader: Trader, seen: Sighting) -> str:
+    """A shared instrument whose last comparison was late and saw a difference, in the
+    DAILY_SUMMARY's words, named once for its group (`late_summary`): the group's net
+    against the members' sum as that read saw them."""
+    return (
+        f"{trader.symbol} {trader.exchange} OpenAlgo's books showed {_against(trader, seen)} "
+        f"{LATE_READ}, {NEITHER}"
+    )
+
+
+def _against(trader: Trader, seen: Sighting) -> str:
+    """OpenAlgo's units against the engine's as a read saw them, in words; of a member of
+    a shared instrument, the group's net against the members' sum."""
+    if seen.group is None:
+        return f"{_held(seen.broker_units)} against the engine's {seen.engine_units}"
+    members = and_join(seen.group.members)
+    return (
+        f"{_held(seen.broker_units)} of {trader.symbol} for {members} together against "
+        f"their {seen.group.units}"
     )
 
 
@@ -212,6 +308,7 @@ def _fills(units: int) -> str:
 __all__ = [
     "CHECK_THE_POSITION_BOOK",
     "DIFFERS",
+    "DIFFERS_SHARED",
     "LAST_JUDGING_READ",
     "LAST_READ",
     "LATE_READ",
@@ -220,10 +317,12 @@ __all__ = [
     "NOT_CONFIRMED",
     "NOT_CONFIRMED_ALERT",
     "SINCE",
+    "SINCE_SHARED",
     "SINCE_SUMMARY",
     "Differing",
     "differing",
     "late_alert",
+    "late_group_summary",
     "late_summary",
     "not_confirmed_alert",
     "not_confirmed_summary",

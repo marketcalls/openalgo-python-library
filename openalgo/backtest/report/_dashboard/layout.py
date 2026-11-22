@@ -5,10 +5,11 @@ A report mode is a set of parts; a section shows the parts of the mode it holds 
 left out when it holds none. Sections are numbered in page order among those shown.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .. import _format as fmt
 from .._performance import Performance
 
 #: Every part of a page, by section, in page order.
@@ -44,7 +45,22 @@ PARTS = {
     ),
     "overfitting": ("overfitting_checks",),
     "strategies": ("strategies",),
+    "portfolio": ("contribution", "account_margin", "refused", "net_positions"),
     "notes": ("method", "assumptions"),
+}
+#: Each section's title: its heading, and its link in the page's header.
+TITLES = {
+    "overview": "Overview",
+    "performance": "Performance",
+    "risk": "Risk",
+    "monthly": "Monthly",
+    "distribution": "Distribution",
+    "metrics": "Metrics",
+    "trades": "Trades",
+    "overfitting": "Overfitting checks",
+    "strategies": "Strategies",
+    "portfolio": "Portfolio",
+    "notes": "Notes",
 }
 _EVERY = frozenset(part for parts in PARTS.values() for part in parts)
 #: The parts of each report mode.
@@ -95,8 +111,10 @@ class View:
     """What one page shows: the run's performance, the benchmark measured as the
     strategy is (None without one) and its name, the title, the assumption lines, the
     strategies of a combined result (None unless two or more), whether the cumulative
-    return is on a log scale, the parts of the report mode, and the quick overfitting
-    checks when the run already computed them (None: the page computes them)."""
+    return is on a log scale, the parts of the report mode, the quick overfitting
+    checks when the run already computed them (None: the page computes them; on a
+    portfolio's page, each strategy's by name), and the portfolio result whose own
+    parts a combined page shows (None for any other page)."""
 
     performance: Performance
     bench: Performance | None
@@ -107,6 +125,7 @@ class View:
     log_scale: bool
     parts: frozenset[str]
     overfitting: Any = None
+    portfolio: Any = None
 
     def has(self, part: str) -> bool:
         """Whether the page shows `part`."""
@@ -115,19 +134,22 @@ class View:
 
 @dataclass(frozen=True)
 class Section:
-    """A section's anchor, title, subtitle and body, before it is numbered."""
+    """A section's anchor, title, subtitle and body, before it is numbered, and whether
+    it is printed (Export PDF leaves out a section that is not)."""
 
     anchor: str
     title: str
     subtitle: str
     body: str
+    printed: bool = True
 
 
 def section(number: int, part: Section) -> str:
     """A numbered section: "01  Overview" over a hairline, the subtitle on the right."""
     subtitle = f"<span class='sec-sub'>{part.subtitle}</span>" if part.subtitle else ""
+    unprinted = "" if part.printed else " class='no-print'"
     return (
-        f"<section id='{part.anchor}'><div class='sec-head'><span class='sec-num nums'>"
+        f"<section id='{part.anchor}'{unprinted}><div class='sec-head'><span class='sec-num nums'>"
         f"{number:02d}</span><h2 class='serif'>{part.title}</h2>{subtitle}</div>"
         f"{part.body}</section>"
     )
@@ -143,6 +165,21 @@ def card(title: str, subtitle: str, body: str) -> str:
 def label(text: str) -> str:
     """The small label over a grid of tiles."""
     return f"<div class='eyebrow grid-label'>{text}</div>"
+
+
+def legend(entries: Sequence[tuple[str, str]]) -> str:
+    """A row of colour swatches over a chart of several series: (name, CSS colour)
+    pairs, in order; the names are plain text."""
+    items = "".join(
+        "<span style='display:inline-flex;align-items:center;gap:6px'>"
+        f"<span style='width:10px;height:10px;border-radius:2px;background:{colour}'>"
+        f"</span>{fmt.text(name)}</span>"
+        for name, colour in entries
+    )
+    return (
+        "<div class='nums' style='display:flex;flex-wrap:wrap;gap:4px 16px;margin-bottom:8px;"
+        f"font-size:.75rem;color:var(--text-muted)'>{items}</div>"
+    )
 
 
 #: The gaps between blocks of a section: a small one between cards of one kind, a large
@@ -165,10 +202,12 @@ __all__ = [
     "MODE_PARTS",
     "PARTS",
     "SMALL",
+    "TITLES",
     "Section",
     "View",
     "card",
     "label",
+    "legend",
     "section",
     "stack",
 ]

@@ -169,10 +169,11 @@ def test_ctrl_c_asks_again_for_an_exit_that_failed_every_attempt(world):
     assert outcome.stopped_by == "ctrl_c"
 
 
-class SellsBeyondItsPosition(bt.Strategy):
+class RestsASaleOfIt(bt.Strategy):
     """Buys 10 SBIN at its first decision (14:42:01); at its second (14:43:01) rests a
-    LIMIT sale of 20 at 600 that would reverse its position (`reverse=True`): an entry
-    the safe stop cancels, and which an exit of the position waits for."""
+    LIMIT sale of the 10 at 600: an order on the closing side, which an exit of the
+    position cancels first and waits for. (A resting sale of 20 with `reverse=True` is
+    refused in a live session, 2.4.0 item P3-2.)"""
 
     symbol, exchange, interval = "SBIN", "NSE", "1m"
 
@@ -184,7 +185,7 @@ class SellsBeyondItsPosition(bt.Strategy):
         if self.calls == 1:
             self.buy(10)
         elif self.calls == 2:
-            self.sell(20, price=600.0, reverse=True)
+            self.sell(10, price=600.0)
 
 
 def test_a_reminder_names_the_cancel_the_safe_stops_exit_waits_for(world, caplog):
@@ -192,7 +193,7 @@ def test_a_reminder_names_the_cancel_the_safe_stops_exit_waits_for(world, caplog
     # sent until the broker's window has passed, so the exit waits past the first reminder.
     world.script.at(ist(14, 42, 30), lambda: world.fake.faults.bad_gateway_page("placeorder"))
     world.stop_at(ist(14, 43, 30))
-    outcome = world.run(SellsBeyondItsPosition)
+    outcome = world.run(RestsASaleOfIt)
     reminders = [text for text in alerts(caplog, "error") if "safe stop:" in text]
     assert reminders
     assert all("its exit waits for the cancel of order o2" in text for text in reminders)

@@ -25,16 +25,30 @@ function.
 | `data_worker` | Quotes and broker candles read on their own thread, under the server's limits |
 | `plan` | The session plan: `bt.live`'s arguments checked, each strategy set up, the catch-up |
 | `venue_map` | The kernel's commands as order requests, and each answer as its kernel call |
-| `worker` | The order worker: the one thread that sends the session's orders and reads its books |
+| `worker` | The order worker: the one thread that sends orders at the order rate, reads books |
 | `session` | A live session: the start and the restart, the loop, the safe stop, the close |
 | `stops` | The stops supervisor: broker-held stops, exits that fail, protection, held words |
-| `watch` | The risk watch: a dead or quiet feed, clock skew, the account loss and the kill switch |
+| `watch` | The risk watch: a dead or quiet feed, clock skew, the account's limits, kill switch |
 | `reconcile` | The reconciler: the books compared leg by leg, safe corrections, the exit guard |
 | `_result_build` | `bt.live`'s `SessionResult`: each strategy's `Result`, tables, warnings |
 | `_record_verb` | What `bt.record` runs: the recorder on a client of its own, until a time |
 
 Each row's module keeps its helpers in private modules named after it (`_reconcile_*`,
-`_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule.
+`_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule; the order
+rate is `_order_throttle` (for `worker`) and the account's daily rules `_account_watch` (for
+`watch`). Four serve several rows: `_groups`, the strategies of a session that trade one
+instrument and the entry gates set on them, `_group_rules`, the rules of such a group
+against the broker's net position, and `_margin_reject`, a closing order rejected on such
+an instrument (18-multi-strategy 4), and `_locked_entries`, the strategies whose entries
+are locked, which the loop writes and the order worker reads before an entry or add. The
+audit record of 18-multi-strategy 12 is `_version_id` and `_session_versions` (each
+strategy's version on every order, its manifest in the journal, `_journal_versions`; the
+compiled code of a class whose source cannot be read, `_version_code`; the one rule for
+the values both hash, `_version_values`),
+`_preflight_expiry` and `_preflight_calendar` (the master contract's expiry and OpenAlgo's
+holidays against the tables), and `_fill_comparison` (each fill against a backtest of the
+same bars, priced by `_session_slippage`); `_exit_reasons` names why an order closes a
+position.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

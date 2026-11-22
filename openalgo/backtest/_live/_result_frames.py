@@ -16,13 +16,25 @@ from typing import Any
 import pandas as pd
 
 from .._result_tables import IST
+from ._fill_comparison import FillRow
 from ._reconcile_findings import Reconciliation
-from ._session_close import OpenPosition
+from ._session_open import OpenPosition
 from ._session_records import FillRecord, LockRecord, OrderRecord
 from ._session_trader import Skipped
 from ._stops_cover import Unprotected
 from .bars import BarDrift
 
+#: The reconciliations' columns of a shared instrument's group (`Reconciliation`), which
+#: only a session with an instrument several strategies share has: a session of strategies
+#: alone on their instruments keeps its table as it was before shared instruments.
+GROUP_COLUMNS = (
+    "group",
+    "group_units",
+    "member_units",
+    "external_units",
+    "allocation",
+    "stops_cut",
+)
 #: The order of the open positions' columns: what is held, then its stop, then the note.
 OPEN_POSITION_COLUMNS = (
     "strategy",
@@ -55,6 +67,14 @@ def orders_frame(orders: Sequence[OrderRecord]) -> pd.DataFrame:
     return frame(orders, _names(OrderRecord), [("created_ns", "created")])
 
 
+def fill_comparison_frame(rows: Sequence[FillRow]) -> pd.DataFrame:
+    """Each fill against a backtest of the same bars (`_fill_comparison.FillRow`),
+    `live_time` and `backtest_time` the IST instants of `live_ns` and `backtest_ns` (NaT
+    for a row not compared)."""
+    instants = [("live_ns", "live_time"), ("backtest_ns", "backtest_time")]
+    return frame(rows, _names(FillRow), instants)
+
+
 def fills_frame(fills: Sequence[FillRecord]) -> pd.DataFrame:
     """Every fill the engine took (`_session_records.FillRecord`), `time` when it was
     heard, IST."""
@@ -82,11 +102,19 @@ def drift_frame(drift: Sequence[BarDrift]) -> pd.DataFrame:
     return frame(drift, _names(BarDrift), [("ts_open_ns", "time")])
 
 
-def reconciliations_frame(rows: Sequence[Reconciliation]) -> pd.DataFrame:
+def reconciliations_frame(rows: Sequence[Reconciliation], *, shared: bool) -> pd.DataFrame:
     """Each comparison with the broker's books that differed, `time` when, IST, with the
-    engine's and the broker's units (missing: not read) and what was done."""
-    table = frame(rows, _names(Reconciliation), [("at_ns", "time")])
-    table["broker_units"] = table["broker_units"].astype("Int64")
+    engine's and the broker's units (missing: not read) and what was done; in a session
+    with an instrument several strategies share (`shared`), the `GROUP_COLUMNS` too: of a
+    member of that instrument, its group's figures, the allocation made and its stop cut
+    (`_reconcile_findings.Reconciliation`; missing or "" for a strategy alone)."""
+    names = _names(Reconciliation)
+    if not shared:
+        names = tuple(name for name in names if name not in GROUP_COLUMNS)
+    table = frame(rows, names, [("at_ns", "time")])
+    counts = ("broker_units", "group_units", "external_units") if shared else ("broker_units",)
+    for column in counts:
+        table[column] = table[column].astype("Int64")
     return table
 
 
@@ -111,8 +139,10 @@ def _nanos(column: pd.Series) -> list[int | None]:
 
 
 __all__ = [
+    "GROUP_COLUMNS",
     "OPEN_POSITION_COLUMNS",
     "drift_frame",
+    "fill_comparison_frame",
     "fills_frame",
     "frame",
     "locks_frame",

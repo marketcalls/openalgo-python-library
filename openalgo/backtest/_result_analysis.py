@@ -21,6 +21,7 @@ from ._trade_list import trade_list as closed_trade_list
 from .metrics import MonteCarlo, analyse, monte_carlo
 from .report import _montecarlo, metrics_table
 from .report._performance import Performance
+from .report.custom import Layout
 
 
 class AnalysisMethods:
@@ -65,25 +66,33 @@ class AnalysisMethods:
         the benchmark figures (alpha, beta, information ratio, the comparison tables and
         charts) against its closes. Its trades carry `bars_held` in bars of the
         strategy's interval. Raises ConfigError when the run has no equity point."""
-        output, symbols = self._output, self._symbols
-        closes, multipliers = self._strategy_closes, self._multipliers()
-        trades = _result_report.trades_table(output, symbols, closes, multipliers)
         equity = _result_report.equity_series(self.equity)
         arguments = self._manifest["arguments"]
-        exchange, capital = arguments["exchange"], arguments["capital"]
-        opening = None
-        if len(equity):
-            first = int(output["equity"]["ts"][0])
-            opening = _result_report.opening_time(
-                first, arguments["base"], exchange, self._calendar
-            )
         return analyse(
             equity,
-            exchanges=exchange,
-            trades=trades,
+            exchanges=arguments["exchange"],
+            trades=self._metrics_trades(),
             benchmark=self._benchmark,
-            opening_wealth=capital,
-            opening_time=opening,
+            opening_wealth=arguments["capital"],
+            opening_time=self._opening_time(),
+        )
+
+    def _metrics_trades(self) -> pd.DataFrame | None:
+        """The run's closed and open trades in the metrics layout (`_result_report`), or
+        None when it has none."""
+        output, symbols = self._output, self._symbols
+        closes, multipliers = self._strategy_closes, self._multipliers()
+        return _result_report.trades_table(output, symbols, closes, multipliers)
+
+    def _opening_time(self) -> int | None:
+        """UTC nanoseconds of the open of the run's first slice, when it opened with its
+        capital; None for a run with no equity point or a result without its calendar."""
+        if not len(self._output["equity"]["ts"]):
+            return None
+        arguments = self._manifest["arguments"]
+        first = int(self._output["equity"]["ts"][0])
+        return _result_report.opening_time(
+            first, arguments["base"], arguments["exchange"], self._calendar
         )
 
     @property
@@ -103,9 +112,20 @@ class AnalysisMethods:
 
         return quick_checks(self.performance)
 
-    def _overfitting_warnings(self) -> list[str]:
-        """A warning line per quick overfitting check that failed."""
-        return [] if self._quick is None else self._quick.warnings()
+    def _overfitting_warnings(self, pointer: str | None = None) -> list[str]:
+        """A warning line per quick overfitting check that failed, ending with `pointer`,
+        where the full set of checks is (None: the quick checks' own, which loads with
+        them, `_robust._quick.POINTER`)."""
+        if self._quick is None:
+            return []
+        return self._quick.warnings() if pointer is None else self._quick.warnings(pointer)
+
+    def _all_warnings(self, pointer: str | None = None) -> list[str]:
+        """The run's warnings, then a line per failed quick check ending with `pointer`
+        (None: the result's own). The one composition of `Result.warnings`, the Notes of
+        the tearsheet and, with `_messages.ALONE_POINTER` (a strategy of a portfolio run,
+        whose own `robustness()` is refused), its lines in `PortfolioResult.warnings`."""
+        return [*self._warnings, *self._overfitting_warnings(pointer)]
 
     def summary(self) -> str:
         """A short plain-text summary to print: net profit in rupees with Indian digit
@@ -146,20 +166,27 @@ class AnalysisMethods:
         )
 
     def tearsheet(
-        self, path: str | None = None, *, mode: str = "full", log_scale: bool = False
+        self,
+        path: str | None = None,
+        *,
+        mode: str = "full",
+        log_scale: bool = False,
+        layout: Layout | None = None,
     ) -> str:
         """The HTML tearsheet, a dashboard in `mode` ("full", "basic", "metrics" or
         "charts"; see `openalgo.backtest.report.tearsheet`): returned as a string, or
         written to `path` (and the path returned). `log_scale` draws the cumulative
         return on a log scale. Its trade table is `trade_list()`, its benchmark is named
         by the run's `benchmark=`, and its Notes section lists the run's assumptions and
-        every warning, so a cost-free run says so on the report."""
+        every warning, so a cost-free run says so on the report. `layout` (a
+        `report.custom.Layout`) makes a custom tearsheet whose blocks' callables receive
+        this result; `mode` then stays "full" (the layout's `base` is its mode)."""
         lines = [f"{key}: {value}" for key, value in self._assumptions.items()]
-        lines += [f"warning: {text}" for text in [*self._warnings, *self._overfitting_warnings()]]
+        lines += [f"warning: {text}" for text in self._all_warnings()]
         name = self._manifest["strategy"]["name"]
         bench = _result_report.benchmark_name(self._manifest)
         report = _result_report.Report(self.performance, name, lines, bench, self._quick)
-        return _result_report.tearsheet(report, path, mode, log_scale)
+        return _result_report.tearsheet(report, path, mode, log_scale, layout=layout, subject=self)
 
 
 __all__ = ["AnalysisMethods"]

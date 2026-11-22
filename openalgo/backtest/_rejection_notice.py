@@ -124,14 +124,16 @@ def unplaced_notice(
     )
 
 
-def announce_unplaced(result: Any) -> None:
+def announce_unplaced(result: Any, strategy: str | None = None) -> None:
     """Issue the notice of a finished run (`unplaced_notice`) as one
     OrdersNotPlacedWarning attributed to the caller's line, or nothing when every order
-    was placed or refused as the run asked. `result` is the run's `Result`."""
+    was placed or refused as the run asked. `result` is the run's `Result`; `strategy`,
+    when given, is the name the notice starts with (a strategy of a portfolio run)."""
     kinds = [instrument["kind"] for instrument in result.manifest["instruments"]]
     notice = unplaced_notice(result.orders, result.skipped, kinds)
     if notice is not None:
-        warnings.warn(notice, OrdersNotPlacedWarning, skip_file_prefixes=(PACKAGE_DIR,))
+        told = notice if strategy is None else f"{strategy}: {notice}"
+        warnings.warn(told, OrdersNotPlacedWarning, skip_file_prefixes=(PACKAGE_DIR,))
 
 
 __all__ = ["announce_unplaced", "unplaced_notice"]

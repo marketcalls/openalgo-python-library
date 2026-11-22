@@ -129,7 +129,7 @@ def optimizer_checks(
     """The `OptimizerChecks` of a sweep: its `table` (an objective and a net_profit column
     a combination), its combinations and swept `names`, its objective as (its name,
     whether that is a metric's name rather than a function's), the direction it was
-    ranked in, the session returns (sessions, combinations; `_sweep_pool.returns_matrix`)
+    ranked in, the session returns (sessions, combinations; `_sweep_returns.ReturnsMatrix`)
     and the position of its best."""
     grid = Grid(tuple(names), tuple(combinations), dict(combinations[best]), True)
     name, metric = objective

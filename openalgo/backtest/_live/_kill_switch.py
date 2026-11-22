@@ -26,6 +26,14 @@ reason, and the name of the entry lock):
 
 Which read counts for a strategy, and how often one is asked for, is `_kill_reads`'s.
 
+**A shared instrument** (18-multi-strategy 4.9): the position book shows the net of every
+strategy of the session that trades the instrument, so a member's exit is agreed only when
+the broker holds at least their sum on its side (the group agreeing, or only an excess),
+and a flat member is flat at the broker when the book shows what the others hold. A group
+difference sends nothing: the reconciler's comparison of the group locks and alerts, and
+shares out a difference other orders' trades explain (4.7), after which a read agrees and
+each member's exit sells what it holds.
+
 **No exit beyond the broker's units.** When the broker holds fewer units than the engine on
 the same side, the reconciler's adoption of an explained difference (16-session-design
 5.3) makes the two agree and the next read exits; an unexplained one is held by the
@@ -47,6 +55,7 @@ from typing import Any
 
 from .._series import ist_time
 from ..errors import ConfigError
+from ._group_rules import and_join
 from ._kill_reads import (
     KILL_READ_BACKOFF_S,
     KILL_READ_EVERY_S,
@@ -69,9 +78,11 @@ logger = logging.getLogger(LOGGER_NAME)
 
 #: The kill switch fired by the account's daily loss limit (16-session-design 6.3).
 ACCOUNT_LOSS = "account_loss"
+#: The kill switch fired by the account's daily profit target (18-multi-strategy 2.5a).
+ACCOUNT_PROFIT = "account_profit"
 #: The reasons the kill switch takes, each one of the kernel's exit reasons
-#: (`RISK_EXIT_REASONS` of the binding): the account's daily loss limit is its only caller.
-KILL_REASONS = (ACCOUNT_LOSS,)
+#: (`RISK_EXIT_REASONS` of the binding): the account's daily rules are its only callers.
+KILL_REASONS = (ACCOUNT_LOSS, ACCOUNT_PROFIT)
 #: Seconds the kill switch waits for the cancels of the strategy's entries before it
 #: exits what the strategy holds: as the safe stop waits for its last words
 #: (`_session_stop.SAFE_STOP_STATE_WAIT_S`).
@@ -170,11 +181,11 @@ class KillSwitch:
         if kill.read_ns is None:
             return True
         judged(kill, kill.read_ns)
-        if not exit_agreed(units, kill.broker):
+        if not exit_agreed(units + self._others(trader), kill.broker):
             self._disagree(trader, kill, held, now_ns)
             return True
         kill.exit_for = held
-        what = trader.request_exit(kill.reason)
+        what = self._session.margin.request_exit(trader, kill.reason)
         self._session.event("kill_exit", strategy=trader.name, units=units, outcome=what)
         return False
 
@@ -196,13 +207,19 @@ class KillSwitch:
         (a book that lags the exit's fill catches up). True while another read is needed."""
         same = kill.disagreements > 0 and kill.broker == kill.noted
         judged(kill, read_ns)
-        if kill.broker != 0:
+        if kill.broker != self._others(trader):
             kill.disagreements = kill.disagreements + 1 if same else 1
             self._note(trader, kill, 0.0)
             if kill.disagreements < KILL_DISAGREEMENTS_ALERTED:
                 return True
         self._report(trader, kill)
         return False
+
+    def _others(self, trader: Trader) -> int:
+        """The signed units the other strategies of `trader`'s instrument hold now (none
+        for a strategy alone on it): the broker's net counts them too."""
+        members = self._session.groups.members(trader)
+        return sum(round(other.open_units()) for other in members if other is not trader)
 
     def _note(self, trader: Trader, kill: Kill, units: float) -> None:
         """Write a disagreement to the event stream: the first of a run, then each change of
@@ -217,8 +234,20 @@ class KillSwitch:
         """The ERROR alert of a lasting disagreement: what the books say, and what the
         session's other exits will do (module docstring): with a book that cannot be read
         the engine still counts its own units; with one that shows fewer, no exit is sent
-        beyond them (the reconciler's exit guard)."""
+        beyond them (the reconciler's exit guard), and an explained difference is adopted
+        (on a shared instrument shared out among the members, 18-multi-strategy 4.7)."""
         book = "cannot be read" if kill.broker is None else f"shows {kill.broker} units"
+        others = self._others(trader)
+        held = f"{units:g} units of {trader.symbol} {trader.exchange}"
+        taken = "taken as the engine's"
+        if self._session.groups.shared(trader):
+            names = and_join(self._other_names(trader))
+            held += f", {units + others:g} with {names}'s,"
+            everyone = and_join([member.name for member in self._session.groups.members(trader)])
+            taken = (
+                f"shared out among {everyone}, the most recently opened position first, each "
+                "taking its share as its own"
+            )
         exits = f"the square-off at {ist_time(trader.square_off_ns):%H:%M} IST"
         if self._session.parts.spec.arguments.on_stop == "flatten":
             exits = f'a Ctrl+C (on_stop="flatten") and {exits}'
@@ -227,21 +256,33 @@ class KillSwitch:
             f"{exits} would still {side} all {abs(units):g} units"
             if kill.broker is None
             else f"no exit of the session ({exits}) is sent for more than the broker holds: "
-            "trades of other orders that explain the difference are taken as the engine's, "
-            "else the exits wait for the books to agree"
+            f"trades of other orders that explain the difference are {taken}, else the exits "
+            "wait for the books to agree"
         )
         return (
-            f"kill switch ({kill.reason}): {trader.name} holds {units:g} units of "
-            f"{trader.symbol} {trader.exchange} and OpenAlgo's position book {book}: no exit "
-            f"is sent until they agree, and {then}. Check the position in OpenAlgo"
+            f"kill switch ({kill.reason}): {trader.name} holds {held} and OpenAlgo's position "
+            f"book {book}: no exit is sent until they agree, and {then}. Check the position "
+            "in OpenAlgo"
         )
 
     def _report(self, trader: Trader, kill: Kill) -> None:
+        """The ERROR alert of a flat strategy (module docstring); on a shared instrument
+        the book's units are weighed against what the other strategies hold."""
         kill.reported = True
-        if kill.broker == 0:
+        others = self._others(trader)
+        if kill.broker == 0 and others == 0:
             left = "flat at the broker too"
         elif kill.broker is None:
             left = "its position book cannot be read: check the position in OpenAlgo"
+        elif kill.broker == others:
+            names = and_join(self._other_names(trader))
+            left = f"and OpenAlgo's position book shows only the {others} units of {names}"
+        elif self._session.groups.shared(trader):
+            names = and_join(self._other_names(trader))
+            left = (
+                f"OpenAlgo's position book still shows {kill.broker} units, {others} of them "
+                f"{names}'s: close the rest by hand"
+            )
         else:
             left = f"OpenAlgo's position book still shows {kill.broker} units: close them by hand"
         self._session.alert(
@@ -249,6 +290,10 @@ class KillSwitch:
             f"kill switch ({kill.reason}): {trader.name} is flat in {trader.symbol} "
             f"{trader.exchange}, {left}; its entries stay locked for the day",
         )
+
+    def _other_names(self, trader: Trader) -> list[str]:
+        """The other strategies of `trader`'s instrument, in call order."""
+        return [m.name for m in self._session.groups.members(trader) if m is not trader]
 
     def _cannot_act(self) -> None:
         if self._locked_alerted:
@@ -264,6 +309,7 @@ class KillSwitch:
 
 __all__ = [
     "ACCOUNT_LOSS",
+    "ACCOUNT_PROFIT",
     "KILL_CANCEL_WAIT_S",
     "KILL_DISAGREEMENTS_ALERTED",
     "KILL_READ_BACKOFF_S",

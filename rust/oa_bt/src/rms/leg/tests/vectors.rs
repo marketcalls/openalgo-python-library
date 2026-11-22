@@ -26,7 +26,7 @@ use crate::rms::leg::{
 };
 use crate::rms::rules::LegRules;
 
-use super::json::{parse, Json};
+use crate::test_json::{parse, Json};
 
 const FIXTURE: &str = include_str!("../../../../tests/fixtures/risk_vectors.json");
 

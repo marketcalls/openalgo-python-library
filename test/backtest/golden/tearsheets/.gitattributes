@@ -1,0 +1,2 @@
+# The golden tearsheet pages are compared byte for byte: no line-ending conversion.
+*.html -text

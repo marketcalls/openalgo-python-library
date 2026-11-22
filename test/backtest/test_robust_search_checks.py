@@ -11,6 +11,7 @@ so what one window favours the next does not.
 """
 
 import threading
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from robust_runs import (
 from test_quickstart import historify_rows
 
 import openalgo.backtest as bt
+from openalgo.backtest._robust import _check_parameters
 from openalgo.backtest._robust._grid import Grid
 from openalgo.backtest._robust._verdict import FAILED, INFORMATIONAL, NOT_JUDGED, PASSED
 from openalgo.backtest._robust._walk import FoldOutcome, WalkOutcome
@@ -214,6 +216,102 @@ def test_parameters_off_the_grid_given_are_not_judged(wednesday):
     found = check.check("parameters")
     assert found.verdict == NOT_JUDGED
     assert found.note.startswith("The run's parameters (day 2) are not a combination")
+
+
+class MondayOrTuesday(Weekday):
+    """`Weekday` with its weekday declared as a range of Monday and Tuesday only."""
+
+    day = bt.param(0, (0, 1))
+
+
+def test_a_declared_parameter_set_outside_its_range_says_how_to_search_around_it():
+    # params= day 3 is a value the declared range (0, 1) does not hold, so its
+    # neighbourhood cannot be read off that range. The note names the range and gives the
+    # keyword form around the run's value: 3 and a step of 10 percent either side, at
+    # least one day, 2 and 4.
+    data = weekday_bars(SESSIONS, lambda s: (3,))
+    result = bt.backtest(MondayOrTuesday, data=data, params={"day": 3}, **FREE)
+    check = result.robustness(checks=["parameters"], workers=1, progress=quiet).check("parameters")
+    assert check.verdict == NOT_JUDGED
+    assert check.note == (
+        "The run's parameters (day 3) are not a combination of the ranges searched: day 3 "
+        "is not among the values of its range (0, 1). Give it a range that holds it as a "
+        "keyword named after the parameter, for example day=[2, 3, 4]."
+    )
+
+
+def test_a_long_range_a_value_is_off_reads_as_its_ends():
+    # fast 5 to 50 in steps of 5, ten values; the run's 7 moves by 10 percent, at least 1.
+    grid = Grid(("fast",), tuple({"fast": v} for v in range(5, 55, 5)), {"fast": 7}, True)
+    assert _check_parameters._off_the_grid(grid, 0.10) == (
+        "The run's parameters (fast 7) are not a combination of the ranges searched: fast 7 "
+        "is not among the values of its range (5 to 50, 10 values). Give it a range that "
+        "holds it as a keyword named after the parameter, for example fast=[6, 7, 8]."
+    )
+
+
+def test_each_value_off_its_range_is_named_with_a_keyword_range_around_it():
+    # A name is not moved: its keyword range holds the run's value alone.
+    combos = tuple({"fast": f, "label": n} for f in (5, 10) for n in ("a", "b"))
+    grid = Grid(("fast", "label"), combos, {"fast": 7, "label": "c"}, True)
+    assert _check_parameters._off_the_grid(grid, 0.10) == (
+        "The run's parameters (fast 7, label c) are not a combination of the ranges searched: "
+        "fast 7 is not among the values of its range (5, 10); label c is not among the values "
+        "of its range (a, b). Give each a range that holds it as a keyword named after the "
+        "parameter, for example fast=[6, 7, 8], label=['c']."
+    )
+
+
+def off_grid_of(ranges: dict[str, tuple], run_params: dict[str, object]) -> Grid:
+    """The grid of `ranges` around a run whose parameters are `run_params`."""
+    combos = tuple(dict(zip(ranges, values, strict=True)) for values in product(*ranges.values()))
+    return Grid(tuple(ranges), combos, run_params, True)
+
+
+#: A float residue: 0.1 + 0.2 is 0.30000000000000004 as a float, not 0.3.
+RESIDUE = 0.1 + 0.2
+
+
+@pytest.mark.parametrize(
+    ("ranges", "run_params", "note"),
+    [
+        # The best of a sweep over np.arange(0.1, 0.7, 0.1) passed back in params= is off
+        # the declared range by a float residue only: the note says so, writes both values
+        # as they are, and gives the range's value to pass instead.
+        (
+            {"x": (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)},
+            {"x": RESIDUE},
+            "The run's parameters (x 0.30000000000000004) are not a combination of the "
+            "ranges searched: x 0.30000000000000004 differs from 0.3, a value of its range "
+            "(0.1, 0.2, 0.3, 0.4, 0.5, 0.6), by a float residue only. Pass the range's value "
+            "in params=, for example params={'x': 0.3}.",
+        ),
+        # A value of more than six digits is written whole, so the keyword range holds it;
+        # its neighbours, 10 percent either side, need no more than twelve.
+        (
+            {"mult": (1.0, 1.5)},
+            {"mult": 2.3456789},
+            "The run's parameters (mult 2.3456789) are not a combination of the ranges "
+            "searched: mult 2.3456789 is not among the values of its range (1.0, 1.5). Give "
+            "it a range that holds it as a keyword named after the parameter, for example "
+            "mult=[2.11111101, 2.3456789, 2.58024679].",
+        ),
+        # Both at once: each is named, and each piece of advice names its own.
+        (
+            {"x": (0.1, 0.2, 0.3), "day": (0, 1)},
+            {"x": RESIDUE, "day": 3},
+            "The run's parameters (x 0.30000000000000004, day 3) are not a combination of "
+            "the ranges searched: x 0.30000000000000004 differs from 0.3, a value of its "
+            "range (0.1, 0.2, 0.3), by a float residue only; day 3 is not among the values "
+            "of its range (0, 1). Give it a range that holds it as a keyword named after the "
+            "parameter, for example day=[2, 3, 4]. Pass the range's value in params=, for "
+            "example params={'x': 0.3}.",
+        ),
+    ],
+    ids=["a float residue", "more than six digits", "both"],
+)
+def test_a_fractional_value_off_its_range_is_written_as_it_is(ranges, run_params, note):
+    assert _check_parameters._off_the_grid(off_grid_of(ranges, run_params), 0.10) == note
 
 
 # ----- 2.1 out of sample ----------------------------------------------------------------

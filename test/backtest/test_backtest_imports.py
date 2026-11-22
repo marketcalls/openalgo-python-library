@@ -13,6 +13,7 @@ DEFERRED = (
     "openalgo.backtest._optimize",
     "openalgo.backtest._optimize_result",
     "openalgo.backtest._sweep_pool",
+    "openalgo.backtest._sweep_returns",
     "openalgo.backtest._objective",
     "openalgo.backtest._robust",
     "concurrent.futures.process",
@@ -59,9 +60,11 @@ def test_the_run_functions_load_no_indicator_or_optimisation_module():
 
 
 def test_the_live_verbs_and_their_result_load_no_live_module_until_they_run():
+    # The live layer is the package `_live`; the verbs' own module, `_live_verbs`, is not.
     code = (
         "import openalgo.backtest as bt; bt.live; bt.record; bt.read_ticks; bt.SessionResult; "
-        "assert not [m for m in sys.modules if m.startswith('openalgo.backtest._live')]"
+        "assert not [m for m in sys.modules if m.split('.')[:3] == "
+        "['openalgo', 'backtest', '_live']]"
     )
     assert loaded_after(code) == []
 

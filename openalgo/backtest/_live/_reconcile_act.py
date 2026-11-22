@@ -1,20 +1,14 @@
-"""What the reconciler (`reconcile`) judges a leg by and does about a mismatch
-(16-session-design 5.1 to 5.3): the per-leg in-flight rule, the session's own orders, a
-comparison's steps on the trade and order books (`attribute`, `order_findings`), and the
-safe corrections a finding seen twice in a row allows.
-
-**In flight** (`in_flight`): an order of the leg handed to the order worker and not
-answered, unbound, held back or ambiguous; an add whose answer was lost; a word the order
-path holds for the trade book; a modify or cancel waiting for its result or its bind; any
-order of the leg working other than its confirmed, unchanged stop, and other than those
-the exit guard holds (they are not at the broker), and, while the guard holds the stop's
-cancel, an exit never sent that waits for it.
+"""What the reconciler (`reconcile`) does about a mismatch (16-session-design 5.3): the
+safe corrections a finding seen twice in a row allows. What a comparison judges a leg by
+(the in-flight rule, the session's own orders, the steps on the trade and order books) is
+`_reconcile_steps`'.
 
 **The safe corrections** (`Corrections.act`, decided 2026-11-16): the strategy's entries
 locked for the rest of the session ("reconciliation") and a RECONCILE_MISMATCH alert
 naming the leg, both figures and the orders, then only what can never open or add
 exposure: an explained difference adopted (`apply_external_fill` at the other orders'
-price, the kernel fitting the leg's stop to the adopted units in the same call, and a
+price, on a shared instrument each member's share of it, `_reconcile_allocate`; the
+kernel fitting the leg's stop to the adopted units in the same call, and a
 cancel of it the exit guard held sent when the stop is larger than what is left, or,
 after the session's last lines with units left, withdrawn first so that the fit cuts the
 stop instead: 16-session-design 3.3 step 5 "As built", round 7; held again when the kernel
@@ -24,25 +18,35 @@ Never an exit, never the kill switch. A finding on a leg in flight past the in-f
 limit is alerted, with nothing done; so is a restart's difference whose journal units
 the restored engine no longer holds (`stale`), with entries locked.
 
+**A shared instrument** (18-multi-strategy 4.6, 4.11): each member acts on its group's
+finding, locked and alerted with its own units and the group's sum; an excess and the
+other side have the group's words (`_group_rules.GROUP_WORDS`: nothing adopted, the
+excess no strategy's, every member's stop cancelled on the other side, and the session to
+be ended before closing by hand). One difference of the group is one mismatch of the day
+and, on the other side, one ERROR alert naming the instrument, however many members act on
+it (`_first_of_group`). What an act made of the group, the allocation and the member's
+stop cut, is kept for its row of the reconciliations (`done`).
+
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 
 from .._engine import call
 from ..errors import VenueRefusalError
+from ._group_rules import GROUP_WORDS, GroupFigure, and_join, group_words, other_side_alert
 from ._plan_catch_up import INSTRUMENT
+from ._reconcile_allocate import allocation_words
 from ._reconcile_rules import FEWER_STOP_CANCELLED, RULES, Kind, LegBooks, adoption_price
+from ._reconcile_steps import Finding
 from ._session_news import RECONCILE_LOCK
 from ._session_records import adopted_fill
 from ._session_trader import Trader
-from ._stops_orders import IN_FLIGHT, Sent
-from ._types import LOGGER_NAME, AlertKind, OrderStatus, OrderUpdate
-from ._venue_requests import LIVE_PRODUCT, SAME_PRICE_RUPEES, STOP_TYPES, CancelRequest
+from ._types import LOGGER_NAME, AlertKind
+from ._venue_requests import LIVE_PRODUCT, CancelRequest
 from ._worker_queue import CancelOrphan
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -60,154 +64,103 @@ NOT_ADOPTED_WORDS = (
     "nothing is adopted or sent for it, and its stop stays as it was. Check the position in "
     "OpenAlgo"
 )
-#: A finding: its kind first (a `_reconcile_rules.Kind`, or "orphan", "foreign",
-#: "stop_terms"), then what tells one from another.
-Finding = tuple[Any, ...]
-
-
-def in_flight(session: Any, trader: Trader) -> bool:
-    """Whether `trader`'s leg is in flight (module docstring)."""
-    stops, guard = session.stops, session.reconcile.guard
-    leg = stops.leg(trader)
-    if leg.unbound_add_units or stops.held.holds(trader):
-        return True
-    if any(watched.state in IN_FLIGHT for watched in leg.orders.values()):
-        return True
-    held, waits = guard.held_orders(trader.name), bool(guard.held_cancels(trader.name))
-    for kernel_order in trader.working():
-        watched = leg.orders.get(kernel_order)
-        if kernel_order in held or (waits and watched is None):
-            continue
-        if trader.venue.changing(kernel_order):
-            return True
-        resting = kernel_order == leg.stop and watched is not None
-        if not (resting and watched.state is Sent.CONFIRMED and not watched.cancel_sent):
-            return True
-    return False
-
-
-def attribute(session: Any, trader: Trader, books: LegBooks, at_ns: int) -> bool:
-    """A comparison's first step (5.2): each own order's trades in the trade book, beyond
-    what its fill ledger has given the kernel, through the ledger as news read at `at_ns`
-    (complete once they come to the order's units). True when any gave the kernel units:
-    the read took the position book before the trade book, so its position book may
-    predate them (16-session-design 5.4, round 9)."""
-    applied = False
-    for order_id, kernel_order in trader.venue.bound().items():
-        units, average = books.fills(order_id)
-        if units <= trader.venue.filled(kernel_order):
-            continue
-        order = call(trader.engine.order, kernel_order)
-        intent = trader.venue.intent_of(kernel_order)
-        quantity = intent.quantity if order is None else round(order["quantity_units"])
-        update = OrderUpdate(
-            order_id=order_id,
-            symbol=intent.symbol,
-            exchange=intent.exchange,
-            action=intent.action,
-            quantity=quantity,
-            filled_quantity=units,
-            pending_quantity=max(0, quantity - units),
-            average_price=average,
-            status=OrderStatus.COMPLETE if units >= quantity else OrderStatus.OPEN,
-            rejection_reason="",
-            mode=session.parts.mode,
-            ts_recv_ns=at_ns,
-            source="reconcile",
-        )
-        session.event("attributed", strategy=trader.name, order_id=order_id, filled=units)
-        applied |= session.news.apply_update(trader, update).increment is not None
-    return applied
-
-
-def order_findings(
-    session: Any, trader: Trader, books: LegBooks, own: frozenset[str]
-) -> tuple[set[Finding], bool]:
-    """A comparison's second and fourth steps (5.2): the order book's findings (an own
-    order working that the engine does not hold, a working order naming the strategy that
-    the session did not send, the leg's stop with other units or trigger than the
-    engine's), and whether a row has ended while the engine works its order (a poll is
-    wanted)."""
-    findings: set[Finding] = set()
-    if books.rows is None:
-        return findings, False
-    bound, working = trader.venue.bound(), set(trader.working())
-    polls = False
-    for row in books.rows:
-        kernel_order = bound.get(row.order_id)
-        if kernel_order in working and not row.working:
-            polls = True
-        elif row.working and row.order_id in own and kernel_order not in working:
-            findings.add(("orphan", row.order_id))
-        elif row.working and row.order_id not in own and row.strategy == trader.name:
-            findings.add(("foreign", row.order_id))
-    stop = session.stops.leg(trader).stop
-    order_id = trader.venue.order_id_of(stop) if stop is not None else ""
-    row = books.row(order_id) if order_id else None
-    if stop is None or row is None or not row.working or row.price_type not in STOP_TYPES:
-        return findings, polls
-    kernel = call(trader.engine.order, stop)
-    trigger = float(kernel["trigger_rupees"] or 0.0)
-    same = math.isclose(row.trigger_price, trigger, rel_tol=0.0, abs_tol=SAME_PRICE_RUPEES)
-    if row.quantity != round(kernel["quantity_units"]) or not same:
-        findings.add(("stop_terms", order_id, row.quantity, row.trigger_price))
-    return findings, polls
-
-
-def own_orders(trader: Trader, earlier: frozenset[str]) -> frozenset[str]:
-    """The broker order IDs of the session's own orders a leg's trades may be of: those
-    its venue map bound, and those of the day's earlier starts (the journal's)."""
-    return frozenset(trader.venue.bound()) | earlier
 
 
 class Corrections:
     """The safe corrections of one session (module docstring); `session` is the
     `_session_loop.Session`, `adopted` the reconciler's signed units adopted by
-    strategy, `orphans` the order IDs it asked to cancel."""
+    strategy, `orphans` the order IDs it asked to cancel, `figures` each member of a
+    shared instrument's group as the comparison judged it (the words name it; none when
+    no strategy shares its instrument)."""
 
-    def __init__(self, session: Any, adopted: dict[str, int], orphans: set[str]) -> None:
+    def __init__(
+        self,
+        session: Any,
+        adopted: dict[str, int],
+        orphans: set[str],
+        figures: dict[str, GroupFigure] | None = None,
+    ) -> None:
         self._session = session
         self._adopted = adopted
         self._orphans = orphans
+        self.figures: dict[str, GroupFigure] = {} if figures is None else figures
+        # The group differences acted on, each counted and alerted once (`_first_of_group`).
+        self._groups_acted: set[tuple[Any, ...]] = set()
+        # By strategy: what its last act made of its group, for its row (`done`).
+        self._done: dict[str, tuple[str, str]] = {}
+
+    def done(self, name: str) -> tuple[str, str]:
+        """What the last act on strategy `name`, a member of a shared instrument, made of
+        its group, in words: the allocation made and its own stop's cut ("" for none of
+        either; both "" for a strategy alone or with no act since). Forgets it."""
+        return self._done.pop(name, ("", ""))
 
     def act(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
         """Act on a finding seen twice in a row; what was done."""
         session, kind = self._session, finding[0]
-        session.mismatches += 1
+        first = self._first_of_group(trader, finding)
+        if first:
+            session.mismatches += 1
         if trader.lock(RECONCILE_LOCK):
             session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
-        action = "locked"
-        if kind == "orphan":
-            self._orphans.add(finding[1])
-            session.hand_over([CancelOrphan(finding[1])])
-            action = "orphan cancelled"
-            words = f"order {finding[1]} works at the broker, the engine does not hold it: "
-            words += "it is cancelled"
-        elif kind == "foreign":
-            words = f"order {finding[1]} names the strategy and the session did not send it: "
-            words += "nothing is sent for it. Check it in OpenAlgo"
-        elif kind == "stop_terms":
-            words = f"its stop {finding[1]} shows {finding[2]} units at {finding[3]:.2f} at the "
-            words += "broker, not the engine's terms. Check it in OpenAlgo"
+        group = self.figures.get(trader.name)
+        stop_id = "" if group is None else self._stop_id(trader)
+        if isinstance(kind, Kind):
+            action, words = self._position(trader, finding, books, own)
         else:
-            rule = RULES[kind]
-            words = rule.words
-            if rule.adopt:
-                action = self._adopt(trader, finding, books, own)
-            if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
-                words = FEWER_STOP_CANCELLED
-            if action.startswith(NOT_ADOPTED):
-                words = NOT_ADOPTED_WORDS
-            if rule.cancel_stop:
-                action = self._cancel_stop(trader)
+            action, words = self._order(finding)
         session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
-        if kind is Kind.OTHER_SIDE:
+        if kind is Kind.OTHER_SIDE and group is None:
             session.alert(
                 AlertKind.ERROR,
                 f"{trader.name}: OpenAlgo's books show {trader.symbol} {trader.exchange} on "
                 f"the other side of the engine's position: close it by hand in OpenAlgo",
             )
+        elif kind is Kind.OTHER_SIDE and first and group is not None:
+            text = other_side_alert(trader.symbol, trader.exchange, group, finding[2])
+            session.alert(AlertKind.ERROR, text)
+        if group is not None:
+            self._done[trader.name] = _made(group, trader.name, kind, action, stop_id)
         return action
+
+    def _order(self, finding: Finding) -> tuple[str, str]:
+        """An order finding seen twice in a row (an orphan, another's order naming the
+        strategy, the stop's terms): what was done and the alert's words."""
+        kind, order_id = finding[0], finding[1]
+        if kind == "orphan":
+            self._orphans.add(order_id)
+            self._session.hand_over([CancelOrphan(order_id)])
+            words = f"order {order_id} works at the broker, the engine does not hold it: "
+            return "orphan cancelled", words + "it is cancelled"
+        if kind == "foreign":
+            words = f"order {order_id} names the strategy and the session did not send it: "
+            return "locked", words + "nothing is sent for it. Check it in OpenAlgo"
+        words = f"its stop {order_id} shows {finding[2]} units at {finding[3]:.2f} at the "
+        return "locked", words + "broker, not the engine's terms. Check it in OpenAlgo"
+
+    def _position(
+        self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]
+    ) -> tuple[str, str]:
+        """A position difference seen twice in a row: the rule of 5.3 for a leg, the
+        group's for a member of a shared instrument (module docstring). What was done and
+        the alert's words."""
+        kind, group = finding[0], self.figures.get(trader.name)
+        if kind is Kind.EXPLAINED_SHARED:
+            return self._share_adopted(trader, books, own)
+        if group is not None and kind in GROUP_WORDS:
+            action = self._cancel_stop(trader) if kind is Kind.OTHER_SIDE else "locked"
+            return action, group_words(kind, group, finding[2])
+        action, rule = "locked", RULES[kind]
+        words = rule.words
+        if rule.adopt:
+            action = self._adopt(trader, finding[1], finding[2], books, own)
+        if action == ADOPTED_STOP_CANCELLED and kind is Kind.EXPLAINED_FEWER:
+            words = FEWER_STOP_CANCELLED
+        if action.startswith(NOT_ADOPTED):
+            words = NOT_ADOPTED_WORDS
+        if rule.cancel_stop:
+            action = self._cancel_stop(trader)
+        return action, words
 
     def alert_only(
         self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]
@@ -226,7 +179,8 @@ class Corrections:
         holds other units: entries locked and alerted, nothing adopted or cancelled, since
         the books read at the start no longer describe the leg."""
         session = self._session
-        session.mismatches += 1
+        if self._first_of_group(trader, finding):
+            session.mismatches += 1
         if trader.lock(RECONCILE_LOCK):
             session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
         words = (
@@ -237,13 +191,36 @@ class Corrections:
         session.alert(AlertKind.RECONCILE_MISMATCH, self._words(trader, finding, books, own, words))
         return "locked"
 
-    def _adopt(self, trader: Trader, finding: Finding, books: LegBooks, own: frozenset[str]) -> str:
-        engine, broker = finding[1], finding[2]
+    def _share_adopted(
+        self, trader: Trader, books: LegBooks, own: frozenset[str]
+    ) -> tuple[str, str]:
+        """A member's share of a difference other orders' trades explain on its shared
+        instrument (`_reconcile_allocate`), adopted as a leg's is: what was done, and the
+        alert's words naming the allocation."""
+        figure = self.figures.get(trader.name, GroupFigure((trader.name,), 0))
+        share, words = figure.share(trader.name), allocation_words(figure, trader.name)
+        if share is None or not share.taken:
+            return "locked", words
+        action = self._adopt(trader, share.units, share.left, books, own, share.price)
+        return action, (NOT_ADOPTED_WORDS if action.startswith(NOT_ADOPTED) else words)
+
+    def _adopt(
+        self,
+        trader: Trader,
+        engine: int,
+        broker: int,
+        books: LegBooks,
+        own: frozenset[str],
+        price: float | None = None,
+    ) -> str:
+        """Adopt the difference of the leg's `engine` units from `broker` units (signed) at
+        `price`, by default the other orders' newest trades' (module docstring)."""
         units, side = abs(engine - broker), "SELL" if broker < engine else "BUY"
         session, guard = self._session, self._session.reconcile.guard
         withdrawn: list[CancelRequest] = []
         try:
-            price = adoption_price(books.external(own), units, side)
+            if price is None:
+                price = adoption_price(books.external(own), units, side)
             # After the last lines a held cancel of the stop is withdrawn before the fill,
             # so the kernel's fit with it cuts the stop to what is left (module docstring).
             withdrawn = guard.withdraw_for_cut(trader.name, broker)
@@ -274,6 +251,28 @@ class Corrections:
             return ADOPTED_STOP_CANCELLED
         return "adopted"
 
+    def _first_of_group(self, trader: Trader, finding: Finding) -> bool:
+        """Whether `finding` is the first act on its difference: always for a strategy
+        alone and for a member's own finding (an orphan, a stop's terms); for a position
+        difference of a shared instrument, only for the first member acting on it, so the
+        group's difference counts and alerts once (module docstring)."""
+        group = self.figures.get(trader.name)
+        if group is None or not isinstance(finding[0], Kind):
+            return True
+        key = (trader.symbol, trader.exchange, finding[0], group.units, finding[2])
+        if key in self._groups_acted:
+            return False
+        self._groups_acted.add(key)
+        return True
+
+    def _stop_id(self, trader: Trader) -> str:
+        """The broker's order ID of `trader`'s working stop before an act changes it ("" for
+        none, "not bound" for one OpenAlgo has not answered yet)."""
+        stop = self._session.stops.leg(trader).stop
+        if stop is None or stop not in trader.working():
+            return ""
+        return trader.venue.order_id_of(stop) or "not bound"
+
     def _cancel_stop(self, trader: Trader) -> str:
         stop = self._session.stops.leg(trader).stop
         if stop is None or stop not in trader.working():
@@ -295,15 +294,39 @@ class Corrections:
         locked: bool = True,
     ) -> str:
         """The alert's words: the leg, the engine's units (as compared), the broker's, the
-        other orders on the instrument, what is done, and the lock."""
+        other orders on the instrument, what is done, and the lock. A member of a shared
+        instrument's words name its group's sum, which the broker's net was judged
+        against (18-multi-strategy 4.6)."""
         units = finding[1] if isinstance(finding[0], Kind) else round(trader.open_units())
         others = sorted({trade.order_id for trade in books.external(own)})
         orders = f"; other orders {', '.join(others)}" if others else ""
         lock = " Entries of the strategy are locked for the rest of the session" if locked else ""
-        return (
-            f"{trader.name} {trader.symbol} {trader.exchange}: the engine holds {units} units, "
-            f"OpenAlgo's books show {books.units}{orders}: {what}.{lock}"
-        )
+        held, shown = f"the engine holds {units} units", f"OpenAlgo's books show {books.units}"
+        group = self.figures.get(trader.name)
+        if group is not None:
+            held += f", {group.units} with {and_join(group.others(trader.name))}'s"
+            shown += " for them together"
+        leg = f"{trader.name} {trader.symbol} {trader.exchange}"
+        return f"{leg}: {held}, {shown}{orders}: {what}.{lock}"
+
+
+def _made(group: GroupFigure, name: str, kind: Any, action: str, stop_id: str) -> tuple[str, str]:
+    """What an act on strategy `name`, a member of `group`, made of it
+    (`Corrections.done`): the allocation, when a difference other orders' trades explain
+    was shared out, and the member's stop (`stop_id`, its broker order ID; "" for none)
+    cut down or cancelled: by its share's adoption, the kernel fitting the stop to what is
+    left (or the held cancel an exit asked for sent), or on the other side by its cancel."""
+    if kind is Kind.OTHER_SIDE:
+        return "", (f"stop {stop_id} cancelled" if stop_id and action == "stop cancelled" else "")
+    if kind is not Kind.EXPLAINED_SHARED:
+        return "", ""
+    share, cut = group.share(name), ""
+    if stop_id and share is not None and share.taken and action.startswith("adopted"):
+        if share.left == 0 or action == ADOPTED_STOP_CANCELLED:
+            cut = f"stop {stop_id} cancelled"
+        else:
+            cut = f"stop {stop_id} cut to {abs(share.left)} units"
+    return group.allocation(), cut
 
 
 __all__ = [
@@ -312,9 +335,4 @@ __all__ = [
     "NOT_ADOPTED",
     "NOT_ADOPTED_WORDS",
     "Corrections",
-    "Finding",
-    "attribute",
-    "in_flight",
-    "order_findings",
-    "own_orders",
 ]

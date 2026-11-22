@@ -12,6 +12,7 @@ values come from the fake's books and the scenario.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import logging
 import typing
@@ -39,6 +40,7 @@ COLUMNS = {
         "strategy",
         "kernel_order",
         "intent_id",
+        "version_id",
         "order_id",
         "purpose",
         "symbol",
@@ -70,6 +72,27 @@ COLUMNS = {
         "source",
         "estimated",
         "derived_from_average",
+    ],
+    "fill_comparison": [
+        "strategy",
+        "version_id",
+        "symbol",
+        "exchange",
+        "order_id",
+        "purpose",
+        "price_type",
+        "side",
+        "units",
+        "live_time",
+        "live_ns",
+        "live_price",
+        "backtest_time",
+        "backtest_ns",
+        "backtest_price",
+        "difference",
+        "rupees",
+        "compared",
+        "reason",
     ],
     "drift": [
         "symbol",
@@ -159,9 +182,10 @@ def test_the_summary_holds_the_days_figures(day):
     assert (day.summary.closed_trades, day.summary.flat, day.flat) == (1, True, True)
 
 
-def test_the_paths_name_the_journal_the_log_and_the_event_stream(day):
-    assert set(day.paths) == {"journal", "log", "events"}
-    assert all(dt.date(2026, 11, 16).isoformat() in day.paths[k] for k in ("log", "events"))
+def test_the_paths_name_the_journal_the_log_the_event_stream_and_the_decisions_file(day):
+    assert set(day.paths) == {"journal", "log", "events", "decisions"}
+    named = ("log", "events", "decisions")
+    assert all(dt.date(2026, 11, 16).isoformat() in day.paths[k] for k in named)
 
 
 @pytest.mark.parametrize("table", list(COLUMNS))
@@ -332,6 +356,16 @@ def test_the_summary_text_is_the_daily_summary_the_alert_sent(world, caplog):
 
 def test_the_repr_names_the_session(day):
     assert repr(day).startswith("SessionResult(LIVE 2026-11-16, broker zerodha, stopped by")
+
+
+@pytest.mark.parametrize(
+    ("gross", "shown"),
+    [(-0.004, "net P&L Rs 0.00,"), (1234567.891, "net P&L Rs 12,34,567.89,")],
+    ids=["a loss below half a paisa, without a minus sign", "Indian digit grouping"],
+)
+def test_the_repr_reads_the_net_pnl_by_the_shared_rupee_rule(day, gross, shown):
+    figures = dataclasses.replace(day.summary, gross_pnl=gross, charges=0.0)
+    assert shown in repr(dataclasses.replace(day, summary=figures))
 
 
 # ----- a leg the close names, unconfirmed ---------------------------------------------------

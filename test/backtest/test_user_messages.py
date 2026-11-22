@@ -74,7 +74,7 @@ def _result() -> bt.Result:
 NOT_BUILT = {
     "weekly strategy live": lambda: bt.live(Weekly, None, capital=100_000, max_daily_loss=1_000),
     "bt.rebalance": lambda: bt.rebalance(),
-    "several strategies": lambda: bt.backtest([Quarterly, Quarterly], capital=100_000),
+    "bt.optimize of a list": lambda: bt.optimize([Quarterly, Weekly], capital=100_000),
     "Result.strategy": lambda: _result().strategy("Quarterly"),
     "Result.combined": lambda: _result().combined,
     "Result.correlation": lambda: _result().correlation,
@@ -224,6 +224,8 @@ def test_the_walk_reaches_the_public_surface():
         "openalgo.backtest.run.backtest",
         "openalgo.backtest.run.live",
         "openalgo.backtest.run.record",
+        "openalgo.backtest.portfolio_result.PortfolioResult",
+        "openalgo.backtest.portfolio_result.PortfolioResult.strategy",
         "openalgo.backtest.session_result.SessionResult",
         "openalgo.backtest.session_result.SessionResult.summary_text",
         "openalgo.backtest.session_result.RecordSummary",

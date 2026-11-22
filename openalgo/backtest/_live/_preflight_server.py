@@ -1,9 +1,10 @@
 """The preflight checks that read OpenAlgo's answers (`preflight`, 08-live-trading section
 4): the OpenAlgo session (`ping` and `funds`), the broker, the mode funds was answered
 in, the funds against the capital, each instrument's facts (`symbol`; an index is
-refused, since it cannot be traded), the broker's login (one `quotes` call), and the
-intervals (`intervals`): the strategy's, and the 1-minute candles the live bars are
-checked against (D27).
+refused, since it cannot be traded), each futures and options contract's expiry in that
+answer against the reference tables (`_preflight_expiry`), the broker's login (one
+`quotes` call), and the intervals (`intervals`): the strategy's, and the 1-minute
+candles the live bars are checked against (D27).
 
 The answers are read as the SDK returns them (openalgo/account.py, openalgo/data.py): the
 server's JSON on HTTP 200, else the SDK's own error, whose message "HTTP <code>: <body>"
@@ -26,9 +27,11 @@ import httpx
 from .._layout import NANOS_PER_MINUTE, parse_interval
 from ..errors import ConfigError
 from ..reference.symbols import INDEX_EXCHANGES
+from ..report._format import indian_digits
 from ._answers import server_answer
 from ._guard_answers import SUCCESS
 from ._order_trades import UNSUPPORTED_BROKERS, UNVERIFIED_BROKERS
+from ._preflight_expiry import expiry_checks
 from ._preflight_plan import WARNING, Check, InstrumentFacts, PreflightPlan, positive_amount
 from ._types import Mode, mode_of
 from .bars import DEFAULT_INTERVAL_NS
@@ -65,6 +68,9 @@ class PreflightClient(Protocol):
     def intervals(self) -> Mapping[str, Any]:
         """The server's answer to `/api/v1/intervals`."""
 
+    def holidays(self, year: int) -> Mapping[str, Any]:
+        """The server's answer to `/api/v1/market/holidays` for `year`."""
+
 
 @dataclass(frozen=True)
 class ServerFindings:
@@ -97,6 +103,7 @@ def read_server(client: PreflightClient, plan: PreflightPlan) -> ServerFindings:
     found = [_symbol_check(client, symbol, exchange) for symbol, exchange in plan.instruments]
     checks += [check for check, _ in found]
     facts = tuple(facts for _, facts in found if facts is not None)
+    checks += expiry_checks(plan.contracts, facts)
     # One quote shows the broker answers. With no instrument found there is none to ask
     # for, and their own checks have failed.
     if facts:
@@ -191,11 +198,12 @@ def _mode_check(funds: Mapping[str, Any], mode: Mode) -> Check:
 
 
 def _funds_check(available: float, capital: float, mode: Mode) -> Check:
+    cash, needed = indian_digits(available), indian_digits(capital)
     if available >= capital:
         return Check(
             "funds",
             True,
-            f"{available:,.2f} rupees of available cash cover the capital of {capital:,.2f} rupees",
+            f"{cash} rupees of available cash cover the capital of {needed} rupees",
         )
     where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
     # Some brokers answer an expired login with zeros instead of an error.
@@ -208,8 +216,8 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
     return Check(
         "funds",
         False,
-        f"OpenAlgo reports {available:,.2f} rupees of available cash (collateral not "
-        f"counted), less than the capital of {capital:,.2f} rupees: lower capital, or add "
+        f"OpenAlgo reports {cash} rupees of available cash (collateral not "
+        f"counted), less than the capital of {needed} rupees: lower capital, or add "
         f"funds to {where}{expired}",
         # The sandbox's funds never reach the broker: only a broker's zero hints at it.
         login=available == 0 and mode is Mode.LIVE,
@@ -278,7 +286,8 @@ def _facts(symbol: str, exchange: str, data: Mapping[str, Any]) -> InstrumentFac
     freeze = 0.0 if given is None else _number(given)
     if freeze is None or freeze < 0 or not freeze.is_integer():
         return f"no usable freeze quantity ({given!r})"
-    return InstrumentFacts(symbol, exchange, int(lot_size), tick_size, int(freeze) or None)
+    expiry = data.get("expiry")
+    return InstrumentFacts(symbol, exchange, int(lot_size), tick_size, int(freeze) or None, expiry)
 
 
 def _quotes_check(client: PreflightClient, facts: InstrumentFacts) -> Check:

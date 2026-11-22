@@ -3,21 +3,35 @@ of the run's rejection warnings (`_rejections`).
 
 The codes are the kernel's (`RejectCode::code` in `rust/oa_bt/src/exec/checks.rs`), except
 `rate_limit`, which no kernel check makes: a backtest enforces no order rate limit. `venue`
-and `exit_cover` are a live session's: the broker's own rejection of an order, and a
+and `exit_cover` are a live session's: the broker's own rejection of an order (or the
+session's refusal to send a resting reversal or a resting order against the open
+position, `_live/_session_unsent`), and a
 reduce-only order that would leave more units resting to close a position than it has
 (`rust/oa_bt/src/engine/venue_cover.rs`). So are `live_lock` and `live_in_flight`, the
 entry gates a live session adds (`rust/oa_bt/src/engine/venue_gates.rs`), and the freeze
-quantity is a cap on the whole position there, not only on each order. Each
-entry is (what happened, what to do). The product rule covers three refusals that need
-different advice, so it has one entry per case, told apart by the order and its
+quantity is a cap on the whole position there, not only on each order; and
+`group_other_side` and `shared_resting`, its gates on a symbol several of its strategies
+trade (`rust/oa_bt/src/engine/venue_group.rs`). `account_margin` and
+`account_loss_gate` are a portfolio run's: the shared account's free cash refusing an
+opening fill, or a sized order at its submission, that the strategy's own free cash
+covers, and the account's daily loss limit
+locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`), and so are
+`account_trade_limit` and `account_profit_gate`. `trade_limit`, `daily_profit_gate` and
+`order_value_limit` are a strategy's daily limits (`rust/oa_bt/src/engine/daily_caps.rs`,
+18-multi-strategy 2.5a). Each entry is (what happened, what to do). The product rule
+covers three refusals that need different advice, so it has one entry per case, told
+apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
 a mistake: its line names the window's times (`_rejections.entry_window_warning`).
 
 `RUN_RULE_CODES` are the refusals of a rule of the run working as it intends: the MIS
 entry window (given or the calendar's default), the limits a strategy or run sets
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
-state they lead to) and the delay a run holds its orders for (delay_entries=,
-delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`).
+state they lead to, the daily limits max_trades_per_day, daily_profit_target and
+max_order_value, and the account's daily loss limit, daily profit target and trade cap of
+a portfolio run) and the delay a run holds its orders for (delay_entries=,
+delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`); each is told
+once in `result.warnings` (`_rejections`).
 """
 
 from __future__ import annotations
@@ -27,8 +41,25 @@ from types import MappingProxyType
 PRODUCT_RULE = "product_rule"
 ENTRY_WINDOW = "entry_window"
 DELAY_PAST_CLOSE = "delay_past_close"
+ACCOUNT_LOSS_GATE = "account_loss_gate"
+ACCOUNT_MARGIN = "account_margin"
+ACCOUNT_PROFIT_GATE = "account_profit_gate"
+ACCOUNT_TRADE_LIMIT = "account_trade_limit"
+#: The codes of a strategy's daily limits (18-multi-strategy 2.5a).
+DAILY_LIMIT_CODES = ("trade_limit", "daily_profit_gate", "order_value_limit")
 RUN_RULE_CODES = frozenset(
-    {ENTRY_WINDOW, "daily_loss_gate", "cooldown", "max_positions", "halted", DELAY_PAST_CLOSE}
+    {
+        ENTRY_WINDOW,
+        "daily_loss_gate",
+        "cooldown",
+        "max_positions",
+        "halted",
+        DELAY_PAST_CLOSE,
+        ACCOUNT_LOSS_GATE,
+        ACCOUNT_PROFIT_GATE,
+        ACCOUNT_TRADE_LIMIT,
+        *DAILY_LIMIT_CODES,
+    }
 )
 
 REASONS = MappingProxyType(
@@ -101,9 +132,17 @@ REASONS = MappingProxyType(
             "set allow_averaging_down = True or loosen the scale-in limits",
         ),
         "venue": (
-            "the broker or the exchange refused the order in a live session, for a "
-            "reason of its own",
-            "read the broker's reason in the session's journal and the OpenAlgo order book",
+            "in a live session, the broker or the exchange refused the order for a reason "
+            "of its own, or the session did not send it: a resting reversal (reverse=True "
+            "on a LIMIT, SL or SL-M order), which a live session takes as a MARKET order "
+            "only, or a resting order against the open position beyond what its stop "
+            "leaves to close, since at the broker either would work beside the position's "
+            "stop and both could fill",
+            "for a broker's refusal, read its reason in the session's journal and the "
+            "OpenAlgo order book; for a resting reversal, which the session's warnings "
+            "name, submit the reversal as a MARKET order, or exit and enter separately; "
+            "for a resting order against the open position, set target= or targets= on the "
+            "entry, or exit with a MARKET order",
         ),
         "exit_cover": (
             "a live session keeps at most the position's units resting to close it, so "
@@ -120,6 +159,50 @@ REASONS = MappingProxyType(
             "the session's log and alerts name the lock; entries resume when it lifts, and "
             "a lock that stands for the day needs a new session",
         ),
+        "account_margin": (
+            "in a portfolio run on a shared account, the margin the order needed was within "
+            "the strategy's own free cash but more than the account's free cash: the other "
+            "strategies held it",
+            "give the account more funds (account_capital=), lower the size, or give each "
+            'strategy its own capital with pool="separate"',
+        ),
+        ACCOUNT_LOSS_GATE: (
+            "an entry came after the account's loss for the day reached "
+            "account_max_daily_loss, which stops every strategy's new entries for the rest "
+            "of the day",
+            "this is the account's limit working; raise account_max_daily_loss if it is too tight",
+        ),
+        "trade_limit": (
+            "an entry came once the strategy's entries of the day (those that filled and "
+            "those still working) had reached max_trades_per_day; a reversal at the cap was "
+            "cut to its close, its opening part refused",
+            "this is the cap working: exits still go; raise max_trades_per_day if it is too tight",
+        ),
+        ACCOUNT_TRADE_LIMIT: (
+            "an entry came once the entries of the day of every strategy of the account "
+            "together had reached account_max_trades_per_day",
+            "this is the account's cap working: exits still go; raise "
+            "account_max_trades_per_day if it is too tight",
+        ),
+        "daily_profit_gate": (
+            "an entry or add came after the day's profit reached daily_profit_target, which "
+            "exits every position and stops new entries for the rest of the day",
+            "this is the target working; raise daily_profit_target to keep trading longer",
+        ),
+        ACCOUNT_PROFIT_GATE: (
+            "an entry or add came after the account's profit for the day reached "
+            "account_daily_profit_target, which exits every strategy's positions and stops "
+            "their new entries for the rest of the day",
+            "this is the account's target working; raise account_daily_profit_target to "
+            "keep trading longer",
+        ),
+        "order_value_limit": (
+            "an entry or add was worth more than max_order_value (its units times its "
+            "limit, an SL-M's trigger or the last close, times the multiplier), or was a "
+            "MARKET order of an instrument with no bar yet, which has no price to value it "
+            "at; exits are never refused by it",
+            "lower the size, or raise max_order_value",
+        ),
         "live_in_flight": (
             "a live session sends no entry or add while another order of the symbol is "
             "working (an entry whose fill is not reported yet, a resting order), so that "
@@ -130,6 +213,19 @@ REASONS = MappingProxyType(
             "enter, add or close once the earlier order has filled or been cancelled: "
             "check self.orders and self.position in on_bar, and close a position with "
             "self.exit(), which cancels the orders on its closing side first",
+        ),
+        "group_other_side": (
+            "another strategy of the live session holds the symbol, or is entering it, on "
+            "the other side: a broker nets the two into one position, so a position on the "
+            "other side is refused",
+            "exit first, or trade the other side in its own session on another account",
+        ),
+        "shared_resting": (
+            "the symbol is traded by several strategies of the live session, which take "
+            "only market orders there: a resting LIMIT, SL or SL-M order would keep their "
+            "combined position from being checked against the broker's",
+            "use market orders on that symbol; targets and the leg's stop (target=, stop=) "
+            "are held for you",
         ),
     }
 )
@@ -152,6 +248,11 @@ PRODUCT_RULE_CASES = MappingProxyType(
 )
 
 __all__ = [
+    "ACCOUNT_LOSS_GATE",
+    "ACCOUNT_MARGIN",
+    "ACCOUNT_PROFIT_GATE",
+    "ACCOUNT_TRADE_LIMIT",
+    "DAILY_LIMIT_CODES",
     "DELAY_PAST_CLOSE",
     "ENTRY_WINDOW",
     "PRODUCT_RULE",

@@ -41,7 +41,8 @@ exit again at a later bar's open and places a stop again that ended at the broke
 request of its own (16-session-design 4.8, 4.10), so a sale by hand beside it sells
 twice: an alert sent while the session runs (the give-up of an exit, a safe stop's
 reminder) says to end the session first, then what the leg asks for (`while_running`,
-`open_while_running`).
+`open_while_running`). An instrument held for the day is the exception: the session sends
+nothing more for it today, so its square-off alert gives the note (`_stops_held_day`).
 
 The notes are taken once the loop step's commands are handed over (`_session_stop`): an
 order not sent then was not handed to the order worker (after a guard lock, or an exit
@@ -55,9 +56,10 @@ from typing import Any
 
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
+from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
-from ._types import Purpose
+from ._types import MARKET, Purpose
 
 #: How an alert says a leg has no stop.
 NO_STOP = "no stop at the broker"
@@ -147,9 +149,13 @@ def protected(stops: Any, trader: Trader) -> bool:
 
 def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     """The note of `trader`'s position left open once the session has ended (module
-    docstring); with `books` False it leaves out the units OpenAlgo's books showed, for a
-    caller whose words name them."""
+    docstring); for an instrument held for the day, why nothing can be sent for it and
+    what to do, in place of the advice (`_stops_held_day`). With `books` False it leaves
+    out the units OpenAlgo's books showed, for a caller whose words name them."""
     parts, advice = _note(stops, trader, books=books)
+    held = stops.day.words(trader, check=advice == _CHECK)
+    if held is not None:
+        return "; ".join([*parts, held])
     if advice == _CHECK:
         return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts
@@ -219,7 +225,7 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
     leg, working = stops.leg(trader), trader.working()
     sent = _working(stops, trader)
     unsent = [kernel_order for kernel_order in working if kernel_order not in leg.orders]
-    parts = [*sent]
+    parts = [*_held_words(stops, trader), *sent]
     if unsent:
         parts.append(f"order {', '.join(f'o{k}' for k in unsent)} not sent")
     stop_part = _stop_words(stops, trader)
@@ -227,7 +233,8 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
     if broker is not None:
         # The broker holds other units than the engine counts, or the other side: neither
         # a sale by hand of the engine's units nor its stop fits what the broker holds.
-        shown = [f"OpenAlgo's books showed {broker} units at the last read"] if books else []
+        figure = stops.books_words(trader, broker)
+        shown = [f"OpenAlgo's books showed {figure} at the last read"] if books else []
         return [*parts, stop_part, *shown], _CHECK
     if stop_part == NO_STOP and not sent:
         # Nothing sent works toward the position: only a sale by hand closes it.
@@ -239,6 +246,16 @@ def _note(stops: Any, trader: Trader, *, books: bool = True) -> tuple[list[str],
         # operator checks, not a stop it never was to have.
         parts.append(stop_part)
     return parts, _CHECK
+
+
+def _held_words(stops: Any, trader: Trader) -> list[str]:
+    """The leg's unprotected reason when a closing order's rejection on a shared
+    instrument holds it (18-multi-strategy 4.14: "listed in open_positions"), as the
+    first part of its note; none otherwise."""
+    window = stops.windows.current(trader.name)
+    if window is None or window.reason not in (REFUSED_FOR_MARGIN, CLOSE_REJECTED):
+        return []
+    return [f"{window.reason}: the broker may not hold these units"]
 
 
 def _working(stops: Any, trader: Trader) -> list[str]:
@@ -261,7 +278,7 @@ def _how_far(trader: Trader, watched: Watched) -> str:
     if watched.state in IN_FLIGHT:
         return f"in flight, {_IN_FLIGHT_WORDS[watched.state]}"
     order = order_of(trader, watched.kernel_order)
-    if order is not None and order["order_type"] == "MARKET":
+    if order is not None and order["order_type"] == MARKET:
         return f"in flight, {_ACCEPTED_WORDS}"
     return "resting at the broker"
 

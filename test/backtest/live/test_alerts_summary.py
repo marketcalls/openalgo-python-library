@@ -88,6 +88,31 @@ def test_a_live_day_with_a_loss_that_ended_open_reads_so():
     )
 
 
+def test_the_daily_limits_set_follow_the_strategies_line():
+    limited = replace(
+        A_GOOD_DAY,
+        limits=("ema_cross at most 3 trades a day", "account trade cap 4 trades a day"),
+    )
+    lines = summary_text(limited).splitlines()
+    assert lines[1:3] == [
+        "Strategies  : ema_cross, orb",
+        "Limits      : ema_cross at most 3 trades a day; account trade cap 4 trades a day",
+    ]
+    assert "Limits" not in summary_text(A_GOOD_DAY)
+
+
+def test_the_strategies_line_names_each_strategys_version_id():
+    versioned = replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e", "0c4d5e6f7a8b"))
+    assert line(versioned, "Strategies") == (
+        "ema_cross (version 1f3a9c0b7d2e), orb (version 0c4d5e6f7a8b)"
+    )
+
+
+def test_a_version_id_short_of_one_per_strategy_is_refused():
+    with pytest.raises(ConfigError, match="names 2 strategies and gives 1 version ids"):
+        replace(A_GOOD_DAY, versions=("1f3a9c0b7d2e",))
+
+
 def test_the_alerts_line_is_left_out_when_every_alert_reached_openalgo():
     assert "Alerts" not in summary_text(A_GOOD_DAY)
 
@@ -102,6 +127,12 @@ def test_the_net_pnl_is_the_gross_pnl_less_the_modelled_charges():
 
 def test_rupees_use_indian_digit_grouping():
     assert line(replace(A_GOOD_DAY, gross_pnl=1234567.891), "Gross P&L") == "Rs 12,34,567.89"
+
+
+def test_a_pnl_that_rounds_to_zero_reads_without_a_minus_sign():
+    # A loss of 0.004 rupees, less than half a paisa, with no charges: "Rs 0.00" twice.
+    flat_day = replace(A_GOOD_DAY, gross_pnl=-0.004, charges=0.0)
+    assert (line(flat_day, "Gross P&L"), line(flat_day, "Net P&L")) == ("Rs 0.00", "Rs 0.00")
 
 
 def test_slippage_with_no_fill_compared_reads_not_compared():
@@ -138,6 +169,24 @@ def test_slippage_with_every_market_fill_left_out_reads_not_compared_with_their_
 )
 def test_the_market_fills_the_slippage_leaves_out_are_counted_on_its_line(count, shown):
     assert line(replace(A_GOOD_DAY, slippage_not_compared=count), "Slippage") == shown
+
+
+@pytest.mark.parametrize(
+    ("stop_slippage", "count", "shown"),
+    [
+        (None, 1, "not compared (1 stop fill: see fill_comparison)"),
+        (None, 2, "not compared (2 stop fills: see fill_comparison)"),
+        (4.5, 1, "Rs 4.50 worse than the backtest (1 stop fill not compared: see fill_comparison)"),
+    ],
+    ids=["one left out", "two left out", "one of several left out"],
+)
+def test_the_stop_fills_left_out_point_to_the_fill_comparison_for_their_reason(
+    stop_slippage, count, shown
+):
+    # A stop fill is left out for one of several reasons (no bar reached its trigger, a
+    # repriced stop, a bar that opened beyond a stop-limit's limit); the row names it.
+    day = replace(A_GOOD_DAY, stop_slippage=stop_slippage, stop_slippage_not_compared=count)
+    assert line(day, "Stop fills") == shown
 
 
 @pytest.mark.parametrize(
@@ -276,3 +325,25 @@ def test_a_leg_not_confirmed_is_named_after_the_legs_that_differ():
 def test_a_leg_not_confirmed_is_named_in_words(words):
     with pytest.raises(ConfigError, match="unconfirmed names each leg in words"):
         replace(A_GOOD_DAY, unconfirmed=(words,))
+
+
+#: The lines of two instruments several strategies of the session share (18-multi-strategy
+#: 4.11), as the close words them.
+SHARED_SBIN = "SBIN NSE (A and B): OpenAlgo's net 90 by the last read, their sum 90: they agree"
+SHARED_INFY = "INFY NSE (C and D): OpenAlgo's net 0 by the last read, their sum 40: they differ"
+
+
+def test_each_shared_instrument_has_a_line_after_the_reconcile_line():
+    lines = summary_text(replace(A_GOOD_DAY, shared=(SHARED_SBIN, SHARED_INFY))).splitlines()
+    at = next(i for i, text in enumerate(lines) if text.startswith("Reconcile"))
+    assert lines[at + 1 : at + 3] == [
+        f"Shared      : {SHARED_SBIN}",
+        f"Shared      : {SHARED_INFY}",
+    ]
+    assert lines[at + 3].startswith("End state")
+
+
+@pytest.mark.parametrize("words", ["", 5], ids=["empty", "not text"])
+def test_a_shared_instrument_is_named_in_words(words):
+    with pytest.raises(ConfigError, match="shared names each leg in words"):
+        replace(A_GOOD_DAY, shared=(words,))

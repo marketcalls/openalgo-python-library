@@ -131,10 +131,18 @@ def test_built_in_providers_are_registered(registry):
     assert registry.providers == {"openalgo": OpenAlgoProvider, "frame": Frame, "files": Files}
 
 
-def test_no_yfinance_provider_ships_with_the_engine(registry):
-    assert "yfinance" not in available_providers()
-    code = "import sys, openalgo.backtest.data; assert 'yfinance' not in sys.modules"
-    assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
+def test_the_data_layer_imports_no_package_beyond_the_sdk(registry):
+    # No third-party downloader ships with the engine: importing the data layer after
+    # openalgo loads nothing outside openalgo and the standard library.
+    code = (
+        "import sys, openalgo; "
+        "before = {m.split('.')[0] for m in sys.modules}; "
+        "import openalgo.backtest.data; "
+        "added = {m.split('.')[0] for m in sys.modules} - before - set(sys.stdlib_module_names); "
+        "assert not added, added"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_built_in_provider_is_built_with_its_options(registry):

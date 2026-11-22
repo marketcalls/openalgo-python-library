@@ -3,7 +3,9 @@ a request"), split from `worker` so each module keeps one job.
 
 - A Place is `OrderPath.send`, posted as `SendResult`; a bound STOP then records its
   leg's journal stop (`_worker_stops`). An entry or add decided more than
-  `ENTRY_STALE_AFTER_S` before is `NotSent(stale)` instead.
+  `ENTRY_STALE_AFTER_S` before is `NotSent(stale)` instead, and one of a strategy whose
+  entries the loop has locked since it was queued is `NotSent(entries_locked)`, read just
+  before the send (`_locked_entries`, 2.4.0 item P3-1).
 - A Modify or Cancel of an order the order path knows terminal is `NotSent(order_ended)`;
   else `modify` or `cancel`, and an unanswered or refused answer leaves the order
   unsettled, its further requests held until a read settles it (`_worker_settle`).
@@ -43,9 +45,11 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._answers import server_answer
+from ._locked_entries import LockedEntries, locked_words
 from ._order_answers import Outcome
 from ._order_check import OrderCheck
 from ._order_resolve import same_leg
+from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
 from ._worker_news import NewsHandover
@@ -90,6 +94,9 @@ _NOTICE_NS = round(HELD_NOTICE_EVERY_S * NANOS_PER_SECOND)
 _CHANGE_WORDS = {ModifyRequest: "modify", CancelRequest: "cancel"}
 #: The books a reconciliation reads, as `inbox.Books` names them (5.2).
 _BOOKS = ("positionbook", "orderbook", "tradebook", "funds")
+#: The books of a held cancel's read, in order: the position book, then the order book
+#: when asked for (`ReadPositions.orders`).
+_HELD_CANCEL_BOOKS = ("positionbook", "orderbook")
 
 
 class Sender:
@@ -97,7 +104,8 @@ class Sender:
     the book reads, `client` (the orders client); `journal` is handle W (its unbound
     intents tell a hold), `alerts` the session's; `guard`, `queue`, `settle`, `stops` and
     `news` are the worker's; `post` puts a message on the loop's inbox, `calling` marks the
-    worker busy for a call that may reach the server, `now` gives UTC nanoseconds."""
+    worker busy for a call that may reach the server, `now` gives UTC nanoseconds, and
+    `locked` is the record of the strategies whose entries the loop has locked."""
 
     def __init__(
         self,
@@ -114,6 +122,7 @@ class Sender:
         post: Callable[[Message], None],
         calling: Callable[[], AbstractContextManager[None]],
         now: Callable[[], int],
+        locked: LockedEntries,
     ) -> None:
         self._client = client
         self._path = path
@@ -127,6 +136,7 @@ class Sender:
         self._post = post
         self._calling = calling
         self._now = now
+        self._locked = locked
         # When each protective request put back was last noticed (UTC nanoseconds).
         self._notices: dict[int, int] = {}
 
@@ -205,6 +215,13 @@ class Sender:
             age = (now - request.intent.created_ns) / NANOS_PER_SECOND
             self._post(NotSent(request, NotSentReason.STALE, f"decided {age:.1f} s before"))
             return
+        if request.intent.purpose in ENTRY_PURPOSES:
+            # Read last, just before the send: the loop may have locked the strategy's
+            # entries since the entry was queued (`_locked_entries`).
+            locks = self._locked.reasons(request.intent.strategy)
+            if locks:
+                self._post(NotSent(request, NotSentReason.ENTRIES_LOCKED, locked_words(locks)))
+                return
         try:
             with self._calling():
                 outcome = self._path.send(request.intent)
@@ -329,10 +346,13 @@ class Sender:
         self._alerts.send(AlertKind.ERROR, text)
 
     def _read(self, request: ReadBooks | ReadPositions) -> None:
-        """The books of a reconciliation, or the position book for a held cancel, each
-        answer checked by the guard (the analyzer switch routes them too)."""
+        """The books of a reconciliation, or the position book for a held cancel (and the
+        order book after it when asked for), each answer checked by the guard (the
+        analyzer switch routes them too)."""
         started = self._now()
-        names = _BOOKS if isinstance(request, ReadBooks) else ("positionbook",)
+        names = _BOOKS
+        if isinstance(request, ReadPositions):
+            names = _HELD_CANCEL_BOOKS if request.orders else _HELD_CANCEL_BOOKS[:1]
         answers = {}
         for name in names:
             if self._guard.locked:
@@ -347,7 +367,7 @@ class Sender:
             ended = self._now()
             self._post(Books(request.generation, **answers, started_ns=started, ended_ns=ended))
         else:
-            self._post(PositionRows(answers["positionbook"], started))
+            self._post(PositionRows(answers["positionbook"], started, answers.get("orderbook")))
 
 
 __all__ = ["HELD_NOTICE_EVERY_S", "REQUEUE_AFTER_S", "Sender"]

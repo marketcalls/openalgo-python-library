@@ -1,6 +1,6 @@
-"""The data and notification routes: `symbol`, `intervals`, `quotes`, `history` and
-`telegram/notify`, each a function of the venue and the request's JSON that returns
-(body, HTTP status), run under the venue's lock.
+"""The data and notification routes: `symbol`, `intervals`, `quotes`, `history`,
+`market/holidays` and `telegram/notify`, each a function of the venue and the
+request's JSON that returns (body, HTTP status), run under the venue's lock.
 
 Quotes and history come from the broker in either mode, so an expired login fails them
 (services/quotes_service.py and history_service.py answer the broker's exception with
@@ -19,6 +19,7 @@ from typing import Any
 from openalgo.backtest._layout import NANOS_PER_SECOND
 
 from .answers import EXPIRED_TOKEN, UNKNOWN_SYMBOL, Unmodelled
+from .holidays import holidays_answer
 from .log import TELEGRAM
 from .rows import symbol_row
 from .schema import VALID_EXCHANGES
@@ -131,6 +132,15 @@ def history(venue: Venue, payload: dict[str, Any]) -> Answer:
         for candle in market.candles(payload["start_date"], payload["end_date"])
     ]
     return {"status": "success", "data": rows}, 200
+
+
+def holidays(venue: Venue, payload: dict[str, Any]) -> Answer:
+    """`market/holidays` (services/market_calendar_service.py): the rows of the year
+    asked for, from OpenAlgo's own table; the server serves 2020 to 2050."""
+    year = payload.get("year")
+    if not isinstance(year, int) or not 2020 <= year <= 2050:
+        return {"status": "error", "message": "Year must be between 2020 and 2050"}, 400
+    return holidays_answer(year, venue.holidays), 200
 
 
 def telegram_notify(venue: Venue, payload: dict[str, Any]) -> Answer:

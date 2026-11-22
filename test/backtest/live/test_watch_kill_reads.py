@@ -22,6 +22,7 @@ from openalgo.backtest._live._kill_switch import (
     KILL_READ_BACKOFF_S,
     KillSwitch,
 )
+from openalgo.backtest._live._margin_reject import MarginHolds
 from openalgo.backtest._live._worker_queue import ReadPositions
 from openalgo.backtest._live.inbox import PositionRows
 
@@ -110,7 +111,8 @@ def book(units: int | None) -> dict:
 
 class Loop:
     """The session loop double: its clock, its strategy, the worker it hands requests to,
-    and the events and alerts it was given."""
+    the events and alerts it was given, the strategy's instrument group (it alone), and
+    the positions a closing order's rejection holds (none here: no shared instrument)."""
 
     locked = False
 
@@ -122,6 +124,8 @@ class Loop:
         self.alerts: list[str] = []
         arguments = SimpleNamespace(on_stop="keep")
         self.parts = SimpleNamespace(spec=SimpleNamespace(arguments=arguments))
+        self.margin = MarginHolds(self)
+        self.groups = SimpleNamespace(members=lambda trader: (trader,), shared=lambda trader: False)
 
     def now(self) -> int:
         return self.clock

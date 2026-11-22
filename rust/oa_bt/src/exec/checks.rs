@@ -15,8 +15,9 @@
 //! quantity (deny), the product rules (no delivery short, no trading an index, no GTT
 //! on MIS), the entry window and market closed; the trading-state gate (daily loss
 //! gate, halted), cooldown, maximum positions and the scale-in limits are risk rules
-//! (`rms::TradingLock`, `rms::entry_gates`, `rms::scale_in`). Not built yet: margin at
-//! submission and the order rate limit.
+//! (`rms::TradingLock`, `rms::entry_gates`, `rms::scale_in`), and so are the daily trade
+//! caps and the order value cap (`engine::daily_caps`). Not built yet: margin at
+//! submission and the order rate limit (a live session's order worker paces its calls).
 
 use crate::model::{Product, Side, TsNanos};
 
@@ -80,11 +81,43 @@ pub enum RejectCode {
     /// wait past the last instant it could fill from: its session's close for an
     /// intraday order, the run's last strategy bar for any order.
     DelayPastClose = 19,
+    /// In a portfolio run on a shared account, an opening fill whose margin the strategy's
+    /// own free cash covers but the account's free cash does not: the other strategies
+    /// hold it (`engine::account_link`).
+    AccountMargin = 20,
+    /// In a portfolio run, an entry or add after the account's daily loss limit was
+    /// breached, until the next session boundary (`engine::account_breach`).
+    AccountLossGate = 21,
+    /// In a live session, an entry, add or reversal that would put the strategy's position
+    /// on the other side of the one the other strategies of its instrument hold or are
+    /// entering (`Engine::set_group_side`; `engine::venue_group`).
+    GroupOtherSide = 22,
+    /// In a live session, a strategy order that rests (LIMIT, SL, SL-M) on an instrument
+    /// several strategies of the session trade (`Engine::set_shared`;
+    /// `engine::venue_group`).
+    SharedResting = 23,
+    /// An entry (an order that opens a position from flat, or a reversal's opening part)
+    /// once the strategy's entries of the IST session day reached `max_trades_per_day`
+    /// (18-multi-strategy 2.5a; `engine::daily_caps`).
+    TradeLimit = 24,
+    /// An entry once the entries of the session day of every strategy of a portfolio run
+    /// or live session together reached `account_max_trades_per_day` (`engine::daily_caps`).
+    AccountTradeLimit = 25,
+    /// An entry or add after the strategy's day reached its `daily_profit_target`, until
+    /// the next session (`engine::daily_caps`).
+    DailyProfitGate = 26,
+    /// In a portfolio run, an entry or add after the account's day reached
+    /// `account_daily_profit_target`, until the next session boundary
+    /// (`engine::account_breach`).
+    AccountProfitGate = 27,
+    /// An entry or add whose value (units times the price the order is judged at times
+    /// the instrument's multiplier) is above `max_order_value` (`engine::daily_caps`).
+    OrderValueLimit = 28,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 20] = [
+    pub const ALL: [RejectCode; 29] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -105,6 +138,15 @@ impl RejectCode {
         RejectCode::LiveLock,
         RejectCode::LiveInFlight,
         RejectCode::DelayPastClose,
+        RejectCode::AccountMargin,
+        RejectCode::AccountLossGate,
+        RejectCode::GroupOtherSide,
+        RejectCode::SharedResting,
+        RejectCode::TradeLimit,
+        RejectCode::AccountTradeLimit,
+        RejectCode::DailyProfitGate,
+        RejectCode::AccountProfitGate,
+        RejectCode::OrderValueLimit,
     ];
 
     /// The code string used in events and results.
@@ -130,6 +172,15 @@ impl RejectCode {
             RejectCode::LiveLock => "live_lock",
             RejectCode::LiveInFlight => "live_in_flight",
             RejectCode::DelayPastClose => "delay_past_close",
+            RejectCode::AccountMargin => "account_margin",
+            RejectCode::AccountLossGate => "account_loss_gate",
+            RejectCode::GroupOtherSide => "group_other_side",
+            RejectCode::SharedResting => "shared_resting",
+            RejectCode::TradeLimit => "trade_limit",
+            RejectCode::AccountTradeLimit => "account_trade_limit",
+            RejectCode::DailyProfitGate => "daily_profit_gate",
+            RejectCode::AccountProfitGate => "account_profit_gate",
+            RejectCode::OrderValueLimit => "order_value_limit",
         }
     }
 
@@ -349,12 +400,46 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 20);
+        assert_eq!(codes.len(), 29);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
         assert!(codes.contains(&"live_lock") && codes.contains(&"live_in_flight"));
         assert!(codes.contains(&"delay_past_close"));
+    }
+
+    #[test]
+    fn a_portfolio_runs_account_refuses_with_codes_of_its_own() {
+        assert_eq!(RejectCode::AccountMargin.code(), "account_margin");
+        assert_eq!(RejectCode::AccountLossGate.code(), "account_loss_gate");
+    }
+
+    #[test]
+    fn a_live_sessions_shared_instrument_refuses_with_codes_of_its_own() {
+        assert_eq!(RejectCode::GroupOtherSide.code(), "group_other_side");
+        assert_eq!(RejectCode::SharedResting.code(), "shared_resting");
+    }
+
+    #[test]
+    fn the_daily_limits_refuse_with_codes_of_their_own() {
+        let codes = [
+            RejectCode::TradeLimit,
+            RejectCode::AccountTradeLimit,
+            RejectCode::DailyProfitGate,
+            RejectCode::AccountProfitGate,
+            RejectCode::OrderValueLimit,
+        ]
+        .map(RejectCode::code);
+        assert_eq!(
+            codes,
+            [
+                "trade_limit",
+                "account_trade_limit",
+                "daily_profit_gate",
+                "account_profit_gate",
+                "order_value_limit"
+            ]
+        );
     }
 
     #[test]

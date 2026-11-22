@@ -195,6 +195,20 @@ def margin_assumption(
     return "; ".join(parts)
 
 
+def margin_for(setting: MarginSetting, instruments: list[Instrument]) -> MarginSetting:
+    """The part of `setting` that a run trading `instruments` uses: one rule when it
+    trades a future, a dict's rules of the underlyings it trades as futures, else None
+    (a portfolio run gives each strategy this part of the run's `margin=`, so that a
+    strategy is never told of another's underlyings)."""
+    traded = _futures_underlyings(instruments)
+    if setting is None or not traded:
+        return None
+    if not isinstance(setting, dict):
+        return setting
+    used = {name: rule for name, rule in setting.items() if name in traded}
+    return used or None
+
+
 def margin_warnings(setting: MarginSetting, instruments: list[Instrument]) -> list[str]:
     """Warnings for a `margin=` this run does not use: given while the run trades no
     futures, or naming underlyings it does not trade as futures."""
@@ -222,6 +236,7 @@ __all__ = [
     "MarginSetting",
     "default_percent",
     "margin_assumption",
+    "margin_for",
     "margin_warnings",
     "own_margin",
     "parse_margin",

@@ -26,7 +26,7 @@ use super::super::calendar::{parse_exchange, NativeCalendar, PyDay};
 use super::NativeEngineInputError;
 
 /// A required key of a dict, extracted as `T`.
-pub(super) fn field<'py, T: FromPyObject<'py>>(
+pub(in crate::backtest) fn field<'py, T: FromPyObject<'py>>(
     dict: &Bound<'py, PyDict>,
     key: &str,
 ) -> PyResult<T> {
@@ -39,7 +39,7 @@ pub(super) fn field<'py, T: FromPyObject<'py>>(
 }
 
 /// A key that may be absent or None.
-pub(super) fn optional<'py, T: FromPyObject<'py>>(
+pub(in crate::backtest) fn optional<'py, T: FromPyObject<'py>>(
     dict: &Bound<'py, PyDict>,
     key: &str,
 ) -> PyResult<Option<T>> {
@@ -52,7 +52,7 @@ pub(super) fn optional<'py, T: FromPyObject<'py>>(
     }
 }
 
-pub(super) fn unknown(what: &str, value: &str, allowed: &str) -> PyErr {
+pub(in crate::backtest) fn unknown(what: &str, value: &str, allowed: &str) -> PyErr {
     NativeEngineInputError::new_err(format!("unknown {what} {value:?}: use {allowed}"))
 }
 
@@ -132,6 +132,9 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
         round_levels: field(dict, "round_levels")?,
         strict_config: field(dict, "strict_config")?,
         scale: scale_limits(dict)?,
+        max_trades_per_day: optional(dict, "max_trades_per_day")?,
+        daily_profit_target_rupees: optional(dict, "daily_profit_target")?,
+        max_order_value_rupees: optional(dict, "max_order_value")?,
     })
 }
 

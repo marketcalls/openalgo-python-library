@@ -175,16 +175,9 @@ pub(super) fn restore_live_state<'py>(
     Ok(ids)
 }
 
-/// The facts of a broker's fill with no order, as `apply_external_fill` takes them.
-pub(super) struct ExternalFill<'a> {
-    pub(super) instrument: u32,
-    pub(super) product: &'a str,
-    pub(super) side: &'a str,
-    pub(super) units: f64,
-    pub(super) price: f64,
-    pub(super) at: i64,
-    pub(super) reason: &'a str,
-}
+/// A broker's fill with no order, as `apply_external_fill` takes it: (instrument index,
+/// product, side, units, price in rupees, at in UTC nanoseconds, exit reason).
+pub(super) type ExternalFill<'a> = (u32, &'a str, &'a str, f64, f64, i64, &'a str);
 
 /// Record the broker's fill with no order (module docs); its stamp.
 ///
@@ -193,23 +186,16 @@ pub(super) struct ExternalFill<'a> {
 pub(super) fn apply_external_fill(
     py: Python<'_>,
     engine: &mut Engine,
-    fill: ExternalFill<'_>,
+    (instrument, product, side, units, price, at, reason): ExternalFill<'_>,
 ) -> PyResult<StampTuple> {
-    let product = parse_product(fill.product)?;
-    let side =
-        Side::from_code(fill.side).ok_or_else(|| unknown("side", fill.side, "BUY or SELL"))?;
-    let reason = ExitReason::from_code(fill.reason).ok_or_else(|| {
+    let product = parse_product(product)?;
+    let side = Side::from_code(side).ok_or_else(|| unknown("side", side, "BUY or SELL"))?;
+    let reason = ExitReason::from_code(reason).ok_or_else(|| {
         let codes: Vec<&str> = ExitReason::ALL.iter().map(|reason| reason.code()).collect();
-        unknown("exit reason", fill.reason, &codes.join(", "))
+        unknown("exit reason", reason, &codes.join(", "))
     })?;
-    let recorded_fill = engine.apply_external_fill(
-        InstrumentId(fill.instrument),
-        product,
-        side,
-        fill.units,
-        fill.price,
-        fill.at,
-        reason,
-    );
+    let instrument = InstrumentId(instrument);
+    let recorded_fill =
+        engine.apply_external_fill(instrument, product, side, units, price, at, reason);
     recorded(py, recorded_fill)
 }

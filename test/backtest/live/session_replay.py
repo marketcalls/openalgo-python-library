@@ -35,6 +35,7 @@ from session_record import (
 
 from openalgo.backtest._live import _session_close
 from openalgo.backtest._live import plan as plan_module
+from openalgo.backtest._live._locked_entries import LockedEntries
 from openalgo.backtest._live._plan_catch_up import StrategyPlan
 from openalgo.backtest._live._plan_setup import strategy_setup
 from openalgo.backtest._live._preflight_plan import InstrumentFacts
@@ -104,7 +105,15 @@ def replay(record: SessionRecord) -> ReplayOutcome:
         parts = _parts(record)
         traders = {
             name: Trader(
-                part, None, square_off_ns=0, close_ns=0, now=lambda: 0, event=lambda *a, **k: None
+                part,
+                None,
+                square_off_ns=0,
+                close_ns=0,
+                now=lambda: 0,
+                event=lambda *a, **k: None,
+                decision=lambda *a, **k: None,
+                warn=lambda text: None,
+                locked_entries=LockedEntries(),
             )
             for name, part in parts.items()
         }

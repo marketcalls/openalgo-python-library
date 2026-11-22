@@ -7,6 +7,410 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-22
+
+### Added
+
+- Groundwork for running several strategies on one account (2.4.0, kernel unit M1; `bt.backtest`
+  does not take a list of strategies yet, and nothing changes for a single strategy). The kernel
+  runs each time slice as separate phases, so a portfolio run can step several strategies' engines
+  together; every existing backtest, result and live session gives the same figures at the same
+  speed. New codes a portfolio run will report: the order rejection `account_margin` (the
+  strategy's own free cash covers the order's margin, the shared account's does not), the entry
+  rejection `account_loss_gate` (entries after the account's daily loss limit is breached, until
+  the next session), the exit reason `account_loss_limit` and the risk event `account_loss_hit`
+  (scope `account`). Result warnings explain the new rejection codes and what to do.
+- Custom tearsheets (2.4.0, unit C1). `result.tearsheet(layout=...)` and
+  `report.tearsheet(..., layout=...)` take a `report.Layout`, which can hide or show built-in
+  sections and parts (`report.PARTS` lists them), add sections of your own with
+  `report.section` (charts and tables drawn in the tearsheet's look: `line`, `bar`,
+  `histogram`, `scatter`, `heatmap`, `table`, `tiles`, `text`), add blocks to the end of a
+  built-in section (name your section like it), place and order sections (`after=`,
+  `order=`) and set the page's light and dark colours (`report.Theme`). A block's data is a
+  pandas object or a function of the result, so one layout serves every run. `report.html`
+  and `report.svg` embed your own HTML or SVG, checked against an allow list (no script, no
+  style sheet, nothing fetched, links only inside the page, images only inline as PNG, JPEG
+  or SVG data), so the page stays one offline file; anything off the list raises a
+  `ConfigError` naming it and its block. The built-in tearsheet stays the default and is the
+  same byte for byte: no layout, `layout=None` and `Layout(base=mode)` give today's page,
+  pinned by twelve golden pages in the tests.
+- The fund: several strategies stepped together on one account in a backtest (2.4.0, kernel
+  unit M2; `bt.backtest` takes a list of strategies from a later unit, and nothing changes for a
+  single strategy). Each strategy keeps its own engine, instrument and bar interval, and the fund
+  advances them in order on one merged time line, across exchanges and intervals (an NSE minute
+  strategy beside an MCX one or a daily one). With a shared pool, an opening order also needs its
+  margin within the account's free cash, and a sizer sees at most the account's free cash; with
+  separate pools each strategy keeps its own capital and the account is only recorded. The
+  account's daily loss limit counts each strategy's loss of the round's session day only, and
+  fires once a day: every strategy's entries are locked, its working entries cancelled and its
+  positions exited (exit reason `account_loss_limit`). The account's figures each round (equity,
+  free cash, margin, daily loss), its breaches and the orders it refused or cancelled are kept for
+  the portfolio result. A strategy in a fund gives exactly the result it gives alone whenever the
+  account does not bind. Speed rows `portfolio-3x1M`, `fund round` and `portfolio-callbacks` in
+  `benchmark/backtest_speed.py`.
+- Live engine groundwork for two strategies on one symbol (2.4.0, kernel unit K5; the session
+  uses it from a later unit). On an instrument several strategies of a session trade, an
+  entry, add or reversal on the other side of the side the others hold or are entering is
+  rejected `group_other_side` (a broker nets the two into one position), and a strategy's
+  resting order (LIMIT, SL, SL-M) is rejected `shared_resting`; the leg's broker-held stop,
+  its targets and the engine's own exits are not affected. A closing order the broker
+  rejects in such a group holds the position: no market exit, no re-placed stop and no
+  square-off sent by the engine until the session has checked the broker's books. Both
+  codes have a meaning and what to do in the rejection warnings.
+- Two or more strategies on one symbol in a live session (2.4.0, units M6 and M7). `bt.live` used to
+  refuse a second strategy on a symbol and product ("run one strategy per symbol"); now each
+  strategy keeps its own position and its own stop at the broker while OpenAlgo holds one net
+  position for the symbol. The symbol is subscribed and checked against broker candles once,
+  and every tick, quote and candle reaches each of its strategies. On such a symbol:
+  - An entry, add or reversal that would put a strategy on the other side of another
+    strategy's position or pending entry is rejected `group_other_side`; a strategy's own
+    LIMIT, SL and SL-M orders are rejected `shared_resting` (its stop and targets still work);
+    while another strategy's reversal works, its entries are locked (`group_reversing`).
+  - The reconciler, the restart, the exit guard and the kill switch judge the strategies
+    together: the sum of their positions against OpenAlgo's net. A trade by hand that the
+    trade book explains is shared out among the strategies it closes, the most recently opened
+    position first, and each strategy's stop is cut or cancelled to what it still holds. Any
+    other difference locks every strategy's entries and holds their exits until the books
+    agree, with one alert that names the group.
+  - A stop or exit the broker rejects holds the position: no market exit, no stop placed
+    again and no exit retry. The strategy's entries stay locked for the session
+    (`margin_on_close`), OpenAlgo's books are read at once, and one ERROR alert says to end
+    the session, check the position book and close by hand. The session's own exits (Ctrl+C,
+    the kill switch, the square-off) go only after a book read agrees.
+  - The start banner names each shared symbol and its strategies and says never to trade it
+    by hand while the session runs. A new unprotected reason, "instrument held by another
+    strategy's order", comes with an ERROR alert naming that order. An order the order book
+    cannot tell apart locks the entries of every strategy on its symbol.
+  - The reports show the group. `SessionResult.open_positions` gains a row per shared symbol
+    whose OpenAlgo net is a position, named by its strategies ("A and B"), with that net and
+    whether it equals their sum, and the DAILY_SUMMARY a "Shared" line per shared symbol
+    (`SessionSummary.shared`). In a session with a shared symbol,
+    `SessionResult.reconciliations` gains the columns `group`, `group_units`,
+    `member_units`, `external_units`, `allocation` and `stops_cut`. A difference of the group
+    counts as one reconcile mismatch and is named once at the close.
+  - Units beyond every strategy's position, or a difference on the other side of the
+    strategies, are taken in by none: nothing is sent, every strategy on the symbol is
+    locked, and the alert says to end the session and close by hand. On the other side every
+    strategy's stop is cancelled, with one ERROR alert for the symbol.
+  - A stop's cancel whose fills the trade book has not yet confirmed is decided from the
+    position book and then the order book when the order book counts every other strategy's
+    fills (sandbox books do). A live broker's order book shows a resting stop without a fill
+    count, so there the cancel waits for the trade book, reading both books every 2 seconds.
+  A strategy alone on its symbol keeps 2.3.0's behaviour throughout, its reports included.
+- `bt.backtest` takes a list of strategies and runs them together on one account (2.4.0, unit
+  M3), returning a `bt.PortfolioResult`. Each strategy keeps its own `Result`
+  (`pf.strategy(name)`), measured on its own capital. The portfolio result gives the account's
+  figures and tables: `account` (equity, free cash, margin and daily loss each round), equity,
+  returns, performance and metrics, every strategy's tables in one with a `strategy` column,
+  `trade_list()`, `refused` (the orders the account refused), `net_positions`, `correlation`,
+  `contribution`, assumptions, warnings, the manifest, and CSV and Excel export.
+  - Per-strategy settings (`capital`, `params`, `product`, `base`, `max_daily_loss`,
+    `after_risk_exit`, `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`,
+    `entry_until`, `square_off`) take one value for every strategy or a dict by strategy class
+    name. A `params` dict may leave a strategy out (it keeps its class defaults); the other
+    dicts may not. Every other argument is the run's: `data=` as a dict by symbol feeds every
+    strategy trading that symbol, and `instrument=` and `corporate_actions=` reach only the
+    strategies they apply to.
+  - New arguments, used only with a list: `pool` ("shared" by default, "separate" for fixed
+    allocations), `account_capital` (the account's funds, by default the sum of the capitals;
+    with that default a shared account refuses an order only when other strategies' open
+    losses leave too little free cash) and `account_max_daily_loss` (at or past it every
+    strategy exits with reason `account_loss_limit`, and later entries that day are refused
+    `account_loss_gate`).
+  - Two strategies may trade one symbol, on either side. A warning names an instrument held
+    on opposite sides (`bt.live` would refuse the later entry), and the days on which a
+    broker would net one strategy's delivery trade against another's in the same scrip,
+    which changes the charges.
+  - A list of one strategy also returns a `PortfolioResult`. A strategy class on its own runs
+    exactly as before, with the same figures.
+- Combined reports of a portfolio run (2.4.0, unit M4).
+  - `PortfolioResult.summary()`: the account's net profit, return, maximum drawdown, closed
+    trades and benchmark, as `Result.summary()` gives them for one strategy, then the quick
+    overfitting checks of each strategy's own trades on a line each. None are run on the
+    account's trades together, which overlap in time.
+  - `PortfolioResult.tearsheet(path=None, *, mode="full", log_scale=False, layout=None)`: the
+    account's page, with the Strategies section (the strategies head to head and the
+    correlation of their returns), the overfitting checks in a row per strategy, a trade
+    list with a Strategy column, and a new Portfolio section (full mode): each strategy's
+    contribution and its P&L by month, stacked; the account's highest margin and lowest
+    free cash in each session and each strategy's margin at the account's peak; the orders
+    the account refused, with times; and the net position of each instrument two strategies
+    held, at every change. `report.tearsheet(pf)` gives the same page. Each strategy's own
+    page is still `pf.strategy(name).tearsheet()`.
+    On this page the hover title of each MAE and MFE scatter mark names its strategy
+    ("LongDaily trade 1: MAE ..."), since each strategy numbers its own trades.
+  - Custom tearsheets: `report.PARTS` gains the "portfolio" section with the parts
+    `contribution`, `account_margin`, `refused` and `net_positions`, which a layout hides,
+    shows and orders like any other part. On a portfolio a layout's block functions receive
+    the `PortfolioResult`, and a Theme's series colours colour the strategies.
+- A live session's strategies as one account, and every per-strategy live setting by name
+  (2.4.0, unit M5).
+  - `SessionResult.portfolio`: a `PortfolioResult` of the session's strategies, holding the
+    same `results`, so it covers this start only. It has the account on the sum of the
+    strategies' capitals (its equity as `metrics.combine_equity` adds theirs, the margin the
+    engines block, free cash and this start's daily loss measure), the metrics, `summary()`,
+    the combined `tearsheet()`, every strategy's tables in one with a `strategy` column, and
+    `net_positions` for an instrument several strategies share. Its Assumptions name the
+    funds OpenAlgo reported at the start and say the margin and free cash are the engines'
+    model, not the broker's. `refused` lists the entries the account's trade cap refused
+    (`account_trade_limit`); entries locked out by the account's loss limit or profit target
+    are in each strategy's orders as `live_lock`.
+  - `bt.live`: `after_risk_exit`, `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`,
+    `entry_until` and `square_off` each take one value for every strategy, as before, or a
+    dict naming each strategy by class name, as `bt.backtest` takes them for a list of
+    strategies. A dict that names a strategy the session does not run, or leaves one out, is
+    refused before anything is sent. A class attribute of the same name (`drawdown_halt`,
+    `cooldown`, `entry_from`, `entry_until` or `square_off`) still wins over the argument;
+    `after_risk_exit` and `max_positions` are set only in the call. Every existing
+    `bt.live` call works unchanged.
+  - `PortfolioResult` takes an optional keyword `notes`: Assumptions lines a run words
+    itself, in place of the block's own lines of the same key.
+  - In a session of more than one strategy, every ENTRY and EXIT line on the console and in
+    the alerts names the strategy whose order filled, right after the kind:
+    `ENTRY: EmaTrend BUY 10 SBIN NSE at 811.95 (entry, order N)` and
+    `EXIT: RsiDip SELL 10 SBIN NSE at 815.00 (exit: target level, order N)`. A session of
+    one strategy prints its lines as before (2.4.0, item P5).
+- Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
+  M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
+  attribute of the same name wins. A dict names every strategy of the run: None leaves a
+  strategy without the limit, as the refusal of a dict that leaves one out says (item P6).
+  - `max_trades_per_day`: the entries of a session day. An entry is an order that opens a
+    position from flat, or a reversal; adds, exits and the engine's own exits never count.
+    An entry counts from submission while it works, and for good once any part fills. At the
+    cap an entry is rejected `trade_limit`, and a reversal is cut to its close (the close is
+    sent as an order that only reduces the units held, and the opening part is recorded
+    rejected). Nothing is exited.
+  - `daily_profit_target`: when the day's profit (the measure `max_daily_loss` uses) reaches
+    it, every position exits with the reason `daily_profit_target` and entries are rejected
+    `daily_profit_gate` until the next session day, whatever `after_risk_exit` says.
+  - `max_order_value`: an entry or add worth more is rejected `order_value_limit`. Its worth
+    is the units times the limit price, an SL-M's trigger or the last close, times the
+    multiplier, judged at submission; a MARKET entry with no last close yet is refused. A
+    modify is checked too and, when refused, leaves the order as it was. Exits are never
+    refused.
+  - For a list of strategies in `bt.backtest`, and in `bt.live`: `account_max_trades_per_day`
+    (the entries of every strategy together; at the cap entries are rejected
+    `account_trade_limit` and nothing is exited) and `account_daily_profit_target` (works as
+    `account_max_daily_loss` does: exit reason `account_profit_target`, entries rejected
+    `account_profit_gate` in a backtest, the kill switch fired for `account_profit` live).
+    `pf.refused` lists the account's refusals; a strategy's own cap codes are in its
+    `result.orders` and in `pf.orders`.
+  - Each limit is named in the Assumptions block, in the live start banner and in the daily
+    summary's Limits line. Refusals by these limits are told once in `result.warnings` and
+    raise no OrdersNotPlacedWarning. A live restart of the day keeps the trade counts
+    (the account's include the entries of strategies an earlier start ran) and the profit
+    locks.
+- `bt.live(max_orders_per_second=8)`: at most this many order calls (place, modify and cancel
+  together) in any second, OpenAlgo's limit of 10 less 2 for your own orders (2.4.0, unit
+  M10). A call beyond the limit waits, stops and exits first. A call that waits 2 s writes the
+  event `order_throttled` and sends one alert per session start. An entry or add that waits
+  5 s is not sent (reason `order_rate`); an exit is never dropped. An entry still waiting
+  when its strategy is locked (a profit target, the kill switch, a safe stop) is withdrawn,
+  not placed.
+- Live sessions write a decisions file per day beside the event stream,
+  `<live_dir>/<account>/logs/YYYY-MM-DD.decisions.jsonl` (`SessionResult.paths["decisions"]`):
+  one line per strategy bar, off the console and the event stream. A decision line gives the
+  bar as the strategy saw it and whether it came from ticks or a broker candle, the latest
+  value of each `self.I` output, the position in units, and what `on_bar` submitted (each
+  order with its side, units, type, status and reject code). A skipped line says why no
+  decision was made: missing data, indicators not ready, trading not begun, the session
+  stopping, or the strategy failed. A line that cannot be written is logged and dropped.
+  - Each `drift` event carries the tick bar's and the broker candle's open, high, low, close
+    and volume beside their differences.
+  - An order the engine rejects at submission is logged at INFO with the strategy, side,
+    units and reject code, and so is the first decision per strategy skipped because its
+    indicators are not ready (later ones at DEBUG).
+- An audit record of every live order (2.4.0, unit M11; design 18 section 12).
+  - Every order carries its strategy's version id: 12 hexadecimal characters of the SHA-256
+    of its source and parameter values, the same across days, restarts and processes. A
+    class whose source cannot be read (defined in a notebook cell, or built with `exec` or
+    `type()`) has its compiled code hashed in its place: its functions' bytecode, constants,
+    names and default values and its class attributes, so an edit of its code gives a new
+    id. That id is the same in every process of one Python version and changes with the
+    Python version, as the start banner says. Only a class whose callables are all builtins
+    or objects called as methods hashes its name and parameters, and the banner says its
+    source was not hashed (item P5). A class attribute or default argument Python cannot hash
+    (a list, dict, set, DataFrame, ndarray, or a dataclass that is not frozen) is hashed by
+    its type alone and named in the banner, so a list the strategy appends to does not move
+    the id; a class nested in the strategy class is read with it, so an edit of its methods
+    gives a new id (item P6). Each start writes every strategy's run manifest and version id
+    to the journal.
+    `SessionResult.versions` maps each strategy name to its manifest, `SessionResult.orders`
+    has a `version_id` column, the start banner has a Versions line, and the daily summary's
+    Strategies line names each version. A restart whose version differs from the day's
+    earlier start is allowed: the banner says so and the event `version_changed` records
+    both ids. The `strategy` field sent to OpenAlgo is still the plain class name.
+  - The live journal is schema version 2: a `versions` table and `version_id` on every
+    intent. A 2.3.0 (version 1) journal is upgraded in place when opened, its rows kept; a
+    newer file is still refused.
+  - Live preflight checks each futures and options contract's expiry in OpenAlgo's master
+    contract against the reference tables. A disagreement refuses the start, naming both
+    dates; a missing expiry is a banner warning.
+  - Live preflight compares OpenAlgo's market holidays (one `holidays` call, in every
+    session) with the package calendar for the session's exchanges, from today to the
+    year's end. A disagreement about today refuses the start; one about a later day is a
+    banner warning and the event `calendar_disagrees`.
+  - A backtest with a client checks each futures or options contract the server still
+    lists against the master contract's expiry, with a ReferenceDataWarning on a
+    disagreement or when the lookup fails. Expired contracts, clients without `symbol` and
+    cash equity make no call.
+  - `SessionResult.fill_comparison`: each fill of the day (every start) against the price
+    a backtest of the session's own bars fills the same order at. It names the strategy,
+    version, purpose (target and hand included), price type, live and backtest time and
+    price, the difference per unit against the trader, rupees, and whether it was compared
+    and why not. A MARKET order is set against the open of the bar that opens at its
+    decision, an engine target exit against its level, and a stop against its trigger (or the open of a
+    bar that gapped beyond it) in the bar that reached it. LIMIT orders, repriced stops and
+    fills adopted by hand are not compared. `summary.stop_slippage` totals the stop rows,
+    and the daily summary has a Stop fills line on a day a stop filled; a stop fill not
+    compared is counted there, with its reason in its `fill_comparison` row.
+- MCX silver mini (SILVERM) and silver micro (SILVERMIC) can be backtested and traded: their
+  freeze quantity, 600 kg per order, is in the contract table from MCX circulars
+  MCX/TRD/114/2025, MCX/TRD/091/2026, MCX/TRD/275/2025 and MCX/TRD/302/2026 (contracts
+  outside those circulars carry the same terms as unverified, with a warning). Before, both
+  were refused for want of a freeze quantity.
+
+### Changed
+
+- `Result.strategy()`, `Result.combined` and `Result.correlation` still raise
+  NotImplementedError on a single strategy's result; the message now points to `bt.backtest`
+  with a list of strategies.
+- `bt.optimize`, `bt.robustness` and `bt.walk_forward` given a list of strategies raise
+  NotImplementedError: run them for each strategy. Given one strategy, they and `bt.backtest`
+  refuse `pool`, `account_capital` and `account_max_daily_loss` with a `ConfigError`, and
+  `bt.live` refuses `pool` and `account_capital` as it refuses the other backtest-only
+  arguments.
+- Live sessions send at most 8 order calls a second by default (it was 5), set by
+  `max_orders_per_second`.
+- Live sessions save their state in layout 5 (the day's trade counts), so a restart cannot
+  resume a state that 2.3.0 saved earlier the same day: start it fresh.
+- `Fund.advance` called after a portfolio run has ended raises the fund's "has finished"
+  error, and each of the fund's breach records carries its rule (`account_loss` or
+  `account_profit`).
+- Live sessions: the strategy decides, and keeps deciding, on the bars built from ticks. A
+  broker candle read after a decision (2 seconds after the close, often before the broker's
+  final candle) no longer replaces the tick bar in the strategy's series or its indicators,
+  so a crossing between the tick bar and a later, different candle of the same minute is
+  seen by exactly one decision, never by none and never twice. On the 2026-11-20 sandbox
+  day a reversal on a 1-minute EMA crossing was seen by no decision this way. Candles are
+  still checked against every tick bar for the drift log. A candle is the bar only of a
+  minute with no ticks (the feed was dead, or watching began in it after a start or
+  restart): it refreshes the indicators and no decision is made on it afterwards. The
+  engine and the strategy now hold the same bars. Within one run only: after a restart the
+  minutes before it come from broker candles, as before.
+- Live sessions: a trade closed by the account's daily loss limit (`account_max_daily_loss`,
+  through the kill switch) now records the exit reason `account_loss_limit` instead of
+  `manual`, the reason a portfolio backtest records for the same breach.
+- `Strategy.exit(reason=...)` refuses `"leg_sl"` and `"leg_target"` with a `ConfigError`:
+  they are the reasons of the engine's own exits at a leg's stop and target, and a live
+  session timed a strategy exit that named them as the engine's tick exit.
+- A restart that finds a strategy's saved state is of another symbol or contract (the same
+  class name moved to a new contract) still refuses it before sending anything, but now says
+  what to do: give the class a new name for the new contract, or keep its symbol. Every
+  strategy so moved is named at once.
+- Tearsheets: a figure that rounds to zero no longer shows a minus sign ("-0.0%" now reads
+  "0.0%", in the weekly cells and titles, the yearly axis and the charges table), a yearly
+  returns axis that steps by half a percent labels its ticks with one decimal, a histogram
+  no longer shows an empty bin of zero width at its low end, the noise check's tile gives the
+  count of noise runs above the run as well as the share, and the optimizer page no longer
+  prints the sweep's measured times, so two runs of one sweep give the same page.
+- The robustness check of the parameter neighbourhood names the range a `params=` value lies
+  outside and what to pass, where it said only that it could not judge.
+- `bt.optimize` uses less memory on large sweeps: the returns of each combination are copied
+  into the overfitting figures' array as they come back, not after all of them.
+- Live sessions no longer send a resting reversal (`reverse=True` on a LIMIT, SL or SL-M
+  order): the session rejects it with `venue` before it reaches the broker, the strategy sees
+  it rejected in `on_order` before its next decision, and a warning says to submit the
+  reversal as a MARKET order or to exit and enter separately. At the broker it worked beside
+  the position's stop, both on the closing side, and both could fill: a short of 10 with a
+  LIMIT buy of 20 resting ended long 20, not long 10. A MARKET reversal is sent as before,
+  and backtests are unchanged.
+  The reason a live result gives for the `venue` code now names both causes (the broker
+  refused the order, or the session refused a resting reversal) with the advice for each.
+- Live sessions: the day summary's slippage sets the engine's target exits against the
+  target's level with the run's slippage, as a backtest fills them, instead of the next
+  bar's open. This corrects the live figure (2.4.0, unit M11). It still equals the sum of
+  the compared MARKET rows of `SessionResult.fill_comparison`.
+- Live sessions: EXIT alerts and the event of each closing request name the exit reason,
+  for example "(exit: target level, order N)", "(square_off: square-off time, ...)" or
+  "(risk_exit: kill switch at the account daily loss limit, ...)" (2.4.0, unit M11). The
+  other alert texts are unchanged.
+- Live sessions: the combined page of `SessionResult.portfolio` no longer says "The
+  account refused no order and ended none." after the account's kill switch fired. When
+  the session set an account limit, an empty Refused card says what the account's trade
+  cap refused, that the entries its daily loss limit or profit target locked out are in
+  the strategies' orders as live_lock, and that the entries and adds its kill switch
+  cancelled are in their orders as cancelled (2.4.0, unit M11). The account note names the
+  kill switch's cancels. A backtest portfolio's page is unchanged.
+- Live sessions no longer send a resting order against the strategy's open position (a
+  LIMIT, SL or SL-M sale of a long, or purchase of a short, without `reverse=True`) when the
+  position's stop already closes the whole position, such as a LIMIT take-profit placed
+  beside the stop: the session rejects it with `venue` before it reaches the broker, the
+  strategy sees it rejected in `on_order` before its next decision, and a warning says once
+  per strategy to set the take-profit with `target=` or `targets=` on the entry (held by
+  the session and sent at MARKET when reached) or to exit with a MARKET order. At the
+  broker it worked beside the stop, both on the closing side, and both could fill: long 10
+  with its stop at 497.00 and a LIMIT sale of 10 at 505.00, a fall to 496.00 filled the stop
+  and a rise to 506.00 then filled the sale, leaving the account short 10 with no stop. A
+  resting exit that the position's closing orders leave room for (a position with no stop)
+  and a resting entry placed while flat are sent as before, and backtests are unchanged
+  (the backtest of that sequence still ends short 10). The reason for the `venue` code
+  names this cause too, with its advice.
+- The text of a `SessionResult` (its `repr`, what `print(result)` shows) gives net P&L with
+  Indian digit grouping, as `summary_text()` does: "net P&L Rs 2,00,000.00" (it was
+  "200,000.00"), and a loss below half a paisa as "Rs 0.00" (it was "-0.00"). A
+  `PortfolioResult`'s text does the same (2.4.0, item P5).
+- Live sessions write rupees with Indian digit grouping (Rs 40,00,000.00, it was
+  4,000,000.00) in the start banner, the daily summary's Limits line, the preflight's
+  capital, loss limit and funds lines, the account kill switch alert and the refusal of a
+  class `max_daily_loss` that differs from the argument (which wrote 15 lakh as 1.5e+06),
+  as the reports already did (2.4.0, item P6).
+
+### Fixed
+
+- `Result.summary()` and `PortfolioResult.summary()` no longer print a minus sign on a
+  percent that rounds to zero: "Max drawdown : 0.00%", not "-0.00%", the rule the tearsheet
+  uses (2.4.0, item P5).
+- Live sessions: a reversal (`reverse=True`) waits for its position's stop to be cancelled
+  before it is sent; if entries were locked meanwhile (a dead feed, a reconciliation
+  mismatch, a failed exit, the account loss limit), it was still sent and opened the other
+  side. It is now refused whole with `live_lock`, as it is when it is submitted under a lock,
+  and the position gets its stop back. A reversal no longer raises a false "had no stop at
+  the broker" alert between the stop's cancel and the order's fill.
+- Live sessions: a decision is skipped for missing data when the bar before its own holds a
+  minute with no data, as it already was when its own bar held one. After a start or restart
+  in the middle of a minute, that minute's bar comes from its broker candle; when the candle
+  came after the first whole bar closed, a 1-minute strategy's first decision read a series
+  without the bar before its own, and a crossing (or `shift(1)`, `[-2]`) compared it with the
+  bar two minutes back. On the 2026-11-20 sandbox day the first decision after a restart sold
+  on an EMA crossing that the full series shows one minute earlier, before that decision. The
+  strategy now decides at the next close, with the minute's bar in its series once its
+  candle is read. A minute whose candle never comes holds up one more decision, no more.
+- Live sessions: an entry or add held in the order worker's queue by
+  `max_orders_per_second` is now withdrawn once its strategy's entries lock for any reason (a
+  dead feed, a reconciliation mismatch, failed exits, a closing order refused on a shared
+  instrument), and the strategy sees it rejected with `live_lock`. Before, only the daily
+  profit target, the kill switch and the safe stop withdrew it, so an add could be bought up
+  to 5 s after such a lock.
+- Live sessions: a position left with no stop at the broker and nothing to close it (for
+  example after one of two targets that fired together was refused) gets its stop placed
+  again and an alert even when the strategy rests a reversal, such as a LIMIT buy below the
+  market against a short. Only a MARKET reversal, which closes the position at once, now
+  counts as covering it; before, a resting reversal hid the missing stop.
+- Live sessions: an entry or add the order worker had already taken off its queue when its
+  strategy's entries locked is no longer sent. The worker reads the strategy's locks just
+  before it sends an entry or add, and the strategy sees it rejected with `live_lock`; exits
+  and stops are never held by it. Before, such an order could still go out a few
+  milliseconds after the lock.
+- Live sessions: on an instrument held for the day (an order the order book cannot tell
+  apart from another, so nothing more can be sent for the instrument), the square-off no
+  longer reports a stop that still works at the broker as being cancelled, nor its position
+  as unprotected from 15:00. The stop is reported as working, and one ERROR alert per
+  strategy at its square-off says that nothing is sent for the position and what to do:
+  cancel its stop at the broker, then close the position by hand in OpenAlgo, the broker's
+  own MIS square-off remaining the backstop. The note of the position left open says the
+  same.
+
 ## [2.3.0] - 2026-11-20
 
 ### Added

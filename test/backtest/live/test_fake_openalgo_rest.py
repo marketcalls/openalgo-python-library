@@ -293,13 +293,46 @@ def test_every_call_is_logged_without_its_api_key(fake_openalgo):
     assert (call.detail["request"], call.detail["status"], call.detail["mode"]) == ({}, 200, "live")
 
 
+def test_holidays_answer_the_years_rows_openalgo_ships(fake_openalgo):
+    answer = fake_openalgo.client().holidays(2026)
+    assert (answer["status"], answer["year"], answer["timezone"]) == (
+        "success",
+        2026,
+        "Asia/Kolkata",
+    )
+    christmas = answer["data"][-1]
+    assert (christmas["date"], christmas["closed_exchanges"][-1]) == ("2026-12-25", "MCX")
+    assert len(answer["data"]) == 17
+
+
+def test_holidays_of_a_year_without_rows_are_an_empty_list(fake_openalgo):
+    assert fake_openalgo.client().holidays(2027)["data"] == []
+
+
+def test_holidays_a_test_sets_replace_the_shipped_ones(fake_openalgo):
+    fake_openalgo.set_holidays([])
+    assert fake_openalgo.client().holidays(2026)["data"] == []
+
+
+def test_holidays_outside_the_servers_years_are_its_400(fake_openalgo):
+    answer = fake_openalgo.client().holidays(2019)
+    assert (answer["status"], answer["code"]) == ("error", 400)
+
+
+def test_a_master_expiry_a_test_sets_is_in_the_symbol_answer(fake_openalgo):
+    fake_openalgo.add_instrument("NIFTY29DEC26FUT", "NFO", lot_size=65, expiry="29-DEC-26")
+    fake_openalgo.set_master_expiry("NIFTY29DEC26FUT", "NFO", "22-DEC-26")
+    answer = fake_openalgo.client().symbol(symbol="NIFTY29DEC26FUT", exchange="NFO")
+    assert answer["data"]["expiry"] == "22-DEC-26"
+
+
 def test_a_call_the_fake_does_not_model_is_logged_as_a_problem():
     fake = FakeOpenAlgo(start_ns=SESSION_START_NS)
     try:
-        answer = fake.client().holidays(2026)
+        answer = fake.client().timings("2026-11-16")
 
         assert answer["error_type"] == "unknown_error"
         [problem] = fake.log.problems()
-        assert problem.what == "/api/v1/market/holidays"
+        assert problem.what == "/api/v1/market/timings"
     finally:
         fake.close()

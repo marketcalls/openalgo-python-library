@@ -14,7 +14,8 @@ Declaring what it trades: exactly one of `symbol`, `symbols`, `universe`, `under
 plus `exchange` and `interval`. Futures in `symbols` are named by their underlying and
 trade the same contract as `underlying` would (the rank in `expiry`, rolled by the run's
 `roll`). Session and risk settings may be class attributes (`max_daily_loss`,
-`entry_from`, `entry_until`, `square_off`, `drawdown_halt`, `cooldown`): a class
+`entry_from`, `entry_until`, `square_off`, `drawdown_halt`, `cooldown`, and the daily
+limits `max_trades_per_day`, `daily_profit_target` and `max_order_value`): a class
 attribute wins over the run argument of the same name. Parameters are any other class
 attributes with a number, bool or string default, or `bt.param(default, values)`.
 
@@ -82,6 +83,9 @@ DECLARATIONS = (
     "square_off",
     "drawdown_halt",
     "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
     "combined_stop",
     "combined_target",
     "lock_profit",
@@ -120,6 +124,10 @@ class Strategy(OrderMethods):
     square_off: ClassVar[str | None] = None
     drawdown_halt: ClassVar[float | None] = None
     cooldown: ClassVar[int | None] = None
+    # The daily limits (18-multi-strategy 2.5a; units in `_risk_settings`).
+    max_trades_per_day: ClassVar[int | None] = None
+    daily_profit_target: ClassVar[Any] = None
+    max_order_value: ClassVar[Any] = None
 
     def __init__(self, **parameters: Any) -> None:
         for name, default in self.parameters().items():

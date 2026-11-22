@@ -17,6 +17,7 @@ from accounting_runs import CAPITAL, DAILY_DAYS, at, daily_round_trip, round_tri
 
 import openalgo.backtest as bt
 from openalgo.backtest._trade_list import TRADE_LIST_COLUMNS
+from openalgo.backtest.errors import ConfigError
 
 ENTRY, EXIT, UNITS = 1_000.0, 1_100.0, 400.0
 
@@ -114,6 +115,44 @@ def test_bars_held_counts_the_strategys_bars_not_the_base_bars():
 def test_the_exit_reason_and_r_multiple_are_read(long_trade):
     assert long_trade["exit_reason"] == "signal"
     assert pd.isna(long_trade["r_multiple"])  # opened without a stop
+
+
+def exits_with(reason: str) -> bt.Result:
+    """The intraday round trip of the module docstring, its exit given `reason`."""
+
+    def on_bar(self, bar):
+        if len(self.close) == 1:
+            self.buy(qty=400)
+        elif len(self.close) == 2:
+            self.exit(reason=reason)
+
+    attributes = {"symbol": "SBIN", "exchange": "NSE", "interval": "15m", "on_bar": on_bar}
+    strategy = type("ExitsWith", (bt.Strategy,), attributes)
+    arguments = {"data": session_bars(), "capital": CAPITAL, "base": "1m", "product": "MIS"}
+    return bt.backtest(strategy, costs=None, slippage=0, **arguments)
+
+
+def test_a_strategys_exit_reads_the_reason_it_gave():
+    assert exits_with("manual").trade_list().iloc[0]["exit_reason"] == "manual"
+
+
+@pytest.mark.parametrize(("reason", "made_by"), [("leg_sl", "stop"), ("leg_target", "target")])
+def test_a_strategys_exit_cannot_take_the_reason_of_the_engines_own_leg_exits(reason, made_by):
+    # Only the engine's exit at a leg's stop or target records these: a trade read as
+    # stopped or as at its target must be one, and a live session times the engine's
+    # target exit by its reason.
+    refused = f"'{reason}' is the reason of the engine's own exit at a leg's {made_by}"
+    with pytest.raises(ConfigError, match=refused):
+        exits_with(reason)
+
+
+def test_an_unknown_exit_reason_lists_only_the_reasons_a_strategy_may_give():
+    with pytest.raises(ConfigError) as refused:
+        exits_with("foo")
+    message = str(refused.value)
+    assert message.startswith('unknown exit reason "foo": use one of ')
+    assert "manual" in message and "signal" in message
+    assert "leg_sl" not in message and "leg_target" not in message
 
 
 def test_a_short_trade_loses_when_the_price_rises():

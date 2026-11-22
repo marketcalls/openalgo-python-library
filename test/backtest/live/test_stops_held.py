@@ -11,6 +11,7 @@ latter with a target at 502.00, which SBIN reaches at 14:44:05 (`stops_samples`)
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
@@ -175,13 +176,14 @@ class _Trader:
 
 
 class _Session:
-    """What the held words read of a session: one strategy, its last tick, and the
-    requests handed to the order worker."""
+    """What the held words read of a session: one strategy, its last tick, its instrument
+    traded by no other strategy, and the requests handed to the order worker."""
 
     def __init__(self):
         self.traders = (_Trader(),)
         self.last_tick = {}
         self.handed = []
+        self.groups = SimpleNamespace(shared=lambda trader: False)
 
     def hand_over(self, requests):
         self.handed.extend(requests)

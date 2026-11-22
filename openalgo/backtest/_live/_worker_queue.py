@@ -15,31 +15,35 @@ The worker's own requests (`ReleaseFill`, `ReleaseCancel`, `ReadBooks`, `ReadPos
 `Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`) belong
 to no order: each is its own FIFO. An entry or add whose
 decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_stale`,
-open decision 7). Times are UTC nanoseconds. Used by the worker's thread only, but for
-`Incoming`: the requests any thread hands the worker, counted until the worker has
-executed them (`unfinished`), so the close knows when every answer it waits for has been
-posted (16-session-design 3.3 step 5). The close also asks for the requests put back to
-be withdrawn (`ask_withdrawal`): its last lines named them as not sent, so they are never
-sent after them and the close does not wait for them.
+open decision 7). Times are UTC nanoseconds. Used by the worker's thread only; the
+requests any thread hands the worker wait in `_worker_incoming.Incoming` until the worker
+takes them in. The order rate throttle (`_order_throttle`) takes no request that makes an
+order call (`is_order_call`) while its window is full, and withdraws an entry held back
+too long (`remove`). An entry or add the kernel cancelled, or one waiting when its
+strategy's entries lock, is withdrawn as it is taken in (`WithdrawPlace`, `remove`), so
+a placement the order rate holds is not sent after the kernel's cancel or the lock, but
+for one the worker took before the withdrawal reached it (`_venue_withdraw`;
+18-multi-strategy 2.5a rules 5, 6 and 12; 2.4.0 item M8-X2).
 """
 
 from __future__ import annotations
 
 import collections
 import itertools
-import queue
-import threading
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
 from ._order_state import ENTRY_PURPOSES
 from ._venue_requests import CancelRequest, ModifyRequest, OrderRequest, PlaceRequest, Priority
+from .inbox import NotSentReason
 
 #: An entry or add decided this long before the worker takes it is dropped and reported
 #: rejected: decided at a bar close and sent much later, it is a different trade
 #: (16-session-design 10.0, decision 7).
 ENTRY_STALE_AFTER_S = 10.0
 _STALE_NS = round(ENTRY_STALE_AFTER_S * NANOS_PER_SECOND)
+#: The words of the `NotSent(cancelled)` of an entry or add withdrawn (`WithdrawPlace`).
+CANCELLED_WORDS = "the engine cancelled it before it was sent"
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,11 @@ class ReadBooks:
 
 @dataclass(frozen=True)
 class ReadPositions:
-    """Read the position book for a held cancel (4.11), answered as `inbox.PositionRows`."""
+    """Read the position book for a held cancel (4.11), and with `orders` the order book
+    after it (a held cancel on an instrument several strategies share, 18-multi-strategy
+    4.5), answered as `inbox.PositionRows`."""
+
+    orders: bool = False
 
     priority = Priority.UPKEEP
 
@@ -122,6 +130,21 @@ class CancelOrphan:
     priority = Priority.PROTECT
 
 
+@dataclass(frozen=True)
+class WithdrawPlace:
+    """Withdraw `place`, an entry or add not bound yet that the kernel cancelled, or that
+    waits as its strategy's entries lock (`venue_map`). Taken in by
+    `_worker_incoming.Incoming.into`, never queued: while `place` waits in the queue it is
+    taken off and answered `NotSent(reason, words)`; once the worker took it, nothing: it
+    is sent (a kernel's cancel then waits for the bind, 2.5 E)."""
+
+    place: PlaceRequest
+    reason: NotSentReason = NotSentReason.CANCELLED
+    words: str = CANCELLED_WORDS
+
+    priority = Priority.PROTECT
+
+
 #: The worker's own requests.
 WorkerRequest = (
     ReleaseFill
@@ -132,6 +155,7 @@ WorkerRequest = (
     | StreamGap
     | Settle
     | CancelOrphan
+    | WithdrawPlace
 )
 #: Everything the worker takes.
 Request = OrderRequest | WorkerRequest
@@ -143,6 +167,12 @@ OrderKey = tuple[str, int]
 def order_key(request: OrderRequest) -> OrderKey:
     """The FIFO key of a request of a kernel order."""
     return request.intent.strategy, request.kernel_order
+
+
+def is_order_call(request: Request) -> bool:
+    """True for a request that makes an order call (place, modify or cancel), the calls
+    the order rate counts (18-multi-strategy 2.5a rule 12)."""
+    return isinstance(request, PlaceRequest | ModifyRequest | CancelRequest | CancelOrphan)
 
 
 def is_stale(request: Request, now_ns: int) -> bool:
@@ -221,14 +251,43 @@ class WorkerQueue:
         """True while order `key` is held."""
         return key in self._held
 
-    def take(self, now_ns: int, *, most: Priority = Priority.UPKEEP) -> Request | None:
+    def ready_orders(self, now_ns: int) -> list[Request]:
+        """The heads of the ready FIFOs that make an order call (`is_order_call`), in
+        the order of their arrival."""
+        heads = [
+            fifo[0]
+            for key, fifo in self._fifos.items()
+            if key not in self._held and fifo[0].not_before_ns <= now_ns
+        ]
+        heads.sort(key=lambda waiting: waiting.arrived)
+        return [waiting.request for waiting in heads if is_order_call(waiting.request)]
+
+    def remove(self, request: Request) -> bool:
+        """Take `request`, the head of its FIFO, off the queue for good (an entry the
+        order rate withdraws, or one the kernel cancelled); True when it was taken, False
+        for a request not at a head."""
+        for key, fifo in list(self._fifos.items()):
+            if fifo[0].request is request:
+                fifo.popleft()
+                if not fifo:
+                    del self._fifos[key]
+                return True
+        return False
+
+    def take(
+        self, now_ns: int, *, most: Priority = Priority.UPKEEP, orders: bool = True
+    ) -> Request | None:
         """The head of the most urgent ready FIFO whose rank is `most` or more urgent,
         taken off the queue; None when none is ready. A FIFO is ready when its order is
-        not held and its head's `not_before_ns` has passed at `now_ns`."""
+        not held and its head's `not_before_ns` has passed at `now_ns`; with `orders`
+        False, a head that makes an order call is not ready either (the order rate's
+        window is full)."""
         best: tuple[tuple[int, int], object] | None = None
         for key, fifo in self._fifos.items():
             head = fifo[0]
             if key in self._held or head.not_before_ns > now_ns:
+                continue
+            if not orders and is_order_call(head.request):
                 continue
             rank = (min(waiting.request.priority for waiting in fifo), head.arrived)
             if rank[0] <= most and (best is None or rank < best[0]):
@@ -247,62 +306,10 @@ class WorkerQueue:
         return ("", arrived)
 
 
-class Incoming:
-    """The requests handed to the worker until it takes them into its queue, and how many
-    it has not finished (module docstring). Any thread puts, and asks for the withdrawal
-    of what was put back; the worker's thread takes them into its queue (`into`) and says
-    when one is finished."""
-
-    def __init__(self) -> None:
-        self._requests: queue.SimpleQueue[Request] = queue.SimpleQueue()
-        self._lock = threading.Lock()
-        self._unfinished = 0
-        self._withdraw = threading.Event()
-
-    @property
-    def unfinished(self) -> int:
-        """The requests handed over and not executed yet, one put back among them. Any
-        thread reads it: the worker posts a request's answer before it is finished."""
-        return self._unfinished
-
-    def put(self, request: Request) -> None:
-        """Hand over `request`, counted unfinished from now; it never waits."""
-        with self._lock:
-            self._unfinished += 1
-        self._requests.put(request)
-
-    def ask_withdrawal(self) -> None:
-        """Ask for the withdrawal of every request put back so far, made at the worker's
-        next `into` (any thread; it never waits)."""
-        self._withdraw.set()
-
-    def into(self, waiting: WorkerQueue) -> list[Request]:
-        """Put every request handed over since the last call into `waiting`, the worker's
-        queue, oldest first. When a withdrawal was asked for, first take every request put
-        back off `waiting` (`WorkerQueue.withdraw_put_back`), no longer unfinished; those
-        are returned."""
-        withdrawn: list[Request] = []
-        if self._withdraw.is_set():
-            self._withdraw.clear()
-            withdrawn = waiting.withdraw_put_back()
-            with self._lock:
-                self._unfinished -= len(withdrawn)
-        while True:
-            try:
-                waiting.put(self._requests.get_nowait())
-            except queue.Empty:
-                return withdrawn
-
-    def finished(self) -> None:
-        """The worker executed a request and did not put it back."""
-        with self._lock:
-            self._unfinished -= 1
-
-
 __all__ = [
+    "CANCELLED_WORDS",
     "ENTRY_STALE_AFTER_S",
     "CancelOrphan",
-    "Incoming",
     "OrderKey",
     "Probe",
     "ReadBooks",
@@ -312,8 +319,10 @@ __all__ = [
     "Request",
     "Settle",
     "StreamGap",
+    "WithdrawPlace",
     "WorkerQueue",
     "WorkerRequest",
+    "is_order_call",
     "is_stale",
     "order_key",
 ]

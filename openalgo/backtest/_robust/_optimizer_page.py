@@ -7,7 +7,8 @@ surface, the best outlined, and the sweep in tiles); the Neighbourhood (the rule
 verdict on the best, the spike warning when it fails, and the histogram of the
 neighbours' objectives); the Overfitting figures (the deflated Sharpe ratio and the
 probability of backtest overfitting, with the histogram of the cross-validation's
-logits); and the Notes (how to read them, and the plan).
+logits); and the Notes (how to read them, and the plan without its timings, so two
+sweeps of one grid make the same page).
 """
 
 from __future__ import annotations
@@ -155,7 +156,7 @@ def _overfitting(result: Any) -> Section:
 
 def _notes(result: Any) -> Section:
     reading = "".join(f"<p>{fmt.text(line)}</p>" for line in READING)
-    plan = f"<p>{fmt.text(result.plan)}</p>"
+    plan = f"<p>{fmt.text(result._untimed_plan)}</p>"
     body = card("Reading the figures", "", f"<div class='prose'>{reading}{plan}</div>")
     return Section("notes", "Notes", "Reading the figures &amp; the plan", body)
 

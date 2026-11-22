@@ -9,9 +9,10 @@ At every change of an order at the fake, as it happened (`session_invariants_cha
 1. **One stop.** At most one stop of the session's works per leg.
 2. **Exits within the position.** The session's working exits never hold more units than
    the position; the exits a sale by hand overtook, by no more than the units sold, until
-   they fit the position again.
+   they fit the position again. A reversal (an entry against the position) holds as an
+   exit only the position it closes.
 3. **Never the other side.** No fill of the session's orders takes the position to the
-   other side of the leg.
+   other side of the leg, but a reversal's, which moves the leg there.
 
 When the last run ends (its close returned, or the test ended after a crash), of that run
 (`session_invariants_end`):
@@ -29,6 +30,23 @@ Over each run's event stream and the fake's log (`session_invariants_stream`):
 7. **Every Modify and Cancel answered.**
 8. **Nothing after a guard lock.**
 9. **Priced fills.**
+
+Over each run, of instrument groups (`session_invariants_groups`; 18-multi-strategy 5.1):
+
+10. **I4, the sum rule**, at every change while a run is open (a run whose members'
+    books could be read at none of its changes fails it, and I6).
+11. **I5, isolation**: a kernel takes only its own orders' words, an order is bound to
+    one member only and to the one the fake records it for, and the session makes no
+    member act while another's order word is applied.
+12. **I6, one side**: no two members of a group on opposite sides at any change.
+13. **I3 per member** (`session_invariants_members`; unit M8): a member's working closing
+    orders never hold more than its own kernel position at any change; checked with 2,
+    and waived on its own (`MEMBERS_WITHIN`), so a test whose sale by hand breaks 2 keeps
+    it. 4 and 5 are restated per member too (I1 and I7: a stop of a member whose own leg
+    is flat; each member's units covered by its own stops).
+
+18-multi-strategy 5.1 numbers them I1 to I10: I1 is 4, I2 is 1, I3 is 2 with 13, I4 is
+10, I5 is 11, I6 is 12, I7 is 5 with 6, and I8 to I10 are 7 to 9.
 
 A sale by hand is the one thing a session learns of only by its comparisons, so what one
 leaves at the fake beyond 1 to 6 stands only by a decided end the test names
@@ -51,6 +69,8 @@ from session_invariants_end import (
     no_orphan,
     working_at_the_end,
 )
+from session_invariants_groups import isolation, one_side, sampled, sum_rule
+from session_invariants_members import members_within
 from session_invariants_stream import (
     modifies_and_cancels_answered,
     nothing_after_a_guard_lock,
@@ -60,11 +80,16 @@ from session_trace import (
     ANSWERED,
     BOOKS_AGREE,
     GUARD_LOCK,
+    ISOLATION,
+    MEMBERS_WITHIN,
     NO_ORPHAN,
+    ONE_SIDE,
     ONE_STOP,
     OTHER_SIDE,
     PRICED,
+    SUM_RULE,
     WITHIN,
+    OrderChange,
     SessionTrace,
 )
 
@@ -95,19 +120,24 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
     # orders once the session has ended) is not the session's.
     changes = session.changes[: last.ended_at]
     own = [c for c in changes if c.client in mine]
-    sides = sides_of(own)
+    entries = session.entry_orders()
     if ONE_STOP not in waived:
         one_stop_per_leg(changes, mine)
     oversold_used: set[str] = set()
     rooms = within_the_position(
         changes,
         mine,
-        sides,
+        sides_of(own),
         session.oversold,
         within=WITHIN not in waived,
         side=OTHER_SIDE not in waived,
         used=oversold_used,
+        entries=entries,
     )
+    if MEMBERS_WITHIN not in waived:
+        members_within(changes, mine, entries)
+    # The legs' sides at the end, a reversal's new side among them.
+    sides = sides_of(own, entries)
     closing = last.closing or closing_now(last)
     working = working_at_the_end(own)
     held = {c.instrument: c.position for c in changes}
@@ -127,6 +157,18 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
     )
     if BOOKS_AGREE not in waived and last.outcome is not None:
         books_agree(last, closing, held)
+    if SUM_RULE not in waived:
+        sum_rule(changes, mine)
+    if ONE_SIDE not in waived:
+        one_side(changes)
+    _each_run(session, fake, changes, mine)
+
+
+def _each_run(
+    session: SessionTrace, fake: FakeOpenAlgo, changes: list[OrderChange], mine: frozenset[str]
+) -> None:
+    """7 to 9, I5 and the sample check of I4 and I6 (module docstring), over each run."""
+    waived = session.waived
     for at, run in enumerate(session.runs):
         if ANSWERED not in waived:
             modifies_and_cancels_answered(run)
@@ -137,6 +179,10 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
             nothing_after_a_guard_lock(run, fake, end)
         if PRICED not in waived:
             priced_fills(run, fake)
+        if ISOLATION not in waived:
+            isolation(run, changes, mine)
+        if SUM_RULE not in waived or ONE_SIDE not in waived:
+            sampled(run)
 
 
 __all__ = ["InvariantBroken", "assert_session_invariants"]

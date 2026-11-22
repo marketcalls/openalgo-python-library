@@ -8,7 +8,9 @@
 //! `tables` (pauses, events, positions, orders) and `results` (the result tables). A
 //! live session, its commands and its venue's results are in `venue`, its controls in
 //! `session`, its legs (ticks, the broker-held stops, the price rule's calls) in `legs`,
-//! its saved state and the broker's own fills in `live_state`.
+//! its saved state and the broker's own fills in `live_state`. The methods' bodies are
+//! helpers in those files and in `orders` (the order calls of a decision point),
+//! `queries`, `timers` and `signals`, so this file holds the one `#[pymethods]` block.
 //!
 //! Errors: a part that is not built yet raises Python's `NotImplementedError`; bad
 //! configuration, data or requests raise `NativeEngineInputError`; anything else
@@ -29,6 +31,8 @@ mod futures;
 mod legs;
 mod live_state;
 mod market;
+mod orders;
+mod queries;
 mod request;
 mod results;
 mod session;
@@ -36,19 +40,28 @@ mod setup;
 mod signals;
 mod sizing;
 mod tables;
+mod timers;
 mod venue;
 
-use oa_bt::data::resample::CalendarUnit;
-use oa_bt::engine::{Engine, ExitRequest, KernelError, Pause, Protect, TimerSpec};
+use oa_bt::engine::{Engine, Pause};
 use oa_bt::exec::{InstrumentId, OrderId};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::calendar::NativeCalendar;
-use errors::{engine_error, venue_result_error, NativeEngineInputError};
-use request::{submission_tuple, SubmissionTuple};
-use setup::{parse_product, run_setup, BarArrays};
+use errors::{engine_error, venue_result_error};
+use request::SubmissionTuple;
+use setup::BarArrays;
 use venue::StampTuple;
+
+// What the fund's binding (`super::fund`) reads of this one.
+pub(super) use errors::{error_of_kind, NativeEngineError, NativeEngineInputError};
+pub(super) use setup::{field, optional, unknown};
+pub(super) use signals::signal_arrays;
+pub(super) use tables::{pause as pause_tuple, PauseTuple};
+
+/// A dict argument or result.
+type Dict<'py> = Bound<'py, PyDict>;
 
 /// The backtest kernel of one run (see `oa_bt::engine`).
 #[pyclass(name = "Engine", module = "openalgo._oaindicators.backtest")]
@@ -65,12 +78,11 @@ impl NativeEngine {
     #[new]
     fn new(
         calendar: PyRef<'_, NativeCalendar>,
-        config: &Bound<'_, PyDict>,
-        instruments: Vec<Bound<'_, PyDict>>,
+        config: &Dict<'_>,
+        instruments: Vec<Dict<'_>>,
         bars: Vec<BarArrays<'_>>,
     ) -> PyResult<Self> {
-        let setup = run_setup(&calendar, config, &instruments, &bars)?;
-        NativeEngine::built(Engine::new(setup))
+        NativeEngine::from_inputs(&calendar, config, &instruments, &bars, Engine::new)
     }
 
     /// Build a live session from the inputs of a run, with the bars of the slices
@@ -78,19 +90,16 @@ impl NativeEngine {
     #[staticmethod]
     fn session(
         calendar: PyRef<'_, NativeCalendar>,
-        config: &Bound<'_, PyDict>,
-        instruments: Vec<Bound<'_, PyDict>>,
+        config: &Dict<'_>,
+        instruments: Vec<Dict<'_>>,
         bars: Vec<BarArrays<'_>>,
     ) -> PyResult<Self> {
-        let setup = run_setup(&calendar, config, &instruments, &bars)?;
-        NativeEngine::built(Engine::new_session(setup))
+        NativeEngine::from_inputs(&calendar, config, &instruments, &bars, Engine::new_session)
     }
 
     /// Hand a live session an instrument's base bar once its slice has closed.
     fn add_bar(&mut self, instrument: u32, bar: venue::BarTuple) -> PyResult<()> {
-        let engine = self.engine_mut()?;
-        let added = engine.add_bar(InstrumentId(instrument), venue::base_bar(bar));
-        added.map_err(engine_error)
+        venue::add_bar(self.engine_mut()?, instrument, bar)
     }
 
     /// Let a live session run the slices before index `slices` of its grid.
@@ -123,8 +132,10 @@ impl NativeEngine {
         price: f64,
         at: i64,
     ) -> PyResult<StampTuple> {
-        let engine = self.engine_mut()?;
-        venue::recorded(py, engine.apply_fill(OrderId(order_id), units, price, at))
+        let filled = self
+            .engine_mut()?
+            .apply_fill(OrderId(order_id), units, price, at);
+        venue::recorded(py, filled)
     }
 
     /// Record that the venue rejected an order with a reject code; returns the stamp.
@@ -134,9 +145,17 @@ impl NativeEngine {
         order_id: u64,
         reason: &str,
     ) -> PyResult<StampTuple> {
-        let reason = venue::reject_code(reason)?;
-        let engine = self.engine_mut()?;
-        venue::recorded(py, engine.apply_reject(OrderId(order_id), reason))
+        venue::reject(py, self.engine_mut()?, order_id, reason)
+    }
+
+    /// Record that the venue rejected a closing order in a way that says the broker may not
+    /// hold its units: its position is held until the session asks (`venue`); returns the
+    /// stamp.
+    fn apply_margin_reject(&mut self, py: Python<'_>, order_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(
+            py,
+            self.engine_mut()?.apply_margin_reject(OrderId(order_id)),
+        )
     }
 
     /// Record that the venue cancelled an order; returns the stamp.
@@ -146,8 +165,10 @@ impl NativeEngine {
 
     /// Record that the venue refused to cancel an order: it works on.
     fn apply_cancel_refused(&mut self, py: Python<'_>, order_id: u64) -> PyResult<()> {
-        let engine = self.engine_mut()?;
-        venue::answered(py, engine.apply_cancel_refused(OrderId(order_id)))
+        venue::answered(
+            py,
+            self.engine_mut()?.apply_cancel_refused(OrderId(order_id)),
+        )
     }
 
     /// Record that the venue confirmed an order's modification; returns the stamp.
@@ -157,8 +178,10 @@ impl NativeEngine {
 
     /// Record that the venue refused an order's modification: its old terms stand.
     fn apply_modify_refused(&mut self, py: Python<'_>, order_id: u64) -> PyResult<()> {
-        let engine = self.engine_mut()?;
-        venue::answered(py, engine.apply_modify_refused(OrderId(order_id)))
+        venue::answered(
+            py,
+            self.engine_mut()?.apply_modify_refused(OrderId(order_id)),
+        )
     }
 
     /// Record the broker's own fill of a live session's position, with no order: `units`
@@ -176,15 +199,7 @@ impl NativeEngine {
         at: i64,
         reason: &str,
     ) -> PyResult<StampTuple> {
-        let fill = live_state::ExternalFill {
-            instrument,
-            product,
-            side,
-            units,
-            price,
-            at,
-            reason,
-        };
+        let fill = (instrument, product, side, units, price, at, reason);
         live_state::apply_external_fill(py, self.engine_mut()?, fill)
     }
 
@@ -200,7 +215,7 @@ impl NativeEngine {
         &mut self,
         py: Python<'py>,
         state: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyDict>> {
+    ) -> PyResult<Dict<'py>> {
         live_state::restore_live_state(py, self.engine_mut()?, state)
     }
 
@@ -215,64 +230,92 @@ impl NativeEngine {
         reason: &str,
         limit_rupees: Option<f64>,
     ) -> PyResult<&'static str> {
-        let (product, exit) = (parse_product(product)?, session::engine_exit(reason)?);
-        let (engine, instrument) = (self.engine_mut()?, InstrumentId(instrument));
-        let asked = match limit_rupees {
-            None => engine.request_exit(instrument, product, exit),
-            Some(limit) => engine.request_limit_exit(instrument, product, exit, limit),
-        };
-        asked.map(ExitRequest::code).map_err(engine_error)
+        let position = (instrument, product);
+        session::request_exit(self.engine_mut()?, position, reason, limit_rupees)
     }
 
     /// Hand a live session its last price of an instrument, rupees at `at` (UTC
     /// nanoseconds): tick mode (`legs`).
     fn push_tick(&mut self, py: Python<'_>, instrument: u32, price: f64, at: i64) -> PyResult<()> {
-        let engine = self.engine_mut()?;
-        venue::answered(py, engine.push_tick(InstrumentId(instrument), price, at))
+        let ticked = self
+            .engine_mut()?
+            .push_tick(InstrumentId(instrument), price, at);
+        venue::answered(py, ticked)
     }
 
     /// Place a leg's stop again; what it did, one of `PROTECT_OUTCOMES` (`legs`).
     fn protect(&mut self, instrument: u32, product: &str) -> PyResult<&'static str> {
-        let (product, engine) = (parse_product(product)?, self.engine_mut()?);
-        let done = engine.protect(InstrumentId(instrument), product);
-        done.map(Protect::code).map_err(engine_error)
+        session::protect(self.engine_mut()?, instrument, product)
     }
 
     /// Reprice a leg's stop or an engine exit to a LIMIT at `limit_rupees`; True when the
     /// modification was sent now, False when it waits for an earlier one's answer (`legs`).
     fn reprice_exit(&mut self, py: Python<'_>, order_id: u64, limit_rupees: f64) -> PyResult<bool> {
-        let engine = self.engine_mut()?;
-        let repriced = engine.reprice_exit(OrderId(order_id), limit_rupees);
+        let repriced = self
+            .engine_mut()?
+            .reprice_exit(OrderId(order_id), limit_rupees);
         repriced.map_err(|error| venue_result_error(py, error))
     }
 
     /// Lock a live session's entries for a reason; True when they were not locked for it.
     fn lock_entries(&mut self, reason: &str) -> PyResult<bool> {
-        let engine = self.engine_mut()?;
-        engine.lock_entries(reason).map_err(engine_error)
+        self.engine_mut()?
+            .lock_entries(reason)
+            .map_err(engine_error)
     }
 
     /// Lift a live session's entry lock of a reason; True when they were locked for it.
     fn unlock_entries(&mut self, reason: &str) -> PyResult<bool> {
-        let engine = self.engine_mut()?;
-        engine.unlock_entries(reason).map_err(engine_error)
+        self.engine_mut()?
+            .unlock_entries(reason)
+            .map_err(engine_error)
     }
 
     /// The reasons a live session's entries are locked for, sorted.
     fn entry_locks(&self) -> PyResult<Vec<String>> {
-        let locks = self.engine()?.entry_locks();
-        Ok(locks.iter().map(|reason| reason.to_string()).collect())
+        Ok(queries::entry_locks(self.engine()?))
     }
 
     /// Cap the equity a live session's engine default sizes from, rupees (`session`).
     fn cap_sizing_equity(&mut self, rupees: f64) -> PyResult<()> {
-        let engine = self.engine_mut()?;
-        engine.cap_sizing_equity(rupees).map_err(engine_error)
+        self.engine_mut()?
+            .cap_sizing_equity(rupees)
+            .map_err(engine_error)
+    }
+
+    /// Set the side the other strategies of a live session hold or enter on an instrument,
+    /// "long", "short" or None (`session`).
+    #[pyo3(signature = (instrument, product, side))]
+    fn set_group_side(
+        &mut self,
+        instrument: u32,
+        product: &str,
+        side: Option<&str>,
+    ) -> PyResult<()> {
+        session::set_group_side(self.engine_mut()?, (instrument, product), side)
+    }
+
+    /// Mark an instrument as traded by several strategies of a live session, or not
+    /// (`session`).
+    fn set_shared(&mut self, instrument: u32, product: &str, shared: bool) -> PyResult<()> {
+        session::set_shared(self.engine_mut()?, (instrument, product), shared)
     }
 
     /// The strategy's daily loss measure, rupees on its risk basis (negative is a loss).
     fn daily_loss_measure(&self) -> PyResult<f64> {
         Ok(self.engine()?.daily_loss_measure())
+    }
+
+    /// The entries the strategy has counted on its session day (`session`).
+    fn trades_today(&self) -> PyResult<u32> {
+        Ok(self.engine()?.trades_today())
+    }
+
+    /// The account's trade cap (None for none) and the other strategies' entries of the
+    /// day, for a live session's next decisions (`session`).
+    #[pyo3(signature = (limit, others))]
+    fn set_account_trades(&mut self, limit: Option<u32>, others: u32) -> PyResult<()> {
+        session::set_account_trades(self.engine_mut()?, limit, others)
     }
 
     /// End a live session where it stands (`session`); the "finished" pause tuple.
@@ -291,64 +334,43 @@ impl NativeEngine {
     /// Place an order at the current decision point. Returns (outcome, order id, code):
     /// ("submitted", id, None), ("rejected", id, reject code) or ("skipped", None, skip
     /// reason).
-    fn submit(&mut self, request: &Bound<'_, PyDict>) -> PyResult<SubmissionTuple> {
-        let request = request::order_request(request)?;
-        let outcome = self.engine_mut()?.submit(request).map_err(engine_error)?;
-        Ok(submission_tuple(outcome))
+    fn submit(&mut self, request: &Dict<'_>) -> PyResult<SubmissionTuple> {
+        orders::submit(self.engine_mut()?, request)
     }
 
     /// Trade to a target position at the current decision point (`target()`, a target
     /// dict as `sizing` reads it). Returns None when the position already is the
     /// target, else the order's submission as `submit` returns it (("skipped", None,
     /// "rounded_to_zero") for a value or percent target that rounds to no units).
-    fn target(&mut self, request: &Bound<'_, PyDict>) -> PyResult<Option<SubmissionTuple>> {
-        let request = sizing::target_request(request)?;
-        let engine = self.engine_mut()?;
-        let outcome = engine.submit_target(request).map_err(engine_error)?;
-        Ok(outcome.map(submission_tuple))
+    fn target(&mut self, request: &Dict<'_>) -> PyResult<Option<SubmissionTuple>> {
+        orders::target(self.engine_mut()?, request)
     }
 
     /// Trade to a target position as part of a rebalance (`rebalance()`, a target dict
     /// as `target` takes): the same order, marked and tagged `rebalance`, whose buy fills
     /// after the slice's sales. Returns what `target` returns.
-    fn rebalance_target(
-        &mut self,
-        request: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<SubmissionTuple>> {
-        let request = sizing::target_request(request)?;
-        let engine = self.engine_mut()?;
-        let outcome = engine.submit_rebalance(request).map_err(engine_error)?;
-        Ok(outcome.map(submission_tuple))
+    fn rebalance_target(&mut self, request: &Dict<'_>) -> PyResult<Option<SubmissionTuple>> {
+        orders::rebalance_target(self.engine_mut()?, request)
     }
 
     /// What a sizer sees for an order request at the decision, as a dict (see
     /// `sizing::inputs`): what a strategy's sizing function receives.
-    fn sizing_inputs<'py>(
-        &self,
-        py: Python<'py>,
-        request: &Bound<'_, PyDict>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let request = request::order_request(request)?;
-        let ctx = self.engine()?.sizing_inputs(&request);
-        sizing::inputs(py, &ctx.map_err(engine_error)?, request.side)
+    fn sizing_inputs<'py>(&self, py: Python<'py>, request: &Dict<'_>) -> PyResult<Dict<'py>> {
+        orders::sizing_inputs(py, self.engine()?, request)
     }
 
     /// Replace a working order's request in full at the current decision point (a dict
     /// as `submit` takes). Returns what `submit` returns; in a live session the order
     /// keeps its old terms until the venue confirms the new ones (`apply_modify`).
-    fn modify(&mut self, order_id: u64, request: &Bound<'_, PyDict>) -> PyResult<SubmissionTuple> {
-        let request = request::order_request(request)?;
-        let engine = self.engine_mut()?;
-        let outcome = engine.modify(OrderId(order_id), request);
-        Ok(submission_tuple(outcome.map_err(engine_error)?))
+    fn modify(&mut self, order_id: u64, request: &Dict<'_>) -> PyResult<SubmissionTuple> {
+        orders::modify(self.engine_mut()?, order_id, request)
     }
 
     /// Cancel a working order; returns its state afterwards (in a live session the order
     /// works on until the venue confirms the cancel with `apply_cancel`, and the call is
     /// taken while the session waits too, `session`).
     fn cancel(&mut self, order_id: u64) -> PyResult<&'static str> {
-        let status = self.engine_mut()?.cancel(OrderId(order_id));
-        Ok(status.map_err(engine_error)?.code())
+        orders::cancel(self.engine_mut()?, order_id)
     }
 
     /// The position of an instrument and product as a dict, or None if never opened.
@@ -357,20 +379,13 @@ impl NativeEngine {
         py: Python<'py>,
         instrument: u32,
         product: &str,
-    ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let product = parse_product(product)?;
-        self.engine()?
-            .position(InstrumentId(instrument), product)
-            .map(|p| tables::position(py, p))
-            .transpose()
+    ) -> PyResult<Option<Dict<'py>>> {
+        queries::position(py, self.engine()?, instrument, product)
     }
 
     /// An order as a dict, or None for an unknown id.
-    fn order<'py>(&self, py: Python<'py>, order_id: u64) -> PyResult<Option<Bound<'py, PyDict>>> {
-        self.engine()?
-            .order(OrderId(order_id))
-            .map(|o| tables::order(py, o))
-            .transpose()
+    fn order<'py>(&self, py: Python<'py>, order_id: u64) -> PyResult<Option<Dict<'py>>> {
+        queries::order(py, self.engine()?, order_id)
     }
 
     /// The exit reason an order's fills record (a code of the trades' `exit_reason`):
@@ -383,8 +398,7 @@ impl NativeEngine {
 
     /// Ids of the orders that can still fill.
     fn working_orders(&self) -> PyResult<Vec<u64>> {
-        let working = self.engine()?.working_orders();
-        Ok(working.iter().map(|id| id.0).collect())
+        Ok(queries::working_orders(self.engine()?))
     }
 
     /// True while an order that would open or add works on the instrument.
@@ -395,14 +409,8 @@ impl NativeEngine {
     /// Run a condition strategy to the end of the grid in Rust, with no Python call per
     /// bar, from its spec dict (see `signals`). Returns the entries a sizer skipped as
     /// (decision instant, reason) pairs. Then `finish()` returns the result.
-    fn run_signals(&mut self, spec: &Bound<'_, PyDict>) -> PyResult<Vec<(i64, &'static str)>> {
-        let signals = signals::signal_arrays(spec)?;
-        let skipped =
-            oa_bt::engine::run_signals(self.engine_mut()?, &signals).map_err(engine_error)?;
-        Ok(skipped
-            .iter()
-            .map(|entry| (entry.decided_at, entry.reason.code()))
-            .collect())
+    fn run_signals(&mut self, spec: &Dict<'_>) -> PyResult<Vec<signals::SkippedTuple>> {
+        signals::run(self.engine_mut()?, spec)
     }
 
     /// The last close seen of an instrument, rupees.
@@ -431,44 +439,34 @@ impl NativeEngine {
     /// Register a timer at an IST time each session (minutes since midnight); returns
     /// its id. Only before the first `advance`.
     fn add_timer_at(&mut self, minute_of_day: u32) -> PyResult<u32> {
-        let spec = TimerSpec::At { minute_of_day };
-        Ok(self.engine_mut()?.add_timer(spec).map_err(engine_error)?.0)
+        timers::add_at(self.engine_mut()?, minute_of_day)
     }
 
     /// Register a timer at the close of the first session of each period ("W", "M", "Q"
     /// or "Y"); returns its id. Only before the first `advance`.
     fn add_timer_every(&mut self, unit: &str) -> PyResult<u32> {
-        let unit = CalendarUnit::from_code(unit).ok_or_else(|| {
-            NativeEngineInputError::new_err(format!("unknown period {unit:?}: use W, M, Q or Y"))
-        })?;
-        let spec = TimerSpec::Every(unit);
-        Ok(self.engine_mut()?.add_timer(spec).map_err(engine_error)?.0)
+        timers::add_every(self.engine_mut()?, unit)
     }
 
     /// (timer id, sessions fired, sessions missed) of every timer, in id order.
     fn timer_counts(&self) -> PyResult<Vec<(u32, u32, u32)>> {
-        Ok(self
-            .engine()?
-            .timer_counts()
-            .iter()
-            .map(|count| (count.timer.0, count.fired, count.missed))
-            .collect())
+        Ok(timers::counts(self.engine()?))
     }
 
     /// Every strategy bar of an instrument over the run, as a dict of arrays (ts_open,
     /// ts_close int64; open, high, low, close, volume float64): the bars the pauses
     /// deliver, in the same order.
-    fn strategy_bars<'py>(&self, py: Python<'py>, instrument: u32) -> PyResult<Bound<'py, PyDict>> {
-        let bars = self.engine()?.strategy_bars(InstrumentId(instrument));
-        tables::strategy_bars(py, &bars)
+    fn strategy_bars<'py>(&self, py: Python<'py>, instrument: u32) -> PyResult<Dict<'py>> {
+        queries::strategy_bars(py, self.engine()?, instrument)
     }
 
     /// Register a futures series (see `futures`); returns its index. Only before the
     /// first `advance`.
-    fn add_futures_series(&mut self, series: &Bound<'_, PyDict>) -> PyResult<u32> {
+    fn add_futures_series(&mut self, series: &Dict<'_>) -> PyResult<u32> {
         let series = futures::series(series)?;
-        let engine = self.engine_mut()?;
-        engine.add_futures_series(series).map_err(engine_error)
+        self.engine_mut()?
+            .add_futures_series(series)
+            .map_err(engine_error)
     }
 
     /// The switches of the run's futures series, in slice order, as dicts.
@@ -477,11 +475,8 @@ impl NativeEngine {
     }
 
     /// The result tables, once the run has finished. The engine cannot be used after.
-    fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        if !self.engine()?.is_finished() {
-            return Err(engine_error(KernelError::RunNotFinished));
-        }
-        let output = self.take()?.finish().map_err(engine_error)?;
+    fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Dict<'py>> {
+        let output = self.take_finished()?.finish().map_err(engine_error)?;
         results::output(py, &output)
     }
 }

@@ -3,7 +3,7 @@ the engines' tables, the journal's day as the session counted it, and the sessio
 records (`_session_close.SessionOutcome`).
 
 - **Each strategy's `bt.Result`** is built by the backtest's own result builder
-  (`_pipeline._result`, the one `bt.backtest` returns), from its kernel session's
+  (`_pipeline_result.finished_result`, the one `bt.backtest` returns), from its kernel session's
   `finish()` tables and its part of the session plan: the settings, instruments, market
   and history a backtest of the day would have, the strategy instance and its run
   context, the warm-up measured on its live stores. It covers the trades this start
@@ -29,14 +29,17 @@ records (`_session_close.SessionOutcome`).
   orders not placed, as `bt.backtest` does (`_rejection_notice`): the session alerted
   each refusal as it came, and each result's warnings name every reject code, the live
   session's entry locks (`live_lock`) and in-flight gate (`live_in_flight`) among them.
+- **The portfolio** is the strategies' results as one account (`_result_portfolio`).
 - **The day's summary** is the session's (`_session_figures`): every start of the day,
   each counted once.
 - **The tables** are `_result_frames`'.
 - **The warnings**, the mode first: the mode the session ran in and what it means; then
   the session's own warnings in order (the preflight's, the plan's, the clock's against
   the exchange, each first position opened with no stop at the broker, and the rest);
-  then the seconds positions had no confirmed stop, the positions left open, and each leg
-  the close named that it could not confirm (`SessionResult.unconfirmed_legs`).
+  then the seconds positions had no confirmed stop, the positions left open (each leg, then
+  each shared instrument as OpenAlgo's net for its members together, never as a position
+  of its own), and each leg the close named that it could not confirm
+  (`SessionResult.unconfirmed_legs`).
 
 Times are UTC nanoseconds turned into IST datetimes, amounts rupees, quantities units.
 """
@@ -51,7 +54,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .._pipeline import PreparedRun, _Finished, _result
+from .._pipeline import PreparedRun
+from .._pipeline_result import FinishedRun, finished_result
 from .._result_tables import IST
 from .._warm_up import readiness
 from ..reference import Instrument
@@ -60,6 +64,7 @@ from ..session_result import SessionResult
 from ._plan_catch_up import StrategyPlan
 from ._result_frames import (
     drift_frame,
+    fill_comparison_frame,
     fills_frame,
     locks_frame,
     open_positions_frame,
@@ -68,7 +73,9 @@ from ._result_frames import (
     skipped_frame,
     unprotected_frame,
 )
+from ._result_portfolio import session_portfolio
 from ._session_close import SessionOutcome
+from ._session_open import OpenPosition
 from ._session_records import Restored
 from ._types import Mode
 
@@ -134,13 +141,23 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
         restarts=outcome.restarts,
         strategies=outcome.strategies,
         results=MappingProxyType(results),
+        portfolio=session_portfolio(
+            results,
+            outcome.arguments,
+            outcome.funds_at_start,
+            shared=bool(outcome.summary.shared),
+        ),
+        versions=MappingProxyType(dict(outcome.versions)),
         summary=outcome.summary,
         orders=orders_frame(outcome.orders),
         fills=fills_frame(outcome.fills),
+        fill_comparison=fill_comparison_frame(outcome.fill_comparison),
         drift=drift_frame(outcome.drift),
         unprotected=unprotected_frame(outcome.unprotected, outcome.ended_ns),
         locks=locks_frame(outcome.locks),
-        reconciliations=reconciliations_frame(outcome.reconciliations),
+        reconciliations=reconciliations_frame(
+            outcome.reconciliations, shared=bool(outcome.summary.shared)
+        ),
         skipped_decisions=skipped_frame(outcome.skipped_decisions),
         open_positions=open_positions_frame(outcome.open_positions),
         mode_breach=outcome.mode_breach,
@@ -163,8 +180,21 @@ def strategy_result(
     output = dict(output) if restore is None else this_start(output, restore)
     state = readiness(context.run.checks.outcomes, context, setup.history)
     context.close(output["orders"])
-    arguments = dict(spec.arguments)
-    prepared = PreparedRun(
+    arguments, prepared = dict(spec.arguments), prepared_run(part)
+    finished = FinishedRun(
+        part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
+    )
+    base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
+    lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
+    return finished_result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
+
+
+def prepared_run(part: StrategyPlan) -> PreparedRun:
+    """The prepared run of a backtest of the day that one strategy's part of the session
+    plan stands for (its settings, instruments, today's bars and market settings), as its
+    result and its start's manifest (`_session_versions`) read it."""
+    setup, arguments = part.setup, part.spec.arguments
+    return PreparedRun(
         plan=setup.plan,
         calendar=None,
         instruments=list(setup.instruments),
@@ -180,12 +210,6 @@ def strategy_result(
         },
         market=setup.market,
     )
-    finished = _Finished(
-        part.strategy, context, setup.market, setup.history, state, output, list(timer_warnings)
-    )
-    base_rule = f"base {setup.plan.base} ({BASE_RULE}): {LIVE_BASE_MEANING}"
-    lines = LIVE_ASSUMPTIONS | {"base_rule": base_rule}
-    return _result(spec.strategy, prepared, arguments, finished, None, assumptions=lines)
 
 
 def this_start(output: Mapping[str, Any], restore: Restored) -> dict[str, Any]:
@@ -253,16 +277,28 @@ def result_warnings(outcome: SessionOutcome) -> tuple[str, ...]:
             f"positions had no confirmed stop at the broker for {math.ceil(seconds)} s today "
             "in all: result.unprotected lists each window and why"
         )
-    if outcome.open_positions:
-        legs = ", ".join(f"{p.strategy} {p.units:g} {p.symbol}" for p in outcome.open_positions)
+    if any(position.units for position in outcome.open_positions):
         notes.append(
-            f"positions were still open when the session ended ({legs}): "
-            "result.open_positions says what to do with each"
+            "positions were still open when the session ended "
+            f"({_open_words(outcome.open_positions)}): result.open_positions says what to do "
+            "with each"
         )
     summary = outcome.summary
     for words in (*summary.differing, *summary.unconfirmed):
         notes.append(NOT_CONFIRMED_AT_CLOSE.format(words=words))
     return tuple(dict.fromkeys(notes))
+
+
+def _open_words(positions: Sequence[OpenPosition]) -> str:
+    """The positions left open in words: each leg, then each shared instrument's row as
+    OpenAlgo's net for its members together."""
+    legs = ", ".join(f"{p.strategy} {p.units:g} {p.symbol}" for p in positions if not p.members)
+    nets = ", ".join(
+        f"OpenAlgo's net {p.units:g} {p.symbol} for {p.strategy} together"
+        for p in positions
+        if p.members
+    )
+    return "; ".join(words for words in (legs, nets) if words)
 
 
 def _ist(ts_ns: int) -> pd.Timestamp:
@@ -276,6 +312,7 @@ __all__ = [
     "MODE_WARNINGS",
     "NOT_CONFIRMED_AT_CLOSE",
     "instrument_lines",
+    "prepared_run",
     "result_warnings",
     "session_result",
     "strategy_result",

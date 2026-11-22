@@ -23,6 +23,28 @@ not it has rows.
   fill to the last included, so its net profit is its trades' net plus an open position's
   value at its mark less what its fills were charged. Its Assumptions block says OpenAlgo
   priced the fills (no fill model, no slippage).
+- `portfolio`: the strategies as one account, a `bt.PortfolioResult` of the same
+  `results`, so it covers this start too: the account on the sum of their capitals (its
+  equity every strategy's at its last slice close, as `metrics.combine_equity` adds them;
+  its margin, free cash and daily loss measure of this start: after a restart the
+  account's daily limits stay held to the day's measure, whose figures are `summary`'s),
+  its metrics, `summary()` and combined `tearsheet()`, every strategy's tables in one with
+  a `strategy` column, and the net position of each instrument (`net_positions`, the
+  broker's view of one several strategies share). Its Assumptions block names the funds
+  OpenAlgo reported at the start. The broker's margin check is the account's, so no order
+  is refused for the account's margin; its `refused` lists the entries the account's
+  trade cap refused (`account_trade_limit`), while an entry a strategy's kill switch
+  locked out after an account limit fired it stays in that strategy's orders as
+  `live_lock` (the lock's reason is in `locks`).
+- `versions`: each strategy's run manifest of this start, by name in call order: what a
+  backtest's manifest records (the engine version, the strategy's module, name, source
+  hash and parameter values, every resolved argument, the reference table and cost
+  schedule versions; never the API key). Each order carries its strategy's version id
+  (`orders`' `version_id`), the first 12 hexadecimal characters of the SHA-256 of its
+  source hash and parameter values: the same code with the same parameters gives the same
+  id on every day and restart. A class whose source cannot be read (defined in a notebook
+  cell) has its compiled code hashed instead, which depends on the Python version. The
+  journal keeps each start's.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
@@ -31,29 +53,63 @@ not it has rows.
   opening at each decision, with the run's modelled slippage; negative when live did
   better; None when not one of them could be compared) and `slippage_not_compared`
   (MARKET fills with no bar to set them against),
-  `closed_trades`, `rejected_orders`, `unprotected_seconds`,
+  `stop_slippage` and `stop_slippage_not_compared` (the same for the fills of the
+  legs' stops, each at its trigger with the run's slippage, or its bar's open when the
+  bar opened through it), `closed_trades`, `rejected_orders`, `unprotected_seconds`,
   `reconcile_mismatches`, `undelivered_alerts` and `flat`, and the legs the close names
-  (`differing`, `unconfirmed`) and the strategies of earlier starts (`earlier`), in
+  (`differing`, `unconfirmed`; a difference of an instrument several strategies share is
+  named and counted once), the strategies of earlier starts (`earlier`) and each
+  instrument several strategies share, OpenAlgo's net against their sum (`shared`), in
   words; `summary_text()` gives them as the DAILY_SUMMARY alert sent them. Its type is
   `SessionSummary`, loaded with the live layer.
-- `orders`: every order the session placed through OpenAlgo, with its intent ID, broker
-  order ID, purpose, how far it got at the broker and its final status. `fills`: every
+- `orders`: every order the session placed through OpenAlgo, with its intent ID, its
+  strategy's version id, broker order ID, purpose, how far it got at the broker and its
+  final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
-- `drift`: each broker candle against the bar built from the feed's ticks. `unprotected`:
+- `fill_comparison`: each fill of the day's orders (every start's, as `summary`) against
+  the price a backtest of the session's own bars fills the same order at: `strategy`,
+  `version_id`, `symbol`, `exchange`, `order_id`, `purpose` (entry, add, exit, stop,
+  target for the engine's exit at a leg's target, square_off, risk_exit, or hand for a
+  fill of an order placed by hand that the session adopted), `price_type` as placed,
+  `side`, `units`, `live_time` and `live_price`, `backtest_time` (the open of the bar a
+  backtest fills it in) and `backtest_price`, `difference` (rupees per unit, signed
+  against the trader: positive when live did worse), `rupees` (the difference times the
+  units and the multiplier), `compared` and `reason` (why a row is not compared: no bar
+  yet, a LIMIT order, a hand order). A MARKET order is set against the open of the bar
+  opening at its decision, the engine's target exit against its level, a stop order against
+  its trigger (or the bar's open through a gap) in the first bar that reached it, each with
+  the run's slippage. The compared MARKET rows add up to `summary.slippage`, the legs'
+  stops' (purpose stop) to `summary.stop_slippage`.
+- `drift`: each broker candle against the bar built from the feed's ticks. The strategy
+  decided, and kept deciding, on the bars built from ticks: a broker candle never
+  replaced one, and was the bar only of a minute with no ticks (one the feed was dead
+  in, the minute watching began in). A restart is the exception: the bars built from
+  ticks before it are not kept, so the restarted session, its strategy and its kernel
+  alike, holds the broker's candles for the minutes before it. `unprotected`:
   each window a position had no confirmed stop at the broker, and why. `locks`: each
   entry lock, when it was set and lifted. `reconciliations`: each comparison with the
-  broker's books that differed, and what was done. `skipped_decisions`: the strategy bars
+  broker's books that differed, and what was done; in a session with an instrument
+  several strategies share, a member of it has its group there too (`group`,
+  `group_units`, `member_units`, the other orders' `external_units`, and on the row of an
+  act the `allocation` made and the `stops_cut`; empty for a strategy alone), and a
+  session without one has none of these columns. `skipped_decisions`: the strategy bars
   whose `on_bar` was skipped for missing data.
 - `open_positions`: the positions still open at the end, each with its stop at the
-  broker, whether that stop was confirmed working, and a note saying what to do. A leg
+  broker, whether that stop was confirmed working, and a note saying what to do; after
+  the legs, a row per instrument several strategies share whose net OpenAlgo shows as a
+  position or differs from their sum, named by its members ("A and B"), with that net
+  and whether it equals their sum (confirmed when it does and each member's stop is).
+  That row is OpenAlgo's net for the members together, not a position of its own: the
+  repr counts the strategies' positions only. A leg
   the close names (`unconfirmed_legs`: OpenAlgo's books and the engine did not agree on
   it, or no read confirmed it) is there only at a figure the session could carry to the
   close (none for a difference a late read saw): a warning names each, and `flat` is
   False.
 - `mode_breach`: the mode guard's text when the analyzer switch changed, else None.
   `warnings`: what the reader must know, the mode first. `paths`: the journal, the day's
-  log and the event stream.
+  log, the event stream and the decisions file (each strategy bar: what was decided on,
+  the indicators, the position and what was submitted, or why no decision was made).
 - `flat`: True only when the session ended with no position open, a strategy of an
   earlier start included, and no leg the close names.
 
@@ -73,6 +129,8 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from .portfolio_result import PortfolioResult
+from .report._format import indian_digits
 from .result import Result
 
 if TYPE_CHECKING:
@@ -95,9 +153,12 @@ class SessionResult:
     restarts: int
     strategies: tuple[str, ...]
     results: Mapping[str, Result]
+    portfolio: PortfolioResult
+    versions: Mapping[str, Mapping[str, Any]]
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame
+    fill_comparison: pd.DataFrame
     drift: pd.DataFrame
     unprotected: pd.DataFrame
     locks: pd.DataFrame
@@ -131,9 +192,15 @@ class SessionResult:
         return (
             f"SessionResult({self.mode.upper()} {self.day.isoformat()}, broker "
             f"{self.broker}, stopped by {self.stopped_by}, {figures.closed_trades} closed "
-            f"trades, net P&L Rs {figures.net_pnl:,.2f}, "
-            f"{len(self.open_positions)} positions open{self._legs_named()})"
+            f"trades, net P&L Rs {indian_digits(figures.net_pnl)}, "
+            f"{self._legs_open()} positions open{self._legs_named()})"
         )
+
+    def _legs_open(self) -> int:
+        """The strategies' positions open: a shared instrument's row, named by its members
+        ("A and B", never a strategy's name), is OpenAlgo's net for them, no position of
+        its own."""
+        return int(self.open_positions["strategy"].isin(self.strategies).sum())
 
     def _legs_named(self) -> str:
         count = len(self.unconfirmed_legs)

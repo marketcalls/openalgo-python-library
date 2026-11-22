@@ -50,6 +50,12 @@ ARGUMENTS = [
     "strict_config",
     "live_dir",
     "on_stop",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
+    "account_max_trades_per_day",
+    "account_daily_profit_target",
+    "max_orders_per_second",
     "not_live",
 ]
 
@@ -89,10 +95,19 @@ def test_the_settings_shared_with_bt_backtest_take_its_defaults():
         for name, parameter in live_parameters.items()
         if name in backtest and parameter.default is not inspect.Parameter.empty
     ]
-    assert len(shared) == 12
+    # The twelve settings of a strategy and the account's daily loss limit, then the three
+    # daily limits of a strategy and the account's two (18-multi-strategy 2.5a).
+    assert len(shared) == 18
     assert {name: live_parameters[name].default for name in shared} == {
         name: backtest[name].default for name in shared
     }
+
+
+def test_the_order_rate_defaults_to_the_live_layers_figure():
+    from openalgo.backtest._live._order_rate import DEFAULT_ORDERS_PER_SECOND
+
+    default = inspect.signature(bt.live).parameters["max_orders_per_second"].default
+    assert default == DEFAULT_ORDERS_PER_SECOND == 8
 
 
 def test_no_argument_of_bt_live_chooses_the_mode():
@@ -138,7 +153,6 @@ REFUSED = {
     "daily interval": (variant(interval="D"), {}, "a D strategy interval"),
     "CNC": (variant(product="CNC"), {}, "product CNC"),
     "NRML": (variant(product="NRML"), {}, "product NRML"),
-    "two on one symbol": ([BuyAndHold, variant("Other")], {}, "two strategies on NSE:SBIN"),
     "two with one name": (
         [variant("Twin"), variant("Twin", symbol="INFY")],
         {},

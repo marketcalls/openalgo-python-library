@@ -16,7 +16,7 @@ import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 from restart_samples import StopWhenFlat, crash_at, crashing, restart, run_to_crash
 from session_samples import alerts, ist
-from session_trace import NO_ORPHAN, ONE_STOP, WITHIN
+from session_trace import MEMBERS_WITHIN, NO_ORPHAN, ONE_STOP, WITHIN
 from stops_samples import events, stop_world
 
 from openalgo.backtest._live._types import LOGGER_NAME, Purpose
@@ -46,9 +46,10 @@ def test_a_restored_stop_with_no_record_is_placed_again_and_no_exit_is_sent(worl
     # the record of a stop the broker holds, a state the save before every send (2.5 E)
     # never leaves (F73 is the real case, its stop never sent), so the restart's stop
     # works beside the first until the worker cancels the first: two stops of 10 on a
-    # position of 10, and an orphan at the end, so those three checks cannot hold here.
+    # position of 10 (the leg's and its strategy's as a group of one), and an orphan at
+    # the end, so those four checks cannot hold here.
     why = "the venue record of a stop the broker holds is dropped by the test"
-    for check in (ONE_STOP, WITHIN, NO_ORPHAN):
+    for check in (ONE_STOP, WITHIN, MEMBERS_WITHIN, NO_ORPHAN):
         world.trace.waive(check, why)
     crash_at(world, CRASHED)
     run_to_crash(world, StopWhenFlat)

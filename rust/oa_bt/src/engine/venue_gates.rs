@@ -10,6 +10,10 @@
 //! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two | `live_in_flight` |
 //! | Freeze cap | when it would take the position above the instrument's freeze quantity | `freeze_qty` |
 //!
+//! The gates of an instrument several strategies of the session trade come before them
+//! (`venue_group`): an entry on the other side of the group (`group_other_side`), and a
+//! strategy order that rests there (`shared_resting`).
+//!
 //! Why: a backtest fills a MARKET entry at the next open, before the next decision, but a
 //! broker may report its fill later (a polling broker), so an entry on top of one in flight
 //! could double the position; and one stop order and one exit order cover a position, while
@@ -41,9 +45,10 @@ fn holds_entries(legs_stop: bool, stop_busy: bool) -> bool {
 
 impl Engine {
     /// The checks of an external session after the backtest's, for `request` of `units`
-    /// decided in `slice`: its entry gates (module docs), then what the fill path could not
-    /// record (`venue_checks`). `replacing` is the order a modification replaces. A
-    /// backtest checks nothing here; `Ok(Err(code))` rejects the order.
+    /// decided in `slice`: the gates of a shared instrument (`venue_group`), its entry
+    /// gates (module docs), then what the fill path could not record (`venue_checks`).
+    /// `replacing` is the order a modification replaces. A backtest checks nothing here;
+    /// `Ok(Err(code))` rejects the order.
     ///
     /// Errors: those of `venue_checks`.
     pub(super) fn live_checks(
@@ -53,6 +58,9 @@ impl Engine {
         slice: &SliceInfo,
         replacing: Option<OrderId>,
     ) -> Result<Result<(), RejectCode>, KernelError> {
+        if let Err(code) = self.group_gates(request, units, replacing) {
+            return Ok(Err(code));
+        }
         if let Err(code) = self.session_entry_gates(request, units, replacing) {
             return Ok(Err(code));
         }

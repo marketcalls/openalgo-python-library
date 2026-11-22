@@ -50,8 +50,20 @@ def frame(width: int, height: int, margin: Margin, label: str, body: str) -> str
     )
 
 
-def _pct(value: float, decimals: int) -> str:
-    return f"{value * 100:.{decimals}f}%"
+def value_text(value: float, percent: bool) -> str:
+    """A value as a mark's hover readout shows it: a percent of a fraction, or a plain
+    number in Indian notation."""
+    return fmt.percent(value) if percent else fmt.number(value)
+
+
+def tick_texts(low: float, high: float, count: int, percent: bool) -> list[tuple[float, str]]:
+    """The ticks of an axis over [low, high] and their labels, percent or plain, to as
+    many decimals as the step needs."""
+    if percent:
+        decimals = scale.percent_decimals(low, high, count)
+        return [(t, fmt.percent(t, decimals)) for t in scale.ticks(low, high, count)]
+    decimals = scale.number_decimals(low, high, count)
+    return [(t, fmt.number(t, decimals)) for t in scale.ticks(low, high, count)]
 
 
 def _count_axis(tallest: int, inner_w: float, inner_h: float, caption: str) -> tuple:
@@ -78,13 +90,16 @@ def histogram(
     label: str = "Session returns distribution",
     decimals: int | None = 1,
     counts: str | None = None,
+    bins: int = HISTOGRAM_BINS,
+    percent: bool = True,
 ) -> str:
     """Fractions (session returns, or the trades' excursions) in round-edged bins, gains
     green and losses red by the bin's centre, with a dashed line at their mean. `label`
     names the chart for a screen reader; the axis shows percent to `decimals` places, or
     to as many as its tick step needs when None (`scale.percent_decimals`). `counts`
     names what a bar counts ("trades") and adds a count axis captioned with it; None
-    draws no count axis."""
+    draws no count axis. `bins` is the number of bins asked; with `percent` False the
+    values are plain numbers, labelled to as many decimals as the step needs."""
     data = values[np.isfinite(values)]
     if not len(data):
         return "<p class='empty'>No data</p>"
@@ -95,7 +110,7 @@ def histogram(
     inner_w, inner_h = width - margin.left - margin.right, height - margin.top - margin.bottom
     low, high = scale.widen(float(data.min()), float(data.max()))
     x = scale.Linear(low, high, 0, inner_w)
-    counted = scale.bins(data, low, high, HISTOGRAM_BINS)
+    counted = scale.bins(data, low, high, bins)
     tallest = max(n for _, _, n in counted)
     marks = []
     y = scale.Linear(0, tallest or 1, inner_h, 0)
@@ -108,7 +123,7 @@ def histogram(
         marks.append(
             f"<rect x='{x(left):.2f}' y='{y(n):.2f}' width='{wide:.2f}' "
             f"height='{inner_h - y(n):.2f}' style='fill:var({tone})' opacity='0.78'>"
-            f"<title>{fmt.percent(centre)} &#183; {n}</title></rect>"
+            f"<title>{value_text(centre, percent)} &#183; {n}</title></rect>"
         )
     mean = float(data.mean())
     marks.append(
@@ -116,14 +131,24 @@ def histogram(
         "style='stroke:var(--accent)' stroke-width='1.5' stroke-dasharray='3 3'/>"
     )
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{inner_h}' y2='{inner_h}' class='axis'/>")
-    if decimals is None:
-        decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
     marks += [
         f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' style='{AXIS_TEXT}'>"
-        f"{_pct(t, decimals)}</text>"
-        for t in scale.ticks(low, high, PERCENT_TICKS)
+        f"{text}</text>"
+        for t, text in _histogram_ticks(low, high, decimals, percent)
     ]
     return frame(width, height, margin, label, "".join(marks))
+
+
+def _histogram_ticks(
+    low: float, high: float, decimals: int | None, percent: bool
+) -> list[tuple[float, str]]:
+    """The histogram's value ticks and labels: percent to `decimals` places (as many as
+    the step needs when None), or plain numbers to as many as the step needs."""
+    if not percent:
+        return tick_texts(low, high, PERCENT_TICKS, percent=False)
+    if decimals is None:
+        decimals = scale.percent_decimals(low, high, PERCENT_TICKS)
+    return [(t, fmt.percent(t, decimals)) for t in scale.ticks(low, high, PERCENT_TICKS)]
 
 
 class Box(NamedTuple):
@@ -150,7 +175,7 @@ def box_plot(boxes: Sequence[Box], *, height: int = 200) -> str:
         marks.append(
             f"<line x1='{x(t):.2f}' x2='{x(t):.2f}' y1='0' y2='{inner_h}' class='grid'/>"
             f"<text x='{x(t):.2f}' y='{inner_h + 16}' text-anchor='middle' "
-            f"style='{AXIS_TEXT}'>{_pct(t, 1)}</text>"
+            f"style='{AXIS_TEXT}'>{fmt.percent(t, 1)}</text>"
         )
     if low < 0 < high:
         marks.append(f"<line x1='{x(0):.2f}' x2='{x(0):.2f}' y1='0' y2='{inner_h}' class='zero'/>")
@@ -184,10 +209,14 @@ class YearRow(NamedTuple):
     benchmark: float
 
 
-def _value_axis(values: list[float], inner_h: float, count: int) -> tuple[scale.Linear, list]:
+def _value_axis(
+    values: list[float], inner_h: float, count: int
+) -> tuple[scale.Linear, list[tuple[float, str]]]:
+    """(the y scale of a percent axis over `values` and 0, its ticks and their labels to
+    as many decimals as the step needs, so a tick at -2.5% reads -2.5%)."""
     low, high = min(0.0, *values), max(0.0, *values)
     low, high = scale.widen(low, high)
-    return scale.Linear(low, high, inner_h, 0), scale.ticks(low, high, count)
+    return scale.Linear(low, high, inner_h, 0), tick_texts(low, high, count, percent=True)
 
 
 def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
@@ -222,8 +251,8 @@ def yearly_bars(rows: Sequence[YearRow], benchmark_name: str | None) -> str:
     ]
     marks += [
         f"<line x1='0' x2='{inner_w}' y1='{y(t):.2f}' y2='{y(t):.2f}' class='grid'/>"
-        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>{_pct(t, 0)}</text>"
-        for t in ticks
+        f"<text x='-8' y='{y(t) + 3:.2f}' text-anchor='end' style='{AXIS_TEXT}'>{label}</text>"
+        for t, label in ticks
     ]
     mean = float(np.mean(values[: len(data)]))
     marks.append(f"<line x1='0' x2='{inner_w}' y1='{y(0):.2f}' y2='{y(0):.2f}' class='base'/>")
@@ -272,4 +301,14 @@ def streak_bars(counts: Sequence[tuple[int, int]]) -> str:
     return frame(width, height, margin, "Losing streak lengths", "".join(marks))
 
 
-__all__ = ["Box", "YearRow", "box_plot", "frame", "histogram", "streak_bars", "yearly_bars"]
+__all__ = [
+    "Box",
+    "YearRow",
+    "box_plot",
+    "frame",
+    "histogram",
+    "streak_bars",
+    "tick_texts",
+    "value_text",
+    "yearly_bars",
+]

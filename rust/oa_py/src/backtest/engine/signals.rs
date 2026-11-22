@@ -12,15 +12,28 @@
 //! "trail_trigger", "trail_step", "breakeven_trigger", "breakeven_offset" or "sizer".
 
 use numpy::PyReadonlyArray1;
-use oa_bt::engine::{AtrInput, AtrSlot, EntrySignal, SignalArrays};
+use oa_bt::engine::{AtrInput, AtrSlot, Engine, EntrySignal, SignalArrays, SkippedEntry};
 use oa_bt::exec::InstrumentId;
 use oa_bt::model::Product;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use super::errors::engine_error;
 use super::request::order_request;
 use super::setup::{field, optional, unknown};
 use super::NativeEngineInputError;
+
+/// A skipped entry as it crosses: (decision instant UTC nanoseconds, skip reason).
+pub(super) type SkippedTuple = (i64, &'static str);
+
+/// `run_signals`: run a condition strategy from its spec dict to the end of the grid in
+/// Rust; the entries a sizer skipped.
+pub(super) fn run(engine: &mut Engine, spec: &Bound<'_, PyDict>) -> PyResult<Vec<SkippedTuple>> {
+    let signals = signal_arrays(spec)?;
+    let skipped = oa_bt::engine::run_signals(engine, &signals).map_err(engine_error)?;
+    let tuple = |entry: &SkippedEntry| (entry.decided_at, entry.reason.code());
+    Ok(skipped.iter().map(tuple).collect())
+}
 
 /// One ATR as it crosses: (slot, target index, period, values per bar).
 type AtrTuple<'py> = (String, Option<usize>, u32, PyReadonlyArray1<'py, f64>);
@@ -88,7 +101,7 @@ fn entry_signal(
 }
 
 /// The condition arrays and order templates of a run from their spec dict.
-pub(super) fn signal_arrays(dict: &Bound<'_, PyDict>) -> PyResult<SignalArrays> {
+pub(in crate::backtest) fn signal_arrays(dict: &Bound<'_, PyDict>) -> PyResult<SignalArrays> {
     let product: String = field(dict, "product")?;
     let bar_opens: PyReadonlyArray1<'_, i64> = field(dict, "bar_opens")?;
     Ok(SignalArrays {

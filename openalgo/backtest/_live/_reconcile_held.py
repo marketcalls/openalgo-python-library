@@ -1,7 +1,9 @@
 """What the reconciler's exit guard (`_reconcile_guard`) tells the operator of an order it
 holds back on a guarded leg (16-session-design 5.4 "As built"; unit 12): one ERROR alert
 per held order, naming the leg, the units OpenAlgo's position book shows and why the order
-waits.
+waits. On an instrument several strategies of the session share, the book's units are the
+net of all of them, and every closing order of each waits while the net differs from
+their sum (18-multi-strategy 4.8, unit M6).
 
 Neither a held cancel of the stop nor the exit it makes way for is promised once the books
 agree: protect by state keeps the cancel of a stop that still fits and asks for no exit,
@@ -20,18 +22,24 @@ from ._types import Purpose
 from ._venue_requests import CancelRequest
 
 
-def held_words(request: Any, broker_units: int) -> str:
+def held_words(request: Any, broker_units: int, *, shared: bool = False) -> str:
     """The ERROR alert of `request` (a placement, modify or cancel the guard holds) of a
-    guarded leg whose broker holds `broker_units` (signed) by OpenAlgo's position book."""
+    guarded leg whose broker holds `broker_units` (signed) by OpenAlgo's position book;
+    `shared` for a member of an instrument several strategies of the session share
+    (module docstring)."""
     intent = request.intent
     leg = f"{intent.symbol} {intent.exchange} ({intent.action} {intent.quantity})"
     book = f"OpenAlgo's position book shows {broker_units} units"
+    through_zero = "would take the broker's position through zero"
+    if shared:
+        book += f" of {intent.symbol} for the strategies sharing it, not what they hold together"
+        through_zero = "waits with every closing order of them while the books differ"
     if isinstance(request, CancelRequest):
         return (
             f"{intent.strategy}: the cancel of the stop of {leg} is held back, so the stop "
-            f"stays at the broker: {book}, and the exit it makes way for would take the "
-            "broker's position through zero. Both wait for the books to agree, and go only "
-            "if the session still asks for them then; check the position in OpenAlgo"
+            f"stays at the broker: {book}, and the exit it makes way for {through_zero}. "
+            "Both wait for the books to agree, and go only if the session still asks for "
+            "them then; check the position in OpenAlgo"
         )
     if intent.purpose in ENTRY_PURPOSES:
         return (
@@ -41,9 +49,8 @@ def held_words(request: Any, broker_units: int) -> str:
         )
     what = "stop" if intent.purpose is Purpose.STOP else intent.purpose.value.replace("_", " ")
     return (
-        f"{intent.strategy}: the {what} of {leg} is held back: {book}, and it would take "
-        "the broker's position through zero. It is sent once the books agree; check the "
-        "position in OpenAlgo"
+        f"{intent.strategy}: the {what} of {leg} is held back: {book}, and it {through_zero}. "
+        "It is sent once the books agree; check the position in OpenAlgo"
     )
 
 

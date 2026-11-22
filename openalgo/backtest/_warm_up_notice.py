@@ -88,13 +88,15 @@ def wait_notice(record: dict[str, Any]) -> str | None:
     return " ".join([*sentences, SEE_DETAILS]) if sentences else None
 
 
-def announce_wait(result: Any) -> None:
+def announce_wait(result: Any, strategy: str | None = None) -> None:
     """Issue the notice of a finished run (`wait_notice`) as one WarmUpWarning
     attributed to the caller's line, or nothing when the strategy did not wait.
-    `result` is the run's `Result`."""
+    `result` is the run's `Result`; `strategy`, when given, is the name the notice starts
+    with (a strategy of a portfolio run)."""
     notice = wait_notice(result.manifest["arguments"]["warm_up"])
     if notice is not None:
-        warnings.warn(notice, WarmUpWarning, skip_file_prefixes=(PACKAGE_DIR,))
+        told = notice if strategy is None else f"{strategy}: {notice}"
+        warnings.warn(told, WarmUpWarning, skip_file_prefixes=(PACKAGE_DIR,))
 
 
 __all__ = ["announce_wait", "wait_notice"]

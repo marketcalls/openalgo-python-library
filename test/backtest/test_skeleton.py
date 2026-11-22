@@ -12,11 +12,15 @@ def test_native_submodule_is_bound():
 
 
 def test_import_openalgo_does_not_import_backtest():
+    # Nor any package beyond the runtime dependencies (no plotting or report package).
     code = (
-        "import sys, openalgo; "
+        "import sys, numpy, pandas, httpx, websocket; "
+        "deps = {m.split('.')[0] for m in sys.modules}; "
+        "import openalgo; "
         "bad = [m for m in sys.modules if m.startswith('openalgo.backtest')]; "
         "assert not bad, bad; "
-        "assert 'openstatz' not in sys.modules and 'matplotlib' not in sys.modules"
+        "extra = {m.split('.')[0] for m in sys.modules} - deps - set(sys.stdlib_module_names); "
+        "assert extra == {'openalgo'}, extra"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import slippage as slippage_module
+from ._calendar_convert import to_seconds
 from ._futures import check_roll
 from ._futures_margin import parse_margin
 from ._intraday_assumptions import TIMES as INTRADAY_TIMES
@@ -33,6 +34,7 @@ from ._scale_in import describe as describe_scale_limits
 from ._setting_checks import class_leverage, refuse_unusable, unused_settings
 from ._size_controls import describe as describe_size_controls
 from ._sizing_assumption import sizing_assumption
+from ._strategy_args import DAILY_LIMITS, refuse_account_settings
 from .data._sessions import resolve_now
 from .errors import ConfigError
 
@@ -47,6 +49,9 @@ CLASS_OVERRIDES = (
     "square_off",
     "drawdown_halt",
     "cooldown",
+    "max_trades_per_day",
+    "daily_profit_target",
+    "max_order_value",
 )
 
 
@@ -80,9 +85,20 @@ def _base(base: str | None, interval: str) -> str:
     return interval
 
 
+def _check_clock_times(times: dict[str, Any]) -> None:
+    """Raise ConfigError for an `entry_from`, `entry_until` or `square_off` in `times`
+    that is not an IST time of day, so that it is refused before any data is loaded (the
+    engine's config reads each as minutes, `RunPlan.native_config`)."""
+    for name in INTRADAY_TIMES:
+        if times[name] is not None:
+            to_seconds(times[name], what=name)
+
+
 def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     """The plan of a run of `strategy` with the run arguments `args` (the keyword
-    arguments of `bt.backtest`). Raises ConfigError for unusable values and
+    arguments of `bt.backtest`; a portfolio run gives each strategy its own, with the
+    account's settings at their defaults). Raises ConfigError for unusable values, account
+    settings among them (`_strategy_args.refuse_account_settings`), and
     NotImplementedError for settings of later work."""
     symbols = strategy.traded_symbols()
     if not strategy.exchange or not strategy.interval:
@@ -93,6 +109,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         raise ConfigError("capital must be a positive number of rupees")
     refuse_combined_rules(strategy)
     refuse_unusable(strategy, args)
+    refuse_account_settings(args)
     warnings: list[str] = []
     if args["costs"] is None:
         warnings.append("costs=None: no charges are modelled; results overstate P&L")
@@ -100,6 +117,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         name: getattr(strategy, name) if getattr(strategy, name) is not None else args[name]
         for name in CLASS_OVERRIDES
     }
+    _check_clock_times(overrides)
     start, end = run_dates(strategy, args)
     product = _product(strategy, args["product"], strategy.interval, strategy.exchange)
     warnings += unused_settings(strategy, args, product, overrides)
@@ -158,7 +176,8 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
 def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
     """The strategy and session rules of the run, and where their exits fill: at the
     next base-bar open, or on a daily base at the close of the day that breached
-    (SPEC-17)."""
+    (SPEC-17). The daily limits are named only when set (`DAILY_LIMITS`), so a run
+    without them states what it always stated."""
     risk = plan.risk
     block = {
         "max_daily_loss": risk["max_daily_loss"],
@@ -171,8 +190,10 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
         "leverage": plan.leverage,
         **describe_scale_limits(risk),
         **describe_size_controls(risk),
+        **{name: risk[name] for name in DAILY_LIMITS if risk[name] is not None},
     }
-    if risk["max_daily_loss"] is not None or risk["drawdown_halt"] is not None:
+    exits = ("max_daily_loss", "drawdown_halt", "daily_profit_target")
+    if any(risk[name] is not None for name in exits):
         block["risk_exit_fill"] = (
             "at the close of the day that breached, flagged"
             if plan.base == "D"

@@ -11,7 +11,7 @@ data attributes, which the page's script reads to draw the hover readout (`scrip
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
 import numpy as np
@@ -111,7 +111,15 @@ def _value_ticks(pane: _Pane) -> list[float]:
 
 
 def _value_label(value: float, percent: bool) -> str:
-    return f"{value * 100:.1f}%" if percent else f"{value:.2f}"
+    return fmt.percent(value, 1) if percent else f"{value:.2f}"
+
+
+def number_labels(ticks: list[float]) -> list[str]:
+    """Value labels of plain numbers in Indian notation, for `chart`'s `value_labels`
+    (a custom tearsheet's line charts, a portfolio's rupees): whole numbers when every
+    tick is one, else two decimals."""
+    whole = all(float(t).is_integer() for t in ticks)
+    return [fmt.number(t, 0 if whole else 2) for t in ticks]
 
 
 def _x(position: int, count: int) -> float:
@@ -217,6 +225,23 @@ def _data_attributes(lines: Sequence[Line], pane: _Pane, first: int, count: int)
     return " ".join(parts)
 
 
+def _y_labels(
+    pane: _Pane,
+    ticks: list[float],
+    percent: bool,
+    value_labels: Callable[[list[float]], list[str]] | None,
+) -> str:
+    """The value axis's labels at their ticks: written by `value_labels` when given,
+    else a percent to one decimal or a number to two (`_value_label`)."""
+    texts = (
+        [_value_label(t, percent) for t in ticks] if value_labels is None else value_labels(ticks)
+    )
+    return "".join(
+        f"<span style='top:{pane.y(t):.1f}px'>{text}</span>"
+        for t, text in zip(ticks, texts, strict=True)
+    )
+
+
 def chart(
     dates: pd.DatetimeIndex,
     lines: Sequence[Line],
@@ -229,13 +254,16 @@ def chart(
     log_scale: bool = False,
     nominal_width: int = WIDE,
     empty: str = "No data",
+    value_labels: Callable[[list[float]], list[str]] | None = None,
 ) -> str:
     """A time-series chart of `lines` over the session `dates`, `height` pixels tall
     with its time axis, values as percentages (fractions in) or plain numbers, a
     dashed line at zero when `zero_line` and a line series is drawn, the values on a
     log scale of growth when `log_scale` (percent charts only). Sessions before the
     first and after the last value of any series are left out. With fewer than two
-    sessions to draw, the `empty` sentence is returned instead."""
+    sessions to draw, the `empty` sentence is returned instead. `value_labels`, when
+    given, writes the value axis's labels from its ticks (a custom tearsheet's numbers
+    in Indian notation); else a percent to one decimal or a number to two."""
     known = np.zeros(len(dates), dtype=bool)
     for line in lines:
         known |= np.isfinite(_transform(line.values, log_scale))
@@ -257,9 +285,7 @@ def chart(
         definition, drawn = _series_svg(line, pane, gid)
         defs.append(definition)
         shapes.append(drawn)
-    y_labels = "".join(
-        f"<span style='top:{pane.y(t):.1f}px'>{_value_label(t, percent)}</span>" for t in ticks
-    )
+    y_labels = _y_labels(pane, ticks, percent, value_labels)
     x_labels = "".join(
         f"<span{'' if shown else HIDDEN} style='left:{at:.3f}%'>{text}</span>"
         for at, text, shown in _time_labels(days, nominal_width)
@@ -276,4 +302,4 @@ def chart(
     )
 
 
-__all__ = ["HALF", "THIRD", "WIDE", "Line", "chart"]
+__all__ = ["HALF", "THIRD", "WIDE", "Line", "chart", "number_labels"]

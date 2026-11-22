@@ -11,7 +11,9 @@ that was made late (the leg in flight past the limit, its trades not attributed)
 sighting and keeps an earlier one; after such a fill no read judged the leg until a later
 comparison does, and the close says so (round 9). Expected values come from the scenarios:
 `StopHold` long 10 SBIN with 4 or 10 sold by hand, its stop of 10 filling or not after the
-read.
+read. A member of an instrument several strategies of the session share is named by its
+group's net against the members' sum, and listed at its own units (18-multi-strategy
+4.11): B holding 50 of the 150 it holds with A, 60 or all of them sold by hand.
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from openalgo.backtest._live._group_rules import GroupFigure
 from openalgo.backtest._live._reconcile_close import (
     Differing,
     differing,
+    late_alert,
     not_confirmed_alert,
     not_confirmed_summary,
 )
@@ -311,3 +315,81 @@ def test_the_alert_of_a_leg_no_read_judged_after_a_fill_asks_to_check_the_positi
     assert not_confirmed_alert(TRADER, engine, differs) == (
         f"StopHold SBIN NSE: {figures}, not confirmed, since {WHY}: check OpenAlgo's position book"
     )
+
+
+# ----- a member of a shared instrument (18-multi-strategy 4.11) ---------------------------
+
+#: The group of SBIN as a comparison judged it: A and B holding 150 together; B holds 50.
+GROUP = GroupFigure(("A", "B"), 150)
+SHARED = Sighting(50, 90, GROUP)
+
+
+@pytest.mark.parametrize(
+    ("seen", "group_now", "broker_now", "listed"),
+    [
+        (SHARED, 150, 90, 50),
+        (SHARED, 50, -10, 50),
+        (Sighting(50, 0, GROUP), 150, 0, 0),
+    ],
+    ids=[
+        "60 sold by hand, nothing since",
+        "60 sold, A's stop of 100 filled since",
+        "all sold by hand: nothing to close",
+    ],
+)
+def test_a_members_figure_is_its_groups_net_and_it_is_listed_at_its_own_units(
+    seen, group_now, broker_now, listed
+):
+    differs = Differing(seen, 50, group_units=group_now, symbol="SBIN")
+    assert (differs.broker_units, differs.open_units) == (broker_now, listed)
+
+
+def test_a_members_words_name_its_groups_net_against_the_members_sum():
+    assert Differing(SHARED, 50, group_units=150, symbol="SBIN").words() == (
+        "OpenAlgo's books showed 90 units of SBIN for A and B together, who held 150, at the "
+        "last read, and the session ended before they agreed: nothing was sent for the "
+        "difference"
+    )
+
+
+def test_a_members_words_name_every_members_fills_since_the_read():
+    assert Differing(SHARED, 50, group_units=50, symbol="SBIN").words() == (
+        "OpenAlgo's books showed 90 units of SBIN for A and B together, who held 150, at the "
+        "last read; their own fills (100 units sold) came after it, which would leave -10 "
+        "units in OpenAlgo's books against their 50, and the session ended before they "
+        "agreed: nothing was sent for the difference"
+    )
+
+
+def test_a_members_summary_names_its_groups_net():
+    assert Differing(SHARED, 50, group_units=150, symbol="SBIN").summary(TRADER) == (
+        "StopHold SBIN NSE 90 units of SBIN for A and B together in OpenAlgo's books, the "
+        "engine's 50"
+    )
+
+
+def test_a_late_members_alert_names_its_groups_net_against_the_members_sum():
+    assert late_alert(TRADER, SHARED) == (
+        "StopHold SBIN NSE: OpenAlgo's books showed 90 units of SBIN for A and B together "
+        "against their 150 at a late read, while an order of the leg was in flight past the "
+        "limit, neither carried by the engine's fills since nor confirmed by a later read; "
+        "nothing was sent for the difference: check the position and the order book in "
+        "OpenAlgo"
+    )
+
+
+def test_the_close_weighs_a_members_sighting_against_its_groups_units_now():
+    reconcile = SimpleNamespace(
+        unconfirmed={"StopHold": SHARED}.get,
+        unjudged=lambda name: False,
+        group_units=lambda trader: 150,
+    )
+    trader = SimpleNamespace(name="StopHold", symbol="SBIN", open_units=lambda: 50.0)
+    assert differing(reconcile, trader) == Differing(SHARED, 50, False, 150, "SBIN")
+
+
+def test_a_comparison_of_a_group_keeps_the_group_with_its_sighting():
+    found = findings()
+    finding = (Kind.EXPLAINED_SHARED, 10, 6)
+    found.judged(LEG, {finding}, LegBooks(6, (), ()), frozenset(), late=False, group=GROUP)
+    assert found.unconfirmed(LEG.name) == Sighting(10, 6, GROUP)

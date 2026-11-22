@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._margin_reject import HELD_EXIT_WORDS, HELD_FOR_READ
 from ._session_trader import Trader
 from ._stops_orders import Sent
 from ._types import AlertKind
@@ -63,9 +64,10 @@ class Deadlines:
                     "the session asks for no exit while it protects the leg: check the order book",
                 )
                 continue
-            asked = trader.request_exit(UNPROTECTED)
+            asked = session.margin.request_exit(trader, UNPROTECTED)
             session.event("stop_unconfirmed", strategy=trader.name, outcome=asked)
-            self._alert(trader, stop.order_id, "the position is exited (the stop cancelled first)")
+            what = "the position is exited (the stop cancelled first)"
+            self._alert(trader, stop.order_id, HELD_EXIT_WORDS if asked == HELD_FOR_READ else what)
 
     def _alert(self, trader: Trader, order_id: str, what: str) -> None:
         self._session.alert(

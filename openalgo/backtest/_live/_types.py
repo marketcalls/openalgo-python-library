@@ -24,6 +24,11 @@ LOGGER_NAME = "openalgo.backtest.live"
 #: (sandbox) mode; a live response carries no `mode`, or "live" on an order update.
 SANDBOX_MODE_FIELD = "analyze"
 
+#: The price type of an order with no limit and no trigger (OpenAlgo's `pricetype`, an
+#: `OrderIntent.price_type` and a kernel order's `order_type`): it fills at the market and
+#: never rests at the broker.
+MARKET = "MARKET"
+
 
 class Mode(enum.Enum):
     """The mode OpenAlgo is in, set by its analyzer switch (D21). Never chosen in code."""
@@ -124,7 +129,10 @@ class OrderIntent:
 
     `action` is "BUY" or "SELL", `price_type` "MARKET", "LIMIT", "SL" or "SL-M",
     `product` "MIS" in Tier 1. `price` and `trigger_price` are 0 where they do not
-    apply. `intent_id` is unique in the account's journal.
+    apply. `intent_id` is unique in the account's journal. `version_id` is the version of
+    the strategy that made it (its code and parameters, 18-multi-strategy 12.1; "" for an
+    intent of a journal written before versions were kept); `strategy`, the name OpenAlgo
+    shows, stays the plain class name.
     """
 
     intent_id: str
@@ -139,6 +147,7 @@ class OrderIntent:
     created_ns: int
     price: float = 0.0
     trigger_price: float = 0.0
+    version_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -265,6 +274,7 @@ class AlertsLike(Protocol):
 
 __all__ = [
     "LOGGER_NAME",
+    "MARKET",
     "SANDBOX_MODE_FIELD",
     "AlertKind",
     "AlertsLike",

@@ -200,6 +200,11 @@ class Rig:
     alerts: FakeAlerts
 
 
+#: The order budget of the rig: the order path's tests count their calls against five a
+#: second, a budget of their own (the session's is `max_orders_per_second`, 8 by default).
+RIG_ORDERS_PER_SECOND = 5
+
+
 def make_rig(
     *,
     guard: FakeGuard | None = None,
@@ -220,7 +225,7 @@ def make_rig(
         alerts=alerts,
         now=clock.now,
         sleep=clock.sleep,
-        rate=RateBudget(clock.now),
+        rate=RateBudget(clock.now, per_second=RIG_ORDERS_PER_SECOND),
     )
     return Rig(path, client, journal, guard, clock, alerts)
 
