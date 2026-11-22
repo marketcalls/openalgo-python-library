@@ -157,13 +157,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `entry_until` and `square_off` each take one value for every strategy, as before, or a
     dict naming each strategy by class name, as `bt.backtest` takes them for a list of
     strategies. A dict that names a strategy the session does not run, or leaves one out, is
-    refused before anything is sent. A class attribute of the same name still wins. Every
-    existing `bt.live` call works unchanged.
+    refused before anything is sent. A class attribute of the same name (`drawdown_halt`,
+    `cooldown`, `entry_from`, `entry_until` or `square_off`) still wins over the argument;
+    `after_risk_exit` and `max_positions` are set only in the call. Every existing
+    `bt.live` call works unchanged.
   - `PortfolioResult` takes an optional keyword `notes`: Assumptions lines a run words
     itself, in place of the block's own lines of the same key.
+  - In a session of more than one strategy, every ENTRY and EXIT line on the console and in
+    the alerts names the strategy whose order filled, right after the kind:
+    `ENTRY: EmaTrend BUY 10 SBIN NSE at 811.95 (entry, order N)` and
+    `EXIT: RsiDip SELL 10 SBIN NSE at 815.00 (exit: target level, order N)`. A session of
+    one strategy prints its lines as before (2.4.0, item P5).
 - Daily limits per strategy and for the account, in `bt.backtest` and `bt.live` (2.4.0, unit
   M10). Each is off unless set, and takes one value or a dict by strategy class name; a class
-  attribute of the same name wins.
+  attribute of the same name wins. A dict names every strategy of the run: None leaves a
+  strategy without the limit, as the refusal of a dict that leaves one out says (item P6).
   - `max_trades_per_day`: the entries of a session day. An entry is an order that opens a
     position from flat, or a reversal; adds, exits and the engine's own exits never count.
     An entry counts from submission while it works, and for good once any part fills. At the
@@ -212,8 +220,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     indicators are not ready (later ones at DEBUG).
 - An audit record of every live order (2.4.0, unit M11; design 18 section 12).
   - Every order carries its strategy's version id: 12 hexadecimal characters of the SHA-256
-    of its source and parameter values, the same across days, restarts and processes. Each
-    start writes every strategy's run manifest and version id to the journal.
+    of its source and parameter values, the same across days, restarts and processes. A
+    class whose source cannot be read (defined in a notebook cell, or built with `exec` or
+    `type()`) has its compiled code hashed in its place: its functions' bytecode, constants,
+    names and default values and its class attributes, so an edit of its code gives a new
+    id. That id is the same in every process of one Python version and changes with the
+    Python version, as the start banner says. Only a class whose callables are all builtins
+    or objects called as methods hashes its name and parameters, and the banner says its
+    source was not hashed (item P5). A class attribute or default argument Python cannot hash
+    (a list, dict, set, DataFrame, ndarray, or a dataclass that is not frozen) is hashed by
+    its type alone and named in the banner, so a list the strategy appends to does not move
+    the id; a class nested in the strategy class is read with it, so an edit of its methods
+    gives a new id (item P6). Each start writes every strategy's run manifest and version id
+    to the journal.
     `SessionResult.versions` maps each strategy name to its manifest, `SessionResult.orders`
     has a `version_id` column, the start banner has a Versions line, and the daily summary's
     Strategies line names each version. A restart whose version differs from the day's
@@ -335,9 +354,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a resting entry placed while flat are sent as before, and backtests are unchanged
   (the backtest of that sequence still ends short 10). The reason for the `venue` code
   names this cause too, with its advice.
+- The text of a `SessionResult` (its `repr`, what `print(result)` shows) gives net P&L with
+  Indian digit grouping, as `summary_text()` does: "net P&L Rs 2,00,000.00" (it was
+  "200,000.00"), and a loss below half a paisa as "Rs 0.00" (it was "-0.00"). A
+  `PortfolioResult`'s text does the same (2.4.0, item P5).
+- Live sessions write rupees with Indian digit grouping (Rs 40,00,000.00, it was
+  4,000,000.00) in the start banner, the daily summary's Limits line, the preflight's
+  capital, loss limit and funds lines, the account kill switch alert and the refusal of a
+  class `max_daily_loss` that differs from the argument (which wrote 15 lakh as 1.5e+06),
+  as the reports already did (2.4.0, item P6).
 
 ### Fixed
 
+- `Result.summary()` and `PortfolioResult.summary()` no longer print a minus sign on a
+  percent that rounds to zero: "Max drawdown : 0.00%", not "-0.00%", the rule the tearsheet
+  uses (2.4.0, item P5).
 - Live sessions: a reversal (`reverse=True`) waits for its position's stop to be cancelled
   before it is sent; if entries were locked meanwhile (a dead feed, a reconciliation
   mismatch, a failed exit, the account loss limit), it was still sent and opened the other
