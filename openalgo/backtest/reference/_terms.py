@@ -2,10 +2,10 @@
 
 Lot sizes depend on the trade date and on the contract expiry: when an exchange revises
 a market lot, contracts already listed usually keep the old lot until they expire, and
-MCX publishes a specification per batch of contracts in the same way. A `lot_sizes` or
-`mcx_contracts` row therefore applies to a range of trade dates (`valid_from`,
-`valid_to`) and a range of contract expiries (`expiry_from`, `expiry_to`, both
-inclusive, empty meaning unbounded).
+MCX publishes a specification per batch of contracts in the same way. A `lot_sizes`,
+`mcx_contracts` or `currency_contracts` row therefore applies to a range of trade dates
+(`valid_from`, `valid_to`) and a range of contract expiries (`expiry_from`, `expiry_to`,
+both inclusive, empty meaning unbounded).
 
 Where the tables and a symbol-master snapshot both answer, they are reconciled openly:
 a snapshot never overrides a verified built-in row or a user row (a disagreement is
@@ -13,7 +13,7 @@ announced and the table is used); it does override an unverified built-in row, a
 with a warning naming both values; and a snapshot is a source at all only when its
 broker's adapter was read (see `broker_units`). Each function takes either an
 underlying (NIFTY) or a full contract symbol (NIFTY28NOV2424000CE); `exchange` is the
-derivatives exchange (NFO, BFO, MCX) and `day` the trade date.
+derivatives exchange (NFO, BFO, MCX, CDS) and `day` the trade date.
 """
 
 import datetime as _dt
@@ -28,6 +28,10 @@ from .symbols import LISTED_DERIVATIVE_EXCHANGES, ParsedSymbol, SymbolError, par
 
 MCX = "MCX"
 MCX_TABLE = "mcx_contracts"
+CURRENCY_TABLE = "currency_contracts"
+# The contract-terms table of each exchange whose futures carry their own lot, multiplier,
+# tick and freeze per underlying.
+CONTRACT_TABLES = {MCX: MCX_TABLE, "CDS": CURRENCY_TABLE}
 LOT_TABLE = "lot_sizes"
 FREEZE_TABLE = "freeze_qty"
 UNDERLYINGS_TABLE = "underlyings"
@@ -197,7 +201,7 @@ def reconcile(
 
 
 def _table_lot(sources: Sources, underlying: str, exchange: str, day, expiry) -> RefRow | None:
-    table = MCX_TABLE if exchange == MCX else LOT_TABLE
+    table = CONTRACT_TABLES.get(exchange, LOT_TABLE)
     if not sources.store.covering(table, (underlying, exchange), day):
         return None
     return contract_row(sources.store, table, (underlying, exchange), day, expiry, "lot_size")
@@ -239,7 +243,7 @@ def lot_size_row(
     table_value = None if table_row is None else table_row.values["lot_size"]
     _, row = reconcile(sources, "lot_size", table_row, table_value, snapshot, day)
     if row is None:
-        table = MCX_TABLE if exchange == MCX else LOT_TABLE
+        table = CONTRACT_TABLES.get(exchange, LOT_TABLE)
         raise sources.store.missing(table, (underlying, exchange), day)
     return row
 
@@ -261,19 +265,20 @@ def announce_exact_override(exact: RefRow, table_row: RefRow | None, term: str) 
 def multiplier_on(sources: Sources, name: str, exchange: str, day: _dt.date, expiry) -> float:
     """Rupee value of a one-rupee price move for one unit of quantity.
 
-    Raises `ReferenceDataError` for an uncovered MCX underlying and for an exchange other
-    than NFO, BFO and MCX, and `ConfigError` when MCX contracts listed on `day` differ and
-    no contract symbol or expiry is given.
+    Raises `ReferenceDataError` for an uncovered MCX or CDS underlying and for an exchange
+    other than NFO, BFO, MCX and CDS, and `ConfigError` when the contracts listed on `day`
+    differ and no contract symbol or expiry is given.
     """
     underlying, parsed = split_contract(name, exchange)
     if exchange in LISTED_DERIVATIVE_EXCHANGES:
         return UNIT_MULTIPLIER
-    if exchange != MCX:
+    table = CONTRACT_TABLES.get(exchange)
+    if table is None:
         raise ReferenceDataError(
             f"No multiplier is known for {underlying} on {exchange}. {how_to_supply('symbols')}"
         )
     expiry = parsed.expiry if parsed is not None and expiry is None else expiry
-    row = contract_row(sources.store, MCX_TABLE, (underlying, exchange), day, expiry, "multiplier")
+    row = contract_row(sources.store, table, (underlying, exchange), day, expiry, "multiplier")
     return sources.store.note_use(row, day).values["multiplier"]
 
 
@@ -291,11 +296,12 @@ def freeze_qty_on(sources: Sources, name: str, exchange: str, day: _dt.date, kin
         if exact is not None and exact.values["freeze_qty"] is not None:
             return sources.store.note_use(exact, day).values["freeze_qty"]
     key = (underlying, exchange)
-    if exchange == MCX:
+    table = CONTRACT_TABLES.get(exchange)
+    if table is not None:
         expiry = None if parsed is None else parsed.expiry
-        row = contract_row(sources.store, MCX_TABLE, key, day, expiry, "freeze_qty")
+        row = contract_row(sources.store, table, key, day, expiry, "freeze_qty")
         if row.values["freeze_qty"] is None:
-            raise sources.store.missing(MCX_TABLE, key, day, " with a freeze_qty value")
+            raise sources.store.missing(table, key, day, " with a freeze_qty value")
         return sources.store.note_use(row, day).values["freeze_qty"]
     row = sources.store.note_use(sources.store.require(FREEZE_TABLE, key, day), day)
     futures, options = row.values["freeze_qty_futures"], row.values["freeze_qty_options"]
@@ -309,6 +315,8 @@ def freeze_qty_on(sources: Sources, name: str, exchange: str, day: _dt.date, kin
 
 
 __all__ = [
+    "CONTRACT_TABLES",
+    "CURRENCY_TABLE",
     "LOT_TABLE",
     "MCX",
     "MCX_TABLE",

@@ -309,6 +309,57 @@ fn a_sale_from_holdings_bought_back_the_same_day_refunds_its_dp_charge() {
         .all(|f| f.dp_charge.is_none()));
 }
 
+fn standard_model() -> CostModel {
+    match ScheduleBook::builtin() {
+        Ok(book) => CostModel::new(book, Brokerage::standard(), Rounding::ContractNote),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+#[test]
+fn a_cnc_buy_partly_sold_the_same_day_pays_the_brokerage_of_one_order() {
+    // Standard preset: buy 400 at 1,000.00 on CNC and sell 200 at 1,000.00 the same day.
+    // The buy is then 200 units intraday and 200 delivery, still one executed order: it
+    // pays Rs 20 (not Rs 20 a part), and GST is 18 percent of brokerage 20 + exchange
+    // 12.28 (0.00297 percent plus IPFT 0.0001 percent of 4,00,000) + SEBI 0.40 = 5.8824.
+    let (model, spec) = (standard_model(), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    let reduce = effect(FillKind::Reduce, PositionChange::Changed);
+    let buy = fill(&spec, Product::Cnc, Side::Buy, 1_000.0, day(), opening());
+    let sell = FillToCharge {
+        units: 200.0,
+        ..fill(&spec, Product::Cnc, Side::Sell, 1_000.0, day(), reduce)
+    };
+    charge(&mut book, &model, &buy);
+    charge(&mut book, &model, &sell);
+    let output = book.into_output();
+    let (buy, sale) = (&output.fills[0].cost, &output.fills[1].cost);
+    assert_eq!((buy.brokerage, sale.brokerage), (20.0, 20.0));
+    assert!((buy.gst - 5.8824).abs() < 1e-9, "{}", buy.gst);
+}
+
+#[test]
+fn a_sale_from_holdings_partly_netted_by_a_buy_of_the_day_pays_the_brokerage_of_one_order() {
+    // Standard preset, shares held from before: buy 100 at 1,000.00 on CNC, then sell 400
+    // at 1,000.00 the same day. The sale is 100 units intraday and 300 from holdings,
+    // one executed order: Rs 20.
+    let (model, spec) = (standard_model(), sbin());
+    let mut book = ChargeBook::new(Some(Rounding::ContractNote));
+    let add = effect(FillKind::Add, PositionChange::Changed);
+    let reduce = effect(FillKind::Reduce, PositionChange::Changed);
+    let buy = FillToCharge {
+        units: 100.0,
+        ..fill(&spec, Product::Cnc, Side::Buy, 1_000.0, day(), add)
+    };
+    charge(&mut book, &model, &buy);
+    charge(
+        &mut book,
+        &model,
+        &fill(&spec, Product::Cnc, Side::Sell, 1_000.0, day(), reduce),
+    );
+    assert_eq!(book.into_output().fills[1].cost.brokerage, 20.0);
+}
+
 #[test]
 fn calculator_rounding_charges_each_fill_and_settles_no_note() {
     let (model, spec) = (model(Rounding::Calculator), sbin());

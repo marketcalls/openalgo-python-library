@@ -277,7 +277,7 @@ def test_mcx_underlying_not_in_the_contract_table_raises(tables):
 
 @pytest.mark.parametrize(
     "symbol,exchange",
-    [("CRUDEOIL15NOV246000CE", "MCX"), ("USDINR27NOV24FUT", "CDS"), ("USDINR27NOV2484CE", "BCD")],
+    [("CRUDEOIL15NOV246000CE", "MCX"), ("USDINR27NOV2484CE", "CDS"), ("USDINR27NOV24FUT", "BCD")],
 )
 def test_contract_outside_the_built_in_tables_needs_an_exact_symbol_row(tables, symbol, exchange):
     with pytest.raises(ReferenceDataError) as excinfo:

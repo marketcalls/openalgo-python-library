@@ -106,10 +106,12 @@ def test_a_trade_in_2022_is_priced_by_the_version_in_force_then():
 
 @pytest.mark.parametrize("day, gst", [("2022-07-15", 62.1018), ("2022-07-18", 63.9018)])
 def test_gst_falls_on_the_sebi_fee_from_2022_07_18(day, gst):
-    # NSE delivery buy of Rs 1 crore (no brokerage): 18 percent of the exchange line
-    # 345.01, and from 2022-07-18 of the SEBI fee of Rs 10 too (SEBI circular
+    # NSE delivery buy of Rs 1 crore (no brokerage under Zerodha): 18 percent of the
+    # exchange line 345.01, and from 2022-07-18 of the SEBI fee of Rs 10 too (SEBI circular
     # SEBI/HO/GSD/TAD/CIR/P/2022/0097; the fee was exempt before).
-    cost = costs.trade_cost("BUY", 10_000_000, 1, day, segment="NSE_EQ_DELIVERY")
+    cost = costs.trade_cost(
+        "BUY", 10_000_000, 1, day, segment="NSE_EQ_DELIVERY", brokerage="zerodha"
+    )
     assert cost.gst == pytest.approx(gst)
 
 
@@ -168,22 +170,31 @@ UNCONFIRMED_SINCE_2024_10_01 = [
 ]
 
 
+# The rows added in 2.4.1: from a broker bulletin for 2024-10-01 (unverified), and checked
+# against the broker's charges page and calculator script on 2026-11-23.
+READ_ON_2026_11_23 = ["MCX_OPT", "CDS_FUT", "CDS_OPT"]
+
+
 @pytest.mark.parametrize(
-    "version, last_day, also_unconfirmed",
+    "version, last_day, also_unconfirmed, read_later",
     [
-        ("IN-2024-10-01", dt.date(2026, 3, 31), []),
-        ("IN-2026-04-01", SNAPSHOT_DATE, ["BFO_OPT_OTHER"]),
+        ("IN-2024-10-01", dt.date(2026, 3, 31), READ_ON_2026_11_23, []),
+        ("IN-2026-04-01", SNAPSHOT_DATE, ["BFO_OPT_OTHER"], READ_ON_2026_11_23),
     ],
 )
 def test_the_last_two_versions_leave_unverified_only_the_rows_no_source_confirms(
-    version, last_day, also_unconfirmed
+    version, last_day, also_unconfirmed, read_later
 ):
     rows = next(s for s in costs.schedules() if s["id"] == version)["rates"]
     unverified = {code for code, row in rows.items() if row["verified_through"] is None}
     assert unverified == {*UNCONFIRMED_SINCE_2024_10_01, *also_unconfirmed}
     assert all(row["notes"] for code, row in rows.items() if code in unverified)
+    later = dt.date(2026, 11, 23)
+    assert all(rows[code]["verified_through"] == later for code in read_later)
     assert all(
-        row["verified_through"] == last_day for code, row in rows.items() if code not in unverified
+        row["verified_through"] == last_day
+        for code, row in rows.items()
+        if code not in unverified and code not in read_later
     )
 
 

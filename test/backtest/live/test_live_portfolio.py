@@ -365,17 +365,18 @@ RESTART_SCOPE = (
 
 def restarted(world) -> bt.SessionResult:
     """TwoRoundTrips stopped by Ctrl+C at 14:46:30 after its first round trip, then started
-    again at `RESTART_AT` and run to the day's end: the second start's result."""
+    again at `RESTART_AT` and run to the day's end: the second start's result. Both starts
+    charge the zerodha preset, on which the figures below are worked."""
     at_price(world, ist(14, 44, 30), 505.0)
     at_price(world, ist(14, 48, 30), 510.0)
     world.stop_at(ist(14, 46, 30))
-    live(world, TwoRoundTrips)
+    live(world, TwoRoundTrips, costs="zerodha")
     now = world.fake.clock.now()
     assert now < RESTART_AT
     world.script.sleep((RESTART_AT - now) / 10**9)
     world.stop = StopFlag()
     world.stop_at(DAY_ENDS)
-    return live(world, TwoRoundTrips)
+    return live(world, TwoRoundTrips, costs="zerodha")
 
 
 def test_after_a_restart_the_portfolio_summary_states_its_scope_at_the_top(world):

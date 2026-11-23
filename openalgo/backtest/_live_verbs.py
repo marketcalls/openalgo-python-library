@@ -30,7 +30,7 @@ def live(
     alerts_to: str | None = None,
     account: str | None = None,
     params: Mapping[str, Any] | None = None,
-    costs: Any = "zerodha",
+    costs: Any = "standard",
     risk_basis: str = "gross",
     after_risk_exit: str | Mapping[str, str] = "lock_session",
     entry_from: str | Mapping[str, str | None] | None = None,

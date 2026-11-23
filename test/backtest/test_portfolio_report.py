@@ -190,11 +190,13 @@ def test_beside_a_daily_strategy_the_account_counts_its_open_fill_before_its_own
     # at every 15:30 close, and its rounds from 09:16 to 15:29 differ from it by:
     # - 1 and 3 July: nothing, DailyInfy does not fill;
     # - 2 July: its buy of 10 INFY at the 101.00 open, nothing held before, so the charges
-    #   only: STT 1.01, exchange 0.031007, SEBI 0.00101, stamp duty 0.1515 and GST 18% of
-    #   0.032017 (0.0057631), 1.1992801 or -1.20 to the paisa;
+    #   only: brokerage 20 (2.5 percent of 1,010 is 25.25, so the standard Rs 20), STT
+    #   1.01, exchange 0.031007, SEBI 0.00101, stamp duty 0.1515 and GST 18% of 20.032017
+    #   (3.6057631), 24.7992801 or -24.80 to the paisa;
     # - 4 July: its sale of the 10 at the 103.00 open, held at the 3 July close of 102.05:
-    #   10 x 0.95 = 9.50 of price, less STT 1.03, exchange 0.031621, SEBI 0.00103, GST
-    #   0.0058772 and the DP charge of 15.34 (16.4085282), -6.9085282 or -6.91.
+    #   10 x 0.95 = 9.50 of price, less brokerage 20, STT 1.03, exchange 0.031621, SEBI
+    #   0.00103, GST 18% of 20.032651 (3.6058772) and the DP charge of 15.34
+    #   (40.0085282), -30.5085282 or -30.51.
     minutes = pd.concat([flat_bars(100.0 + number, day=day) for number, day in enumerate(DAYS)])
     data = {"SBIN": minutes, "INFY": daily_bars(DAYS)}
     with warnings.catch_warnings():
@@ -206,7 +208,7 @@ def test_beside_a_daily_strategy_the_account_counts_its_open_fill_before_its_own
     combined = metrics.combine_equity(equities, opening_wealth=dict.fromkeys(pf.results, LAKH))
     assert pf.equity.index.tolist() == combined.index.tolist()
     gap = pd.Series(pf.equity.to_numpy() - combined.to_numpy(), index=pf.equity.index)
-    inside = {DAYS[0]: 0.0, DAYS[1]: -1.20, DAYS[2]: 0.0, DAYS[3]: -6.91}
+    inside = {DAYS[0]: 0.0, DAYS[1]: -24.80, DAYS[2]: 0.0, DAYS[3]: -30.51}
     for day, expected in inside.items():
         rounds = gap[gap.index.date == day]
         assert rounds.index[-1].time() == dt.time(15, 30)

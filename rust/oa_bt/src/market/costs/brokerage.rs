@@ -23,6 +23,21 @@ const DP_DEPOSITORY_FEE: f64 = 3.5;
 const DP_BROKER_FEE: f64 = 9.5;
 const DP_FEE_ZERODHA: f64 = DP_DEPOSITORY_FEE + DP_BROKER_FEE;
 
+// The "standard" preset: what most brokers charge, set by the maintainer on 2026-11-23
+// ("Equity Delivery: Rs 20 per executed order (or up to 2.5% of order value if lower).
+// Equity Intraday: Rs 20 per executed order or 0.1% of the trade value, whichever is
+// lower"), with futures and options as the lead ruled for unit C of 2.4.1.
+/// Most charged per executed order under the standard preset, and its flat options
+/// brokerage, in rupees.
+const STANDARD_RUPEES_PER_ORDER: f64 = 20.0;
+/// Standard equity delivery rate: 2.5 percent of order value, capped per order.
+const STANDARD_DELIVERY_RATE: f64 = 0.025;
+/// Standard equity intraday rate: 0.1 percent of order value, capped per order.
+const STANDARD_INTRADAY_RATE: f64 = 0.001;
+/// Standard futures rate (equity, currency and commodity): 0.03 percent of order value,
+/// capped per order.
+const STANDARD_FUTURES_RATE: f64 = 0.0003;
+
 /// Plausibility bounds on a brokerage rate, as fractions of order value. They are
 /// not rates anyone charges: they exist to catch a rate given in the wrong unit. A
 /// rate above 5 percent was probably a percentage passed as a fraction, and a
@@ -31,6 +46,14 @@ const MAX_BROKERAGE_RATE: f64 = 0.05;
 const MIN_BROKERAGE_RATE: f64 = 0.00001;
 
 const PERCENT: f64 = 100.0;
+
+/// A standard-preset rate (a fraction of order value) capped at Rs 20 per executed order.
+const fn standard_capped(rate: f64) -> BrokerageRule {
+    BrokerageRule::Rate {
+        rate,
+        cap: STANDARD_RUPEES_PER_ORDER,
+    }
+}
 
 /// Brokerage on one executed order.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +97,28 @@ impl BrokerageRule {
                 }
             }
             BrokerageRule::Rate { rate, cap } => (value * rate).min(cap),
+        }
+    }
+
+    /// The most one executed order pays under the rule, in rupees: nothing, the flat
+    /// amount, or the cap (`f64::INFINITY` for a rate with no cap).
+    pub(super) fn most_per_order(&self) -> f64 {
+        match *self {
+            BrokerageRule::Zero => 0.0,
+            BrokerageRule::Flat(amount) => amount,
+            BrokerageRule::Rate { cap, .. } => cap,
+        }
+    }
+
+    /// The same rule, charging at most `rupees` per executed order.
+    pub(super) fn at_most(&self, rupees: f64) -> BrokerageRule {
+        match *self {
+            BrokerageRule::Zero => BrokerageRule::Zero,
+            BrokerageRule::Flat(amount) => BrokerageRule::Flat(amount.min(rupees)),
+            BrokerageRule::Rate { rate, cap } => BrokerageRule::Rate {
+                rate,
+                cap: cap.min(rupees),
+            },
         }
     }
 
@@ -159,9 +204,27 @@ pub struct Brokerage {
 }
 
 impl Brokerage {
-    /// Zerodha (the default): delivery free; intraday and futures 0.03 percent or
-    /// Rs 20 per executed order, whichever is lower; options Rs 20 per executed
-    /// order; DP fee Rs 13 before GST (Rs 3.5 CDSL plus Rs 9.5 Zerodha).
+    /// Standard (the default), what most brokers charge: equity delivery 2.5 percent or
+    /// Rs 20 per executed order, whichever is lower; equity intraday 0.1 percent or Rs 20;
+    /// futures (equity, currency and commodity) 0.03 percent or Rs 20; options (equity,
+    /// currency and commodity) Rs 20 per executed order. No DP fee is published for it,
+    /// so Zerodha's Rs 13 before GST stands in (`DpFeeSource::ZerodhaStandIn`), as for
+    /// `custom`.
+    pub const fn standard() -> Brokerage {
+        Brokerage {
+            delivery: standard_capped(STANDARD_DELIVERY_RATE),
+            intraday: standard_capped(STANDARD_INTRADAY_RATE),
+            futures: standard_capped(STANDARD_FUTURES_RATE),
+            options: BrokerageRule::Flat(STANDARD_RUPEES_PER_ORDER),
+            dp_fee: DP_FEE_ZERODHA,
+            dp_fee_source: DpFeeSource::ZerodhaStandIn,
+        }
+    }
+
+    /// Zerodha: delivery free; intraday and futures 0.03 percent or Rs 20 per executed
+    /// order, whichever is lower; options Rs 20 per executed order; DP fee Rs 13 before
+    /// GST (Rs 3.5 CDSL plus Rs 9.5 Zerodha). Its brokerage calculator is what
+    /// `Rounding::Calculator` reproduces.
     pub const fn zerodha() -> Brokerage {
         let capped = BrokerageRule::Rate {
             rate: ZERODHA_RATE,
@@ -235,10 +298,11 @@ impl Brokerage {
         self.validated()
     }
 
-    /// A built-in preset by name: "zerodha" or "zero_brokerage". Errors:
+    /// A built-in preset by name: "standard", "zerodha" or "zero_brokerage". Errors:
     /// `UnknownName` for any other name; there is no default preset to fall back on.
     pub fn from_name(name: &str) -> Result<Brokerage, CostError> {
         match name {
+            "standard" => Ok(Brokerage::standard()),
             "zerodha" => Ok(Brokerage::zerodha()),
             "zero_brokerage" => Ok(Brokerage::zero_brokerage()),
             other => Err(CostError::unknown(NameKind::Preset, other)),
@@ -291,7 +355,8 @@ impl Brokerage {
 }
 
 impl Default for Brokerage {
+    /// The standard preset.
     fn default() -> Brokerage {
-        Brokerage::zerodha()
+        Brokerage::standard()
     }
 }

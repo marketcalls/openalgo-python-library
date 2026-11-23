@@ -813,7 +813,7 @@ def test_built_in_row_used_up_to_its_as_of_date_does_not_warn():
 
 
 def test_reference_version_names_the_check_date_and_a_digest_of_the_files():
-    assert re.fullmatch(r"builtin:2026-11-17:[0-9a-f]{12}", ref.default_tables().version)
+    assert re.fullmatch(r"builtin:2026-11-23:[0-9a-f]{12}", ref.default_tables().version)
 
 
 def test_reference_version_changes_when_a_user_file_is_added(tmp_path):
@@ -881,10 +881,19 @@ def _zerodha_mcx(tables) -> dict:
 def test_zerodha_mcx_lot_sizes_were_seen_in_units_on_a_live_server(tables):
     row = _zerodha_mcx(tables)
     assert row["live_status"] == (
-        "lotsize confirmed live on 2026-11-12; order quantity conversion not confirmed"
+        "lotsize confirmed live on 2026-11-12; order quantity conversion confirmed from the "
+        "server source and not yet on a live broker order"
     )
-    # The order side is still unconfirmed, so the row as a whole stays unverified.
+    # No live broker order has been checked yet, so the row as a whole stays unverified.
     assert row["status"] == "unverified"
+
+
+def test_the_zerodha_mcx_conversion_cites_the_server_commit_that_makes_it():
+    # OpenAlgo server commit cf27e5f98 (2026-09-22): quantity stays in units in OpenAlgo
+    # and the Zerodha adapter divides it by the lot before an order reaches the broker.
+    note = _zerodha_mcx(ref.default_tables())["note"]
+    assert "cf27e5f98" in note and "mcx_contract_size.py" in note
+    assert "to_kite_quantity" in note and "Phase 2" in note
 
 
 # Lot sizes a live OpenAlgo server's Zerodha master contract gave on 2026-11-12.

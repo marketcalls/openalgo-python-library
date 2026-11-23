@@ -237,7 +237,7 @@ def test_an_account_given_names_the_journal_logs_and_locks():
 def test_the_arguments_shared_with_bt_backtest_take_its_defaults():
     plan = specify().strategies[0].plan
     assert (plan.costs, plan.fill, plan.quantity_mode, plan.risk["risk_basis"]) == (
-        "zerodha",
+        "standard",
         "next_open",
         "venue",
         "gross",

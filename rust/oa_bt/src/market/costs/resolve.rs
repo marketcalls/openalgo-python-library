@@ -2,8 +2,8 @@
 //!
 //! The inputs are the shared model types (exchange, instrument kind, product) plus
 //! the two facts only the cost model cares about: the BSE scrip group of an equity,
-//! and the underlying of an MCX future or a BFO option. Anything that cannot be
-//! resolved is an error; nothing defaults to a "nearest" segment.
+//! and the underlying of an MCX future or option or a BFO option. Anything that cannot
+//! be resolved is an error; nothing defaults to a "nearest" segment.
 
 use crate::model::{Exchange, InstrumentKind, Product};
 
@@ -241,18 +241,36 @@ impl Request<'_> {
     }
 
     fn mcx(&self) -> Result<Segment, CostError> {
-        match self.kind {
-            InstrumentKind::Option => Err(CostError::UnsupportedSegment("MCX options".to_string())),
-            InstrumentKind::Future if self.product == Product::Cnc => {
-                Err(self.invalid(DERIVATIVE_PRODUCT_HINT))
-            }
-            InstrumentKind::Future => Segment::mcx_future(
-                self.underlying
-                    .ok_or_else(|| self.invalid(COMMODITY_HINT))?,
-            ),
-            _ => Err(self.invalid("MCX lists commodity futures and options only")),
+        let kind = self.kind;
+        if !matches!(kind, InstrumentKind::Future | InstrumentKind::Option) {
+            return Err(self.invalid("MCX lists commodity futures and options only"));
+        }
+        if self.product == Product::Cnc {
+            return Err(self.invalid(DERIVATIVE_PRODUCT_HINT));
+        }
+        let commodity = self
+            .underlying
+            .ok_or_else(|| self.invalid(COMMODITY_HINT))?;
+        if kind == InstrumentKind::Future {
+            Segment::mcx_future(commodity)
+        } else {
+            Segment::mcx_option(commodity)
         }
     }
+
+    fn cds(&self) -> Result<Segment, CostError> {
+        self.check_derivative()?;
+        Ok(if self.kind == InstrumentKind::Future {
+            Segment::CdsFut
+        } else {
+            Segment::CdsOpt
+        })
+    }
+}
+
+/// True when `name` is one of `list`, ignoring case.
+fn listed(list: &[&str], name: &str) -> bool {
+    list.iter().any(|known| known.eq_ignore_ascii_case(name))
 }
 
 impl Segment {
@@ -267,21 +285,44 @@ impl Segment {
     /// for one that owes it.
     pub fn mcx_future(commodity: &str) -> Result<Segment, CostError> {
         let name = commodity.trim();
-        let listed = |list: &[&str]| list.iter().any(|known| known.eq_ignore_ascii_case(name));
         if let Some((_, segment)) = MCX_AGRI_SPECIFIC
             .iter()
             .find(|(known, _)| known.eq_ignore_ascii_case(name))
         {
             return Ok(*segment);
         }
-        if listed(&MCX_AGRI_CTT_EXEMPT) {
+        if listed(&MCX_AGRI_CTT_EXEMPT, name) {
             return Ok(Segment::McxFutAgri);
         }
-        if listed(&MCX_AGRI_CTT_PAYING) {
+        if listed(&MCX_AGRI_CTT_PAYING, name) {
             return Ok(Segment::McxFutAgriCtt);
         }
-        if listed(&MCX_NON_AGRI) {
+        if listed(&MCX_NON_AGRI, name) {
             return Ok(Segment::McxFut);
+        }
+        Err(CostError::unknown(NameKind::Commodity, name))
+    }
+
+    /// The MCX options segment of a commodity: `MCX_OPT` for a non-agri commodity.
+    ///
+    /// `commodity` is as for `mcx_future`. Errors: `UnsupportedSegment` for an agri
+    /// commodity, whose options would pay a different CTT and SEBI fee that this engine
+    /// does not model, and `UnknownName` for a commodity in neither list.
+    pub fn mcx_option(commodity: &str) -> Result<Segment, CostError> {
+        let name = commodity.trim();
+        if listed(&MCX_NON_AGRI, name) {
+            return Ok(Segment::McxOpt);
+        }
+        let agri = MCX_AGRI_SPECIFIC
+            .iter()
+            .any(|(known, _)| known.eq_ignore_ascii_case(name))
+            || listed(&MCX_AGRI_CTT_EXEMPT, name)
+            || listed(&MCX_AGRI_CTT_PAYING, name);
+        if agri {
+            return Err(CostError::UnsupportedSegment(format!(
+                "MCX options on the agri commodity {name} (their CTT and SEBI fee differ from \
+                 the non-agri options this release costs)"
+            )));
         }
         Err(CostError::unknown(NameKind::Commodity, name))
     }
@@ -291,15 +332,15 @@ impl Segment {
     /// - `bse_group` is the BSE scrip group from the instrument master. It is
     ///   required for BSE equity, where the exchange charge depends on it, and
     ///   ignored elsewhere.
-    /// - `underlying` is required for an MCX future (the commodity, see
-    ///   `mcx_future`) and for a BFO option (SENSEX, BANKEX, SENSEX50 or the stock
-    ///   symbol), and ignored elsewhere.
+    /// - `underlying` is required for an MCX future or option (the commodity, see
+    ///   `mcx_future` and `mcx_option`) and for a BFO option (SENSEX, BANKEX, SENSEX50
+    ///   or the stock symbol), and ignored elsewhere.
     ///
     /// Errors: `MissingBseGroup` for BSE equity without a group; `UnknownName` for
     /// an unknown group or commodity; `InvalidCombination` when the exchange, kind
     /// and product do not go together or the underlying is missing;
-    /// `UnsupportedSegment` for currency derivatives (CDS, BCD) and MCX options,
-    /// which are out of scope; `NotTradable` for an index exchange.
+    /// `UnsupportedSegment` for BSE currency derivatives (BCD) and MCX options on an
+    /// agri commodity, which are out of scope; `NotTradable` for an index exchange.
     pub fn resolve(
         exchange: Exchange,
         kind: InstrumentKind,
@@ -320,10 +361,10 @@ impl Segment {
             Exchange::Nfo => request.nfo(),
             Exchange::Bfo => request.bfo(),
             Exchange::Mcx => request.mcx(),
-            Exchange::Cds | Exchange::Bcd => Err(CostError::UnsupportedSegment(format!(
-                "exchange {} (currency derivatives)",
-                exchange.code()
-            ))),
+            Exchange::Cds => request.cds(),
+            Exchange::Bcd => Err(CostError::UnsupportedSegment(
+                "exchange BCD (BSE currency derivatives)".to_string(),
+            )),
             Exchange::NseIndex | Exchange::BseIndex => Err(CostError::NotTradable(exchange)),
         }
     }

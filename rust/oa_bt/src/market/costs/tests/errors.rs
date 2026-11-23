@@ -21,7 +21,7 @@ fn every_error() -> Vec<CostError> {
         unknown(NameKind::Commodity),
         unknown(NameKind::Preset),
         unknown(NameKind::Rounding),
-        CostError::UnsupportedSegment("segment CDS_FUT".to_string()),
+        CostError::UnsupportedSegment("segment BCD_FUT (BSE currency derivatives)".to_string()),
         CostError::UnknownSegmentId(77),
         CostError::UnknownSide(9),
         CostError::InvalidCombination {
@@ -86,12 +86,15 @@ fn every_message_is_a_full_sentence_not_a_bare_code() {
 fn an_unknown_name_message_quotes_the_name_and_lists_what_to_use() {
     let rows = [
         (NameKind::Segment, "NSE_EQ_DELIVERY"),
-        (NameKind::Exchange, "NSE, BSE, NFO, BFO or MCX"),
+        (NameKind::Exchange, "NSE, BSE, NFO, BFO, MCX or CDS"),
         (NameKind::Product, "CNC, MIS or NRML"),
         (NameKind::Instrument, "EQ, FUT or OPT"),
         (NameKind::BseGroup, "XT, Z, ZP"),
         (NameKind::Commodity, "MCX_FUT_AGRI_CTT"),
-        (NameKind::Preset, "zerodha"),
+        (
+            NameKind::Preset,
+            "standard (the default), zerodha and zero_brokerage",
+        ),
         (NameKind::Rounding, "contract_note or calculator"),
     ];
     for (kind, advice) in rows {
@@ -118,9 +121,10 @@ fn schedule_date_messages_show_iso_dates() {
 
 #[test]
 fn the_unsupported_segment_message_says_what_is_out_of_scope() {
-    let message = CostError::UnsupportedSegment("MCX options".to_string()).to_string();
+    let what = "exchange BCD (BSE currency derivatives)";
+    let message = CostError::UnsupportedSegment(what.to_string()).to_string();
     assert!(
-        message.contains("MCX options") && message.contains("out of scope"),
+        message.contains(what) && message.contains("out of scope"),
         "{message}"
     );
 }

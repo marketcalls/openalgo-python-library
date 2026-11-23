@@ -108,7 +108,7 @@ def test_an_unknown_preset_is_a_cost_error():
 
 def test_a_delivery_sell_from_holdings_pays_the_dp_charge():
     result = daily_round_trip(costs="zerodha")
-    dp = costs.dp_charge(DAILY_DAYS[2]).total
+    dp = costs.dp_charge(DAILY_DAYS[2], brokerage="zerodha").total
     assert list(result.costs["dp_charge"]) == [0.0, dp]
     assert list(result.costs["date"]) == list(DAILY_DAYS[1:])
     trip = costs.round_trip_cost(
@@ -118,6 +118,7 @@ def test_a_delivery_sell_from_holdings_pays_the_dp_charge():
         DAILY_DAYS[1],
         sell_date=DAILY_DAYS[2],
         segment="NSE_EQ_DELIVERY",
+        brokerage="zerodha",
     )
     # The buy's note and the sale's note, each rounded on its own day, plus the DP charge.
     notes = result.contract_notes["charged_total"].sum()

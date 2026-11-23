@@ -1,10 +1,11 @@
 """Assembling an `Instrument` from an OpenAlgo symbol and the reference rows.
 
 Each term of an instrument (lot size, multiplier, tick size, freeze quantity,
-settlement) is asked of a list of sources in order, and the first source that has it
-wins: the row for the exact symbol (a user `symbols` row, or a symbol-master snapshot
-from a broker whose adapter was read), then the tables for its underlying. A snapshot
-that disagrees with a table is reconciled in the open (see `_terms.reconcile`).
+settlement) is asked of a list of sources in order (`_term_sources`), and the first
+source that has it wins: the row for the exact symbol (a user `symbols` row, or a
+symbol-master snapshot from a broker whose adapter was read), then the tables for its
+underlying. A snapshot that disagrees with a table is reconciled in the open (see
+`_terms.reconcile`).
 
 On MCX, CDS and BCD an exact-symbol row replaces the tables altogether and must state
 `lot_size`, `multiplier` and `settlement` itself: the server source shows that the lot
@@ -17,26 +18,24 @@ the instrument carries that contract's last trading day and identity.
 """
 
 import datetime as _dt
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-from typing import Protocol
+from collections.abc import Sequence
 
 from .._protocols import SessionCalendar
 from ..errors import ConfigError, ReferenceDataError
 from . import tick_rules
 from ._rows import RefRow
 from ._store import how_to_supply, warn
-from ._terms import (
-    MCX,
-    MCX_TABLE,
-    Sources,
-    contract_row,
-    lot_size_row,
-    symbol_row,
-    underlying_kind,
+from ._term_sources import (
+    CashSource,
+    ContractTableSource,
+    ListedDerivativeSource,
+    Request,
+    Source,
+    SymbolRowSource,
 )
+from ._terms import CONTRACT_TABLES, MCX, MCX_TABLE, Sources, symbol_row, underlying_kind
 from .expiry import Expiry, alias_for, contract_for, has_rules
-from .instruments import SINGLE_UNIT_LOT, UNIT_MULTIPLIER, Instrument
+from .instruments import Instrument
 from .symbols import (
     LISTED_DERIVATIVE_EXCHANGES,
     ParsedSymbol,
@@ -54,147 +53,19 @@ _DERIVATIVE_TERMS = ("lot_size", "multiplier", "tick_size", "freeze_qty", "settl
 _SNAPSHOT_TERMS = ("tick_size",)
 
 
-@dataclass(frozen=True)
-class _Found:
-    """A term value, with the row it came from or the reason it holds without one."""
-
-    value: object
-    row: RefRow | None = None
-    basis: str = ""
-
-
-class _Source(Protocol):
-    def find(self, term: str) -> _Found | None:
-        """The term from this source, or None when the source does not carry it."""
-        ...
-
-
-@dataclass
-class _Request:
-    sources: Sources
-    parsed: ParsedSymbol
-    day: _dt.date
-    reference_price: float | None
-    allow_missing: frozenset[str]
-    provenance: list[tuple[str, str, str]] = field(default_factory=list)
-
-
-class _SymbolRowSource:
-    """Terms stated for the exact symbol (a user row or a trusted snapshot row)."""
-
-    def __init__(self, row: RefRow, terms: Sequence[str]) -> None:
-        self._row = row
-        self._terms = terms
-
-    def find(self, term: str) -> _Found | None:
-        value = self._row.values.get(term) if term in self._terms else None
-        return None if value is None else _Found(value, self._row)
-
-
-def _table_tick(request: _Request, segment: str) -> _Found:
-    """Tick size from the slab rule of a segment; value None when the slab is undecided."""
-    store, exchange, day = request.sources.store, request.parsed.exchange, request.day
-    rows = tick_rules.slab_rows(store, exchange, segment, day)
-    if not tick_rules.is_flat(rows) and request.reference_price is None:
-        return _Found(None, basis="by price slab; no reference price was given")
-    row = tick_rules.slab_row(rows, exchange, segment, day, request.reference_price)
-    return _Found(row.values["tick_size"], row)
-
-
-class _CashSource:
-    """Terms of a share or an ETF where no exact-symbol row states them."""
-
-    def __init__(self, request: _Request) -> None:
-        self._request = request
-
-    def find(self, term: str) -> _Found | None:
-        if term == "lot_size":
-            return _Found(SINGLE_UNIT_LOT, basis="cash equity trades in single shares")
-        if term == "freeze_qty":
-            return _Found(None)  # no per-order quantity freeze is modelled for cash equity
-        request = self._request
-        parsed = request.parsed
-        try:
-            kind = underlying_kind(request.sources, parsed.symbol, parsed.exchange, request.day)
-        except ReferenceDataError:
-            return _Found(None, basis="share or ETF not known; no 'underlyings' row")
-        if kind != "etf":
-            return _table_tick(request, "equity")
-        try:
-            return _table_tick(request, tick_rules.ETF_SEGMENT)
-        except ReferenceDataError:
-            return _Found(None, basis="ETF; the share tick rule does not apply")
-
-
-class _ListedDerivativeSource:
-    """Terms of an NFO or BFO contract from the tables for its underlying."""
-
-    def __init__(self, request: _Request, kind: str) -> None:
-        self._request = request
-        self._segment = f"{kind}_{request.parsed.kind}"
-        self._finders: dict[str, Callable[[], _Found]] = {
-            "lot_size": self._lot_size,
-            "multiplier": lambda: _Found(UNIT_MULTIPLIER, basis=_PER_UNIT),
-            "tick_size": lambda: _table_tick(request, self._segment),
-            "freeze_qty": self._freeze_qty,
-            "settlement": self._settlement,
-        }
-
-    def find(self, term: str) -> _Found | None:
-        return self._finders[term]()
-
-    def _lot_size(self) -> _Found:
-        request, parsed = self._request, self._request.parsed
-        row = lot_size_row(
-            request.sources, parsed.symbol, parsed.exchange, request.day, None, parsed
-        )
-        return _Found(row.values["lot_size"], row)
-
-    def _freeze_qty(self) -> _Found:
-        request, parsed = self._request, self._request.parsed
-        key = (parsed.underlying, parsed.exchange)
-        row = request.sources.store.require("freeze_qty", key, request.day)
-        return _Found(row.values[f"freeze_qty_{parsed.kind}s"], row)
-
-    def _settlement(self) -> _Found:
-        request = self._request
-        key = (request.parsed.exchange, self._segment)
-        row = request.sources.store.require("settlement", key, request.day)
-        return _Found(row.values["settlement"], row)
-
-
-_PER_UNIT = "price is quoted per unit of the underlying"
-
-
-class _McxFutureSource:
-    """Terms of an MCX futures contract from the `mcx_contracts` row of its underlying."""
-
-    def __init__(self, request: _Request) -> None:
-        self._request = request
-        self._key = (request.parsed.underlying, MCX)
-
-    def find(self, term: str) -> _Found | None:
-        store, day = self._request.sources.store, self._request.day
-        expiry = self._request.parsed.expiry
-        row = contract_row(store, MCX_TABLE, self._key, day, expiry, term)
-        value = row.values.get(term)
-        if value is None:
-            raise store.missing(MCX_TABLE, self._key, day, detail=f" with a {term} value")
-        return _Found(value, row)
-
-
-def _no_source_error(request: _Request, term: str) -> ReferenceDataError:
+def _no_source_error(request: Request, term: str) -> ReferenceDataError:
     parsed = request.parsed
     return ReferenceDataError(
         f"No {term} is known for {parsed.symbol} on {parsed.exchange} on "
-        f"{request.day.isoformat()}. The built-in tables cover NFO and BFO contracts and MCX "
-        "futures only. Elsewhere the lot unit differs between brokers, so a 'symbols' row "
+        f"{request.day.isoformat()}. The built-in tables cover NFO and BFO contracts, MCX "
+        "futures and NSE currency futures on USDINR, EURINR, GBPINR and JPYINR only. "
+        "Elsewhere the lot unit differs between brokers, so a 'symbols' row "
         "must state lot_size, multiplier (rupees per one-rupee move per unit of quantity) "
         f"and settlement for the exact contract. {how_to_supply('symbols')}"
     )
 
 
-def _term(request: _Request, sources: Sequence[_Source], term: str) -> object:
+def _term(request: Request, sources: Sequence[Source], term: str) -> object:
     """One term of the instrument, recorded in the provenance of the request."""
     try:
         found = next((hit for hit in (s.find(term) for s in sources) if hit is not None), None)
@@ -220,7 +91,7 @@ def _term(request: _Request, sources: Sequence[_Source], term: str) -> object:
     return found.value
 
 
-def _listed_contract(request: _Request, calendar: SessionCalendar) -> Expiry | None:
+def _listed_contract(request: Request, calendar: SessionCalendar) -> Expiry | None:
     """The contract an NFO or BFO symbol names on the trade date; None without rules.
 
     A symbol that names a re-dated contract by its listed expiry on other trade dates (the
@@ -249,7 +120,7 @@ def _listed_contract(request: _Request, calendar: SessionCalendar) -> Expiry | N
     return contract
 
 
-def _unruled_dates(request: _Request, exact: RefRow | None) -> dict:
+def _unruled_dates(request: Request, exact: RefRow | None) -> dict:
     """Contract date and last trading day of a derivative without expiry rules.
 
     Raises `ReferenceDataError` for an NFO or BFO contract no exact-symbol row lists.
@@ -279,8 +150,11 @@ def _is_snapshot(row: RefRow | None) -> bool:
     return row is not None and row.origin_class == "snapshot"
 
 
-def _derivative_sources(request: _Request, exact: RefRow | None) -> tuple[list[_Source], bool]:
-    """Sources for a future or an option, and whether the MCX table supplies the lot."""
+def _derivative_sources(request: Request, exact: RefRow | None) -> tuple[list[Source], bool]:
+    """Sources for a future or an option, and whether the MCX table supplies the lot.
+
+    A future on MCX or CDS with no exact-symbol row takes its terms from the contract-terms
+    table of its exchange (`_terms.CONTRACT_TABLES`)."""
     parsed = request.parsed
     if parsed.exchange in LISTED_DERIVATIVE_EXCHANGES:
         stated = None if exact is None else exact.values.get("underlying_type")
@@ -289,14 +163,17 @@ def _derivative_sources(request: _Request, exact: RefRow | None) -> tuple[list[_
         )
         # The lot always goes through lot_size_row, which reconciles user, snapshot and table.
         terms = _SNAPSHOT_TERMS if _is_snapshot(exact) else _DERIVATIVE_TERMS[1:]
-        sources: list[_Source] = [] if exact is None else [_SymbolRowSource(exact, terms)]
-        return [*sources, _ListedDerivativeSource(request, kind)], False
-    sources = [] if exact is None else [_SymbolRowSource(exact, _DERIVATIVE_TERMS)]
-    from_mcx_table = exact is None and parsed.exchange == MCX and parsed.kind == "future"
-    return sources + ([_McxFutureSource(request)] if from_mcx_table else []), from_mcx_table
+        sources: list[Source] = [] if exact is None else [SymbolRowSource(exact, terms)]
+        return [*sources, ListedDerivativeSource(request, kind)], False
+    sources = [] if exact is None else [SymbolRowSource(exact, _DERIVATIVE_TERMS)]
+    from_table = exact is None and parsed.kind == "future"
+    table = CONTRACT_TABLES.get(parsed.exchange) if from_table else None
+    if table is None:
+        return sources, False
+    return [*sources, ContractTableSource(request, table)], table == MCX_TABLE
 
 
-def _check_mcx_lot_unit(request: _Request, lot_size: int) -> None:
+def _check_mcx_lot_unit(request: Request, lot_size: int) -> None:
     """Stop when a snapshot shows the broker counts this MCX contract in another unit."""
     parsed, snapshots = request.parsed, request.sources.snapshots
     record = None if snapshots is None else snapshots.record(parsed.symbol, MCX, request.day)
@@ -312,12 +189,12 @@ def _check_mcx_lot_unit(request: _Request, lot_size: int) -> None:
     )
 
 
-def _cash_instrument(request: _Request) -> Instrument:
+def _cash_instrument(request: Request) -> Instrument:
     parsed = request.parsed
     exact = symbol_row(request.sources, parsed.symbol, parsed.exchange, request.day)
     terms = ("lot_size", *_SNAPSHOT_TERMS) if _is_snapshot(exact) else _EQUITY_TERMS
-    sources: list[_Source] = [] if exact is None else [_SymbolRowSource(exact, terms)]
-    sources.append(_CashSource(request))
+    sources: list[Source] = [] if exact is None else [SymbolRowSource(exact, terms)]
+    sources.append(CashSource(request))
     terms = {name: _term(request, sources, name) for name in _EQUITY_TERMS}
     return Instrument(
         symbol=parsed.symbol,
@@ -329,7 +206,7 @@ def _cash_instrument(request: _Request) -> Instrument:
     )
 
 
-def _derivative(request: _Request, calendar: SessionCalendar) -> Instrument:
+def _derivative(request: Request, calendar: SessionCalendar) -> Instrument:
     contract = _listed_contract(request, calendar)
     parsed, day = request.parsed, request.day
     exact = symbol_row(request.sources, parsed.symbol, parsed.exchange, day)
@@ -386,7 +263,7 @@ def resolve_instrument(
     parsed = parse_symbol(symbol, exchange, strict=strict)
     if parsed.kind == "index":
         return Instrument(symbol=symbol, exchange=parsed.exchange, kind="index", settlement="none")
-    request = _Request(sources, parsed, day, reference_price, frozenset(allow_missing))
+    request = Request(sources, parsed, day, reference_price, frozenset(allow_missing))
     if parsed.kind == "equity":
         return _cash_instrument(request)
     if calendar is None:
