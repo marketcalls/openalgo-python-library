@@ -594,7 +594,8 @@ def rupees(amount: float) -> str:
     return f"Rs {amount:,.2f}"
 
 
-def test_a_first_starts_charges_line_names_what_its_contract_notes_charged(day):
+def test_a_first_starts_charges_line_names_what_its_contract_notes_charged(world):
+    day = live(world, BuyAndHold, costs="zerodha")
     # BuyAndHold buys 10 SBIN at 500.00 and sells them at 500.00, intraday, on the zerodha
     # preset: brokerage 0.03 percent of each side's Rs 5,000.00 (1.50), exchange charges
     # 0.00307 percent (0.1535), SEBI fee Rs 10 a crore (0.005), GST 18 percent of those
