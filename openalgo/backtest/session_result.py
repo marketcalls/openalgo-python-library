@@ -35,7 +35,10 @@ not it has rows.
   is refused for the account's margin; its `refused` lists the entries the account's
   trade cap refused (`account_trade_limit`), while an entry a strategy's kill switch
   locked out after an account limit fired it stays in that strategy's orders as
-  `live_lock` (the lock's reason is in `locks`).
+  `live_lock` (the lock's reason is in `locks`). After a restart its `summary()` says so
+  in its first line, and its Assumptions block in a `scope` line: "From the restart at
+  14:15 IST (start 2 of the day): the day's figures across restarts are in the session
+  summary (SessionResult.summary_text())". A first start's states no scope.
 - `versions`: each strategy's run manifest of this start, by name in call order: what a
   backtest's manifest records (the engine version, the strategy's module, name, source
   hash and parameter values, every resolved argument, the reference table and cost
@@ -44,11 +47,21 @@ not it has rows.
   source hash and parameter values: the same code with the same parameters gives the same
   id on every day and restart. A class whose source cannot be read (defined in a notebook
   cell) has its compiled code hashed instead, which depends on the Python version. The
-  journal keeps each start's.
+  journal keeps each start's. The id follows the class's values as they are when the
+  session starts: its parameters', and for a class hashed by its compiled code every class
+  attribute's, a nested class's too. A value the strategy rebinds on its class as it runs
+  (a counter or a flag kept on the class) therefore gives a second start in the same
+  process (a notebook kernel) another id, and its banner says the version changed, naming
+  each parameter whose value did, or, when none did, that a value kept on the class may
+  have: keep run state in `self.state` or on the instance (`self.count`), not on the
+  class.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the
-  `adjustment` column of `Result.contract_notes`), `net_pnl`, `slippage` (rupees the
+  `adjustment` column of `Result.contract_notes`), `notes_charges` (what the strategies'
+  contract notes charged, their results' charges, at the day's first start, whose results
+  hold the day's fills; None after a restart; the Charges line names it when it differs
+  at the paisa), `net_pnl` (modelled), `slippage` (rupees the
   MARKET fills cost beyond a backtest's fill of the same orders at the open of the bar
   opening at each decision, with the run's modelled slippage; negative when live did
   better; None when not one of them could be compared) and `slippage_not_compared`

@@ -573,3 +573,50 @@ def test_the_results_type_hints_resolve_once_its_summary_type_is_loaded():
     hints = typing.get_type_hints(bt.SessionResult)
     assert hints["summary"] is Public
     assert hints["results"] == Mapping[str, bt.Result]
+
+
+# ----- the charges on the contract notes (2.4.1 item W-2) ---------------------------------
+
+
+def charges_line(result: bt.SessionResult) -> str:
+    """The value on the Charges line of `result`'s summary text."""
+    [value] = [
+        text.partition(" : ")[2]
+        for text in result.summary_text().splitlines()
+        if text.startswith("Charges ")
+    ]
+    return value
+
+
+def rupees(amount: float) -> str:
+    """Rupees as the summary writes them, for amounts below a lakh, where Indian digit
+    grouping and grouping by thousands read alike."""
+    return f"Rs {amount:,.2f}"
+
+
+def test_a_first_starts_charges_line_names_what_its_contract_notes_charged(day):
+    # BuyAndHold buys 10 SBIN at 500.00 and sells them at 500.00, intraday, on the zerodha
+    # preset: brokerage 0.03 percent of each side's Rs 5,000.00 (1.50), exchange charges
+    # 0.00307 percent (0.1535), SEBI fee Rs 10 a crore (0.005), GST 18 percent of those
+    # three (0.29853), stamp duty 0.003 percent on the buy (0.15), STT 0.025 percent on the
+    # sale (1.25).
+    # Per fill, rounded to the paisa: the buy 2.10703 is 2.11, the sale 3.20703 is 3.21,
+    # Rs 5.32 in all. On the contract note each line is the day's sum rounded once, STT and
+    # stamp duty to the rupee: brokerage 3.00, STT 1.25 is 1, exchange 0.307 is 0.31, SEBI
+    # 0.01, stamp duty 0.15 is 0, GST 0.59706 is 0.60: Rs 4.92.
+    assert day.summary.notes_charges == pytest.approx(4.92)
+    assert charges_line(day) == "Rs 5.32 (modelled per fill; Rs 4.92 on the contract notes)"
+
+
+def test_a_first_starts_net_on_the_contract_notes_is_its_strategies_net_profit(day):
+    summary = day.summary
+    net_profit = sum(result.metrics["net_profit"] for result in day.results.values())
+    assert summary.gross_pnl - summary.notes_charges == pytest.approx(net_profit)
+
+
+def test_a_restarted_starts_charges_line_is_the_modelled_figure_alone(world):
+    # Its results charge the contract notes of this start's fills, the day's figures every
+    # start's: no figure of the notes covers the day.
+    _, restarted = both_starts(world)
+    assert restarted.summary.notes_charges is None
+    assert charges_line(restarted) == f"{rupees(restarted.summary.charges)} (modelled)"
