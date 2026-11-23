@@ -14,6 +14,8 @@ from .feed import FeedAPI
 from .options import OptionsAPI
 from .telegram import TelegramAPI
 from .whatsapp import WhatsAppAPI
+from .discord import DiscordAPI
+from .slack import SlackAPI
 from .utilities import UtilitiesAPI
 from .indicators import ta
 
@@ -28,7 +30,7 @@ nbjit = _jit_shim
 prange = _prange
 
 class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
-          StrategyAPI, TelegramAPI, WhatsAppAPI, UtilitiesAPI):
+          StrategyAPI, TelegramAPI, WhatsAppAPI, DiscordAPI, SlackAPI, UtilitiesAPI):
     """
     OpenAlgo API client class
     """

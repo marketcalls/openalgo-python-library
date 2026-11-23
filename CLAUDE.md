@@ -47,7 +47,9 @@ platforms, their scripting languages, other backtesting or trading engines, indi
 libraries and market-data downloaders, also as abbreviations or suffixes of identifiers.
 Describe what the code computes instead of whose output it matches. Named freely:
 OpenAlgo and its own products, exchanges, regulators, brokers where they are functional
-identifiers (a cost preset, a broker adapter), and the technical dependencies (Python,
+identifiers (a cost preset, a broker adapter), OpenAlgo's own endpoints that carry a
+messaging service's name (telegram, whatsapp, discord, slack: the SDK's methods and
+modules for them are named as the endpoints are), and the technical dependencies (Python,
 Rust, NumPy, pandas, PyO3).
 
 - Commits made before 2026-11-21 are left as they are: the history and the release tags
@@ -67,7 +69,7 @@ The public entry point is `openalgo.api`, which composes every REST mixin via
 multiple inheritance and calls `BaseAPI.__init__` once:
 
     api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
-        StrategyAPI, TelegramAPI, WhatsAppAPI, UtilitiesAPI)
+        StrategyAPI, TelegramAPI, WhatsAppAPI, DiscordAPI, SlackAPI, UtilitiesAPI)
 
 `Strategy` (the strategy module's public webhook sender) and `ta` (indicators) are
 separate top-level exports.
@@ -78,9 +80,10 @@ separate top-level exports.
 | `openalgo/orders.py` | place / modify / cancel / smart / basket / split orders, order status, positions |
 | `openalgo/gtt.py` | `GTTAPI`: `placegttorder` / `modifygttorder` / `cancelgttorder` / `gttorderbook` (SINGLE and OCO triggers) |
 | `openalgo/data.py` | quotes, depth, history, intervals, symbol/instrument lookups (returns pandas where relevant) |
-| `openalgo/account.py` | funds, holdings, orderbook, tradebook, positionbook, margin, `analyzerstatus` / `analyzertoggle` |
+| `openalgo/account.py` | funds, holdings, orderbook, tradebook, positionbook, margin, `charges` (one order's charges, priced by the server), `analyzerstatus` / `analyzertoggle` |
 | `openalgo/options.py` | option-chain and options order helpers |
-| `openalgo/telegram.py`, `openalgo/whatsapp.py` | notification endpoints |
+| `openalgo/telegram.py`, `openalgo/whatsapp.py`, `openalgo/discord.py`, `openalgo/slack.py` | notification endpoints |
+| `openalgo/_payload.py` | `plain_value`: a NumPy scalar sent as the Python value it holds |
 | `openalgo/utilities.py` | market holidays / timings |
 | `openalgo/strategy.py` | `Strategy`: standalone webhook poster for `/strategy/webhook/<token>` (own pooled client) |
 | `openalgo/strategy_api.py` | `StrategyAPI`: the API-key surface under `/api/v1/strategy/` (list, status, start, stop, close_all, close_leg, runs, orders, events) |
@@ -264,7 +267,7 @@ Checks to run before committing:
     cargo test -p oa_bt --manifest-path rust/Cargo.toml
     ruff check
     ruff format --check
-    pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py
+    pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py test/test_rest_*.py
 
 `ruff` with no path covers the files listed under `[tool.ruff] include` in
 `pyproject.toml`; add new modules outside the backtest paths to that list.
