@@ -556,7 +556,8 @@ class AccountAPI(BaseAPI):
             - other_charges.sebi_turnover: SEBI turnover fee.
 
         STT and stamp duty are rounded to the nearest rupee, as on a contract note
-        for that one order; every other line is kept to the paisa. Not included:
+        for that one order (CTT on a commodity exchange is kept to the paisa);
+        every other line is kept to the paisa. Not included:
         depository (DP) charges on a delivery sell, and STT on an option that is
         exercised at expiry.
 
