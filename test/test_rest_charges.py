@@ -125,7 +125,7 @@ def test_charges_sends_numpy_figures_as_the_plain_numbers_they_hold(quantity, pr
 
 
 def test_a_quantity_that_is_not_a_number_is_sent_as_given_for_the_server_to_refuse():
-    refused = {"status": "error", "message": "{'quantity': ['Not a valid integer.']}"}
+    refused = {"status": "error", "message": "{'quantity': ['Not a valid number.']}"}
     seen = []
 
     with client_answering(recording(seen, refused, status=400)) as client:

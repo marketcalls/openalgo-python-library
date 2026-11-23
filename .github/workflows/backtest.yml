@@ -30,6 +30,16 @@ on:
       - 'test/conftest.py'
       - 'test/live/**'
       - 'benchmark/backtest_speed.py'
+      # The REST calls tested with an in-process transport (charges and the webhook
+      # alerts) and their tests.
+      - 'openalgo/__init__.py'
+      - 'openalgo/base.py'
+      - 'openalgo/account.py'
+      - 'openalgo/discord.py'
+      - 'openalgo/slack.py'
+      - 'openalgo/_payload.py'
+      - 'test/rest_fakes.py'
+      - 'test/test_rest_*.py'
       # Dependency, build and lint settings change what the gate checks.
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
@@ -99,10 +109,10 @@ jobs:
         run: |
           . .venv/bin/activate
           ruff format --check
-      - name: pytest (backtest, feed, indicators)
+      - name: pytest (backtest, feed, indicators, REST)
         run: |
           . .venv/bin/activate
-          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py -q
+          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py test/test_rest_*.py -q
       - name: Check out the docs
         uses: actions/checkout@v4
         with:

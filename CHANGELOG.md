@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `api.charges(symbol=..., exchange=..., action=..., product=..., quantity=..., price=...)` prices one order's brokerage and statutory charges before it is placed, through OpenAlgo's Charges API (`POST /api/v1/charges`). Quantity is in units (one NIFTY lot of 65 is 65) and price is per unit: the premium for an option, the last traded price for a MARKET order. The figures are OpenAlgo's estimate under the brokerage plan saved on its `/sandbox/commissions` page, separate from the backtest engine's own cost model (`openalgo.backtest.costs`). DP charges and STT on an exercised option are not included. A refused request comes back as the server's answer with the HTTP status in `code` (400 naming the field, 403 for an invalid API key).
+- `api.discord(message, wait_for_delivery=False)` posts a message of up to 2,000 characters through the Discord webhook saved on OpenAlgo's `/discord` page, while Discord is switched on at `/alerts` (`POST /api/v1/discord/notify`). Mentions are shown as text. The message is queued by default; with `wait_for_delivery=True` it is posted first and the answer says whether it was accepted. The limit is 30 requests a minute. Refusals (400, 401, 409, 429, 502, 503) come back with the server's message and the HTTP status in `code`.
+- `api.slack(message, wait_for_delivery=False)` posts a message of up to 4,000 characters through the Slack incoming webhook saved on OpenAlgo's `/slack` page, while Slack is switched on at `/alerts` (`POST /api/v1/slack/notify`). The server escapes `&`, `<` and `>`, so send the message as written. Queueing, delivery, the rate limit and refusals work as for `discord()`.
+- The `DiscordAPI` and `SlackAPI` mixins are part of `api` and importable from `openalgo`, next to `TelegramAPI` and `WhatsAppAPI`. `charges()`, `discord()` and `slack()` send a NumPy value (a quantity read from pandas, for example) as the plain number or bool it holds; any other value is sent as given and checked by the server.
+
 ### Changed
 
 - `bt.live`: the start banner's "its version changed since the day's earlier start" line now names each parameter whose value differs from that start's, for example "(its code or its parameters; the parameters whose values changed: hold 3 to 4)". A set parameter, or an object known by its memory address, is not named: its text does not show a change reliably (the version id still moves). For a strategy class defined in a notebook, the line reads "(its code, its parameters or a value kept on its class; keep run state in self.state or on the instance)".
