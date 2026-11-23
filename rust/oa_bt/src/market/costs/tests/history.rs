@@ -342,7 +342,9 @@ fn every_rate_change_applies_from_its_effective_date_and_not_the_day_before() {
 /// RBDPMOLEIN (no fee found), every MCX row in 2020 (no fee circular found before
 /// 2020-12-18), Sensex options while the nearest expiry had its own slabs, and in 2021
 /// until 03-31 NSE equity (lower rate outside the NIFTY 50 and NIFTY Next 50) and the
-/// MCX futures at Rs 2.60 per lakh (half that for the third expiry and later).
+/// MCX futures at Rs 2.60 per lakh (half that for the third expiry and later). MCX
+/// options and NSE currency derivatives are unverified in every version before the
+/// current one: their rates come from a broker bulletin, not an exchange circular.
 fn unverified_rows() -> [(&'static str, Vec<Segment>); 11] {
     use Segment::*;
     let always = [
@@ -351,6 +353,9 @@ fn unverified_rows() -> [(&'static str, Vec<Segment>); 11] {
         BseEqDeliverySs,
         BseEqIntradaySs,
         McxFutRbdpmolein,
+        McxOpt,
+        CdsFut,
+        CdsOpt,
     ];
     let with = |extra: &[Segment]| -> Vec<Segment> {
         let mut rows = always.to_vec();

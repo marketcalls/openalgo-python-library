@@ -158,7 +158,7 @@ def in_paise(amounts: dict[str, float]) -> dict[str, int]:
 @pytest.mark.parametrize("segment", TABS)
 def test_calculator_mode_is_paisa_exact_for_equity_and_equity_derivatives(segment):
     tab = TABS[segment][0]
-    model = costs.CostModel(rounding="calculator")
+    model = costs.CostModel("zerodha", rounding="calculator")
     for buy, sell, quantity in random_trades(segment):
         actual = model.round_trip(buy, sell, quantity, SNAPSHOT, segment).as_dict()
         expected = tab.round_trip(buy, sell, quantity)
@@ -168,7 +168,7 @@ def test_calculator_mode_is_paisa_exact_for_equity_and_equity_derivatives(segmen
 @pytest.mark.parametrize("segment", TABS)
 def test_a_one_sided_calculator_trade_matches_a_round_trip_with_a_zero_price(segment):
     tab = TABS[segment][0]
-    model = costs.CostModel(rounding="calculator")
+    model = costs.CostModel("zerodha", rounding="calculator")
     for buy, sell, quantity in list(random_trades(segment))[:40]:
         bought = model.trade("BUY", buy, quantity, SNAPSHOT, segment).as_dict()
         sold = model.trade("SELL", sell, quantity, SNAPSHOT, segment).as_dict()
@@ -258,7 +258,7 @@ def test_the_mcx_oracle_reproduces_a_known_calculator_result():
 @pytest.mark.parametrize("commodity", MCX_CONTRACTS)
 def test_calculator_mode_is_within_one_paisa_of_the_calculator_for_mcx(commodity):
     segment, multiplier = MCX_CONTRACTS[commodity][:2]
-    model = costs.CostModel(rounding="calculator")
+    model = costs.CostModel("zerodha", rounding="calculator")
     for buy, sell, lots in mcx_trades(commodity):
         actual = model.round_trip(buy, sell, lots * multiplier, SNAPSHOT, segment).as_dict()
         expected = mcx_calculator(commodity, buy, sell, lots)

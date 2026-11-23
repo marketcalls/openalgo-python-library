@@ -1,7 +1,8 @@
 """The market settings of a run: the cost model, the slippage and the per-instrument
 facts the kernel's market rules read (`rust/oa_py/src/backtest/engine/market.rs`).
 
-    costs:    "zerodha" (the default) or another preset name, a brokerage preset from
+    costs:    "standard" (the default) or another preset name ("zerodha",
+              "zero_brokerage"), a brokerage preset from
               `bt.costs` (`bt.costs.flat(20)`), a `bt.costs.CostModel` (for calculator
               rounding, user schedules or backfill), or None (no charges; every report
               warns). Statutory charges apply under every preset.
@@ -27,6 +28,7 @@ from typing import Any
 
 from . import costs as costs_module
 from . import slippage as slippage_module
+from ._costs.lots import INSTRUMENT_CODES
 from ._futures_contracts import underlying_of
 from ._futures_margin import MarginSetting, own_margin
 from .errors import CostError, ReferenceDataError
@@ -37,7 +39,7 @@ DERIVATIVE_EXCHANGES = ("NFO", "BFO")
 # at the caller's line (as the cost model's own warnings do).
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 # The cost model's instrument codes (`costs.segment_for`) by Instrument.kind.
-SEGMENT_KINDS = {"equity": "EQ", "future": "FUT", "option": "OPT"}
+SEGMENT_KINDS = INSTRUMENT_CODES
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ def cost_model(value: object) -> costs_module.CostModel | None:
     if isinstance(value, str | costs_module.Brokerage):
         return costs_module.CostModel(brokerage=value)
     raise CostError(
-        "costs takes a preset name ('zerodha'), a preset from bt.costs (bt.costs.flat(20)), "
+        "costs takes a preset name ('standard'), a preset from bt.costs (bt.costs.flat(20)), "
         f"a bt.costs.CostModel or None, got {value!r}"
     )
 

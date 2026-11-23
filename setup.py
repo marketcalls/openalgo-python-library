@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="openalgo",
-    version="2.4.0",
+    version="2.4.1",
     author="Rajandran R",
     author_email="rajandran@openalgo.in",
     description="Python library for OpenAlgo's trading APIs and WebSocket feeds, with 100+ technical indicators and a backtesting and live trading engine powered by a Rust core.",

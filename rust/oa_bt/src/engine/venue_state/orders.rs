@@ -92,6 +92,9 @@ fn read_cost(read: &Read<'_>) -> Result<CostBreakdown, LiveStateError> {
         sebi_fee: read.f64_of("sebi_fee")?,
         stamp_duty: read.f64_of("stamp_duty")?,
         gst: read.f64_of("gst")?,
+        // Only calculator rounding of NSE currency futures, which live sessions refuse,
+        // shows an amount it does not charge.
+        ..CostBreakdown::ZERO
     })
 }
 

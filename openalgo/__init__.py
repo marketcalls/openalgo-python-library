@@ -14,6 +14,8 @@ from .feed import FeedAPI
 from .options import OptionsAPI
 from .telegram import TelegramAPI
 from .whatsapp import WhatsAppAPI
+from .discord import DiscordAPI
+from .slack import SlackAPI
 from .utilities import UtilitiesAPI
 from .indicators import ta
 
@@ -28,7 +30,7 @@ nbjit = _jit_shim
 prange = _prange
 
 class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
-          StrategyAPI, TelegramAPI, WhatsAppAPI, UtilitiesAPI):
+          StrategyAPI, TelegramAPI, WhatsAppAPI, DiscordAPI, SlackAPI, UtilitiesAPI):
     """
     OpenAlgo API client class
     """
@@ -68,7 +70,7 @@ class api(OrderAPI, GTTAPI, DataAPI, AccountAPI, FeedAPI, OptionsAPI,
         # (with the helper FeedAPI.__init__ also runs, so the two cannot drift apart)
         self._init_feed(host, ws_port, ws_url, verbose, auto_reconnect)
 
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 
 # Export main components for easy access
 __all__ = ['api', 'Strategy', 'ta', 'nbjit', 'prange', 'HAS_NUMBA']

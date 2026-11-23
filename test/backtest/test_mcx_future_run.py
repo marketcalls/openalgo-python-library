@@ -3,8 +3,9 @@ the contract notes, the margin blocked and the daily mark to market.
 
 One CRUDEOIL contract (expiry 2026-11-18, lot 100 barrels, tick Re 1, multiplier 1, so
 one lot is 100 units and a one-rupee move is Rs 100 a lot), daily bars on the MCX
-sessions of 2026-11-02 to 2026-11-05, NRML, the default Zerodha costs in contract-note
-rounding, no slippage, capital 10,00,000. Bars (open, high, low, close):
+sessions of 2026-11-02 to 2026-11-05, NRML, the default costs in contract-note rounding
+(futures pay the same brokerage under "standard" and "zerodha"), no slippage, capital
+10,00,000. Bars (open, high, low, close):
 
     11-02  5000  5050  4980  5020   buy one lot at the close
     11-03  5030  5080  5010  5060   filled at the open, 5,030.00

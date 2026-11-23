@@ -16,6 +16,7 @@ portfolio's code.
 
 from __future__ import annotations
 
+import html
 import logging
 
 import pandas as pd
@@ -31,7 +32,7 @@ from watch_samples import HoldInfy, HoldSbin
 
 import openalgo.backtest as bt
 from openalgo.backtest import metrics
-from openalgo.backtest._live._result_portfolio import account_rows
+from openalgo.backtest._live._result_portfolio import account_rows, restart_scope
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest._portfolio_tables import REFUSED_COLUMNS
 
@@ -347,3 +348,75 @@ def test_after_a_restart_the_portfolio_covers_the_restarted_start_only(world):
     # the gross basis, where the day's measure holds both round trips (about Rs 100).
     assert "the daily loss measure counts this start only" in pf.assumptions["account"]
     assert pf.account["daily_loss_rupees"].iloc[-1] == pytest.approx(10 * (510.0 - 505.0))
+
+
+# ----- the scope of a restarted start's portfolio (2.4.1 item W-1) -----------------------------
+
+#: When the restarted start of these tests begins: after the first start's Ctrl+C at
+#: 14:46:30 and its close, early enough to decide on the 14:48 bar and make its round trip
+#: (16-session-design 3.1 step 14). It is the day's second start, from 14:46 IST.
+RESTART_AT = ist(14, 46, 40)
+#: How a restarted start's portfolio states what it covers.
+RESTART_SCOPE = (
+    "from the restart at 14:46 IST (start 2 of the day): the day's figures across restarts "
+    "are in the session summary (SessionResult.summary_text())"
+)
+
+
+def restarted(world) -> bt.SessionResult:
+    """TwoRoundTrips stopped by Ctrl+C at 14:46:30 after its first round trip, then started
+    again at `RESTART_AT` and run to the day's end: the second start's result. Both starts
+    charge the zerodha preset, on which the figures below are worked."""
+    at_price(world, ist(14, 44, 30), 505.0)
+    at_price(world, ist(14, 48, 30), 510.0)
+    world.stop_at(ist(14, 46, 30))
+    live(world, TwoRoundTrips, costs="zerodha")
+    now = world.fake.clock.now()
+    assert now < RESTART_AT
+    world.script.sleep((RESTART_AT - now) / 10**9)
+    world.stop = StopFlag()
+    world.stop_at(DAY_ENDS)
+    return live(world, TwoRoundTrips, costs="zerodha")
+
+
+def test_after_a_restart_the_portfolio_summary_states_its_scope_at_the_top(world):
+    second = restarted(world)
+    assert second.restarts == 1
+    lines = second.portfolio.summary().splitlines()
+    assert lines[0] == "F" + RESTART_SCOPE[1:]
+    # Below it, the account's own figures: this start's round trip alone, 10 SBIN bought at
+    # 505.00 and sold at 510.00 (gross Rs 50.00), less its contract note on the zerodha
+    # preset, each line the round trip's sum rounded once: brokerage 0.03 percent of
+    # Rs 5,050.00 and Rs 5,100.00 (3.045, 3.05), STT 0.025 percent of the sale (1.275, Rs 1),
+    # exchange charges 0.00307 percent of Rs 10,150.00 (0.3116, 0.31), SEBI fee Rs 10 a
+    # crore (0.0102, 0.01), stamp duty 0.003 percent of the buy (0.1515, Rs 0), GST 18
+    # percent of brokerage, exchange charges and SEBI fee (0.6060, 0.61): Rs 4.98, so
+    # 50.00 - 4.98 = 45.02.
+    assert lines[1] == "Net profit   : Rs 45.02"
+    assert lines[4] == "Trades       : 1 (100% won)"
+
+
+def test_after_a_restart_the_combined_tearsheet_states_its_scope_in_the_assumptions(world):
+    pf = restarted(world).portfolio
+    assert pf.assumptions["scope"] == RESTART_SCOPE
+    row = f"<td class='l'>scope</td><td class='l'>{html.escape(RESTART_SCOPE)}</td>"
+    assert row in pf.tearsheet()
+
+
+def test_a_first_starts_portfolio_states_no_scope(account):
+    pf = account.portfolio
+    assert "scope" not in pf.assumptions
+    assert pf.summary().splitlines()[0] == "Net profit   : Rs -160.00"
+    assert "<td class='l'>scope</td>" not in pf.tearsheet()
+
+
+def test_the_scope_of_a_days_third_start_names_its_start_and_its_time():
+    # Restarted at 10:05:30 IST after two starts of the day.
+    assert restart_scope(ist(10, 5, 30), restarts=2) == (
+        "from the restart at 10:05 IST (start 3 of the day): the day's figures across "
+        "restarts are in the session summary (SessionResult.summary_text())"
+    )
+
+
+def test_a_first_start_has_no_scope_to_state():
+    assert restart_scope(ist(14, 40, 5), restarts=0) is None

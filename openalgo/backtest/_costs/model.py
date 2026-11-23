@@ -49,13 +49,17 @@ class CostModel:
     Parameters
     ----------
     brokerage : str or Brokerage
-        "zerodha" (default), "zero_brokerage", or a preset from `costs.flat()`,
-        `costs.percent()`, `costs.zero_brokerage()` or `costs.custom()`.
+        "standard" (default), "zerodha", "zero_brokerage", or a preset from
+        `costs.flat()`, `costs.percent()`, `costs.zero_brokerage()` or `costs.custom()`.
     rounding : str
         "contract_note" (default) returns unrounded accruals; round them per day with
         `costs.contract_note()`. "calculator" rounds each trade or round trip the way
-        the Zerodha brokerage calculator does (to the paisa for equity and equity
-        derivatives, within one paisa for MCX futures).
+        the Zerodha brokerage calculator does (to the paisa for equity, equity and
+        currency derivatives, within one paisa for MCX futures and options); pass
+        brokerage="zerodha" to compare with that calculator. On NSE currency futures
+        the calculator shows the IPFT levy in its exchange line but leaves it out of
+        GST and the total, and this mode does the same, so there the components add up
+        to more than the total by that IPFT (Rs 0.04 a side on one USDINR lot at 88.33).
     schedules : list of dict, optional
         User schedule versions, in the shape `costs.schedules()` returns (dates may
         be date objects or ISO strings). They go through the same validation and
@@ -72,7 +76,8 @@ class CostModel:
     is malformed, has implausible rates or overlaps another version.
 
     Units everywhere: prices and costs in rupees; a quantity is the number of price
-    units, never lots (for an MCX future, lots times the contract multiplier); rates
+    units, never lots (for an MCX or currency future, lots times the lot size times the
+    contract multiplier; `costs.trade_cost(lots=...)` does that sum); rates
     are fractions; trade dates are IST calendar dates. One trade is one executed
     order: an order filled in several parts is costed once, on its total.
 
@@ -83,7 +88,7 @@ class CostModel:
 
     def __init__(
         self,
-        brokerage: str | Brokerage = "zerodha",
+        brokerage: str | Brokerage = "standard",
         rounding: str = "contract_note",
         schedules: list[dict[str, Any]] | None = None,
         include_builtin: bool = True,

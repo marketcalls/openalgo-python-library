@@ -32,7 +32,9 @@ WORKED_EXAMPLE = [
 @pytest.mark.parametrize("row", WORKED_EXAMPLE, ids=lambda row: row[0])
 def test_calculator_mode_reproduces_the_worked_example_to_the_paisa(row):
     segment, buy, sell, brokerage, stt, exchange_txn, gst, sebi_fee, stamp_duty, total = row
-    cost = costs.round_trip_cost(buy, sell, 400, SNAPSHOT, segment=segment, rounding="calculator")
+    cost = costs.round_trip_cost(
+        buy, sell, 400, SNAPSHOT, segment=segment, rounding="calculator", brokerage="zerodha"
+    )
     assert cost.as_dict() == {
         "brokerage": brokerage,
         "stt": stt,
@@ -45,10 +47,12 @@ def test_calculator_mode_reproduces_the_worked_example_to_the_paisa(row):
 
 
 def test_trade_cost_itemises_a_delivery_buy():
-    # Section 1 rates on a buy worth Rs 4,00,000: no brokerage, STT 0.1 percent = 400,
-    # exchange 0.00307 percent = 12.28, SEBI Rs 10 per crore = 0.40, stamp duty 0.015
-    # percent = 60, GST 0.18 x (12.28 + 0.40) = 2.2824.
-    cost = costs.trade_cost("BUY", 1000, 400, SNAPSHOT, exchange="NSE", product="CNC")
+    # Section 1 rates on a buy worth Rs 4,00,000: no brokerage (Zerodha), STT 0.1 percent
+    # = 400, exchange 0.00307 percent = 12.28, SEBI Rs 10 per crore = 0.40, stamp duty
+    # 0.015 percent = 60, GST 0.18 x (12.28 + 0.40) = 2.2824.
+    cost = costs.trade_cost(
+        "BUY", 1000, 400, SNAPSHOT, exchange="NSE", product="CNC", brokerage="zerodha"
+    )
     assert cost.as_dict() == pytest.approx(
         {
             "brokerage": 0.0,
@@ -190,9 +194,10 @@ def test_segment_for_resolves_openalgo_codes(exchange, product, instrument, extr
 
 # (exchange, product, instrument, extra arguments, text the message must contain)
 NO_SEGMENT = [
-    ("CDS", "NRML", "FUT", {}, "not costed yet"),
+    ("BCD", "NRML", "FUT", {}, "BSE currency derivatives"),
     ("BCD", "NRML", "OPT", {}, "not costed yet"),
-    ("MCX", "NRML", "OPT", {"underlying": "GOLD"}, "MCX options"),
+    ("MCX", "NRML", "OPT", {"underlying": "CARDAMOM"}, "MCX options on the agri commodity"),
+    ("CDS", "CNC", "FUT", {}, "NRML or MIS"),
     ("NSE_INDEX", "MIS", "EQ", {}, "index exchange"),
     ("NYSE", "CNC", "EQ", {}, "unknown exchange"),
     ("NSE", "BO", "EQ", {}, "unknown product"),
@@ -217,8 +222,8 @@ def test_segment_for_raises_instead_of_guessing(exchange, product, instrument, e
 
 def test_a_bse_trade_without_its_scrip_group_is_not_charged_as_group_a():
     # A Z-group delivery buy of Rs 1,00,000 owes an exchange charge of Rs 10,000 per
-    # crore: Rs 100, with GST of 0.18 x (100 + 0.10 SEBI) = 18.018. Without the group
-    # there is no charge to assume (group A would be Rs 3.75).
+    # crore: Rs 100, with GST of 0.18 x (20 standard brokerage + 100 + 0.10 SEBI) =
+    # 21.618. Without the group there is no charge to assume (group A would be Rs 3.75).
     with pytest.raises(CostError, match="scrip group"):
         costs.trade_cost("BUY", 100_000, 1, SNAPSHOT, exchange="BSE", product="CNC")
     # The group X row is not verified (the same row charges ZP, which pays more).
@@ -226,10 +231,10 @@ def test_a_bse_trade_without_its_scrip_group_is_not_charged_as_group_a():
         cost = costs.trade_cost(
             "BUY", 100_000, 1, SNAPSHOT, exchange="BSE", product="CNC", bse_group="Z"
         )
-    assert (cost.exchange_txn, cost.gst) == pytest.approx((100.0, 18.018))
+    assert (cost.exchange_txn, cost.gst) == pytest.approx((100.0, 21.618))
 
 
-@pytest.mark.parametrize("segment", ["NSE", "NFO-OPT", "NSE_EQ", "", "CDS_FUT", "MCX_OPT", 7])
+@pytest.mark.parametrize("segment", ["NSE", "NFO-OPT", "NSE_EQ", "", "BCD_FUT", "BCD_OPT", 7])
 def test_an_unknown_or_unsupported_segment_code_raises(segment):
     with pytest.raises(CostError):
         costs.trade_cost("BUY", 100, 1, SNAPSHOT, segment=segment)
@@ -254,7 +259,7 @@ def test_the_segment_table_lists_every_segment_once():
     table = costs.segments()
     assert [row["code"] for row in table] == list(costs.SEGMENTS)
     assert [row["id"] for row in table] == list(range(len(costs.SEGMENTS)))
-    assert len(set(costs.SEGMENTS)) == 22
+    assert len(set(costs.SEGMENTS)) == 25
 
 
 def test_components_are_listed_in_output_order():
@@ -363,7 +368,7 @@ def test_an_unknown_rounding_mode_raises():
 
 def test_dp_charge_is_15_34_per_scrip_per_sell_day():
     # Section 4: Rs 3.5 CDSL + Rs 9.5 Zerodha + Rs 2.34 GST.
-    charge = costs.dp_charge(SNAPSHOT)
+    charge = costs.dp_charge(SNAPSHOT, brokerage="zerodha")
     assert (charge.fee, charge.gst, charge.total) == (13.0, 2.34, pytest.approx(15.34))
     assert (charge.fee_source, charge.schedule, charge.verified) == (
         "zerodha_preset",

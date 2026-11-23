@@ -14,6 +14,7 @@
 //! | `rounding` | Rounding modes; exact rounding of sums; calculator rounding |
 //! | `rules` | The arithmetic for one fill, unrounded and calculator-rounded |
 //! | `cost_model` | `CostModel`: per-fill cost, round trip, DP charge, exercise STT |
+//! | `split` | One order charged at two segments' rates (CNC, part intraday): one brokerage |
 //! | `batch` | The same per-fill cost over slices |
 //! | `note` | Contract-note aggregation and rounding |
 //! | `breakdown`, `error` | Result and error types |
@@ -22,9 +23,10 @@
 //! (never lots), a `_rate` is a fraction (0.001 is 0.1 percent), anything named
 //! `percent` takes percent units, and trade dates are IST days.
 //!
-//! Currency derivatives and MCX options are out of scope and are an error, never a
-//! guess. A trade dated before the first schedule version is an error unless the
-//! caller opts in to backfill.
+//! BSE currency derivatives (BCD), MCX options on an agri commodity and the exercise
+//! of an MCX option are out of scope and are an error, never a guess. A trade dated
+//! before the first schedule version is an error unless the caller opts in to
+//! backfill.
 //!
 //! # Per-fill use (the kernel)
 //!
@@ -33,7 +35,7 @@
 //! use oa_bt::model::{days_from_civil, Side};
 //!
 //! # fn main() -> Result<(), CostError> {
-//! let model = CostModel::builtin()?; // built-in schedules, Zerodha, contract-note rounding
+//! let model = CostModel::builtin()?; // built-in schedules, standard, contract-note rounding
 //! let day = days_from_civil(2026, 11, 12);
 //! let mut notes = ContractNoteAggregator::new();
 //!
@@ -53,8 +55,9 @@
 //! `Rounding::ContractNote` (default) returns unrounded accruals per fill and
 //! leaves rounding to `ContractNoteAggregator`, once per trade day and note. The
 //! contract-note rule is an assumption (`CONTRACT_NOTE_RULE`). `Rounding::Calculator`
-//! reproduces the Zerodha brokerage calculator, to the paisa for equity and equity
-//! derivatives and within one paisa for MCX futures, and exists for parity tests.
+//! reproduces the Zerodha brokerage calculator, to the paisa for equity, equity and
+//! currency derivatives and within one paisa for MCX futures and options, and exists
+//! for parity tests.
 
 mod batch;
 mod book;
@@ -69,6 +72,7 @@ mod rounding;
 mod rules;
 mod schedule;
 mod segment;
+mod split;
 
 #[cfg(test)]
 mod tests;

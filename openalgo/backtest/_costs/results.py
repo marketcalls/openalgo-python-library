@@ -23,7 +23,9 @@ class CostBreakdown:
     exchange transaction charge including the IPFT levy), sebi_fee, stamp_duty and gst.
     `total` is their sum as the rounding mode reports it: in contract-note mode the
     components are unrounded accruals and the total their plain sum; in calculator
-    mode they are whole paise, rounded the way the Zerodha calculator rounds.
+    mode they are whole paise, rounded the way the Zerodha calculator rounds; for NSE
+    currency futures the total, like the calculator's, leaves out the IPFT levy that the
+    exchange_txn line shows (and so does its GST).
 
     `schedules` names the schedule version or versions that priced it. `verified` is
     True only when every rate used was verified for its trade date, and `backfilled`

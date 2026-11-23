@@ -161,8 +161,8 @@ def test_multiplier_is_one_on_nfo_where_price_is_quoted_per_unit(tables):
 
 
 def test_multiplier_on_an_exchange_without_tables_raises(tables):
-    with pytest.raises(ReferenceDataError, match="No multiplier is known for USDINR on CDS"):
-        tables.multiplier("USDINR", "CDS", "2024-11-04")
+    with pytest.raises(ReferenceDataError, match="No multiplier is known for USDINR on BCD"):
+        tables.multiplier("USDINR", "BCD", "2024-11-04")
 
 
 @pytest.mark.parametrize(

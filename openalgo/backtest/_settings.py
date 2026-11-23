@@ -6,8 +6,8 @@ same name, which wins over the documented default. The documented defaults are t
 03-architecture 4.1 and 04-execution 2: product MIS for intraday intervals, CNC for daily
 equity and NRML for daily derivatives; entry window and square-off from the calendar's
 dated table (MIS only, SPEC-32); fill at the next open; whole shares and lots (the venue
-rule, decision D26); Zerodha charges; the per-segment slippage. Every value used is
-listed in the Assumptions block.
+rule, decision D26); the standard brokerage preset (costs="standard"); the per-segment
+slippage. Every value used is listed in the Assumptions block.
 
 The plan is `_run_plan.RunPlan`; the run's dates are read by `_run_dates` and its risk
 settings, in the units of 14-strategy-api, by `_risk_settings`, which refuses the combined

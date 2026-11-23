@@ -29,6 +29,11 @@ pub struct CostBreakdown {
     pub stamp_duty: f64,
     /// GST on brokerage plus exchange transaction charge plus SEBI fee.
     pub gst: f64,
+    /// Calculator rounding only: an amount a line shows that the calculator leaves out
+    /// of its GST base and its total (the IPFT levy inside the exchange line of NSE
+    /// currency futures, see `rules::calculator_ipft`). Zero in contract-note rounding
+    /// and in every other segment. Not a seventh component: `components` leaves it out.
+    pub shown_not_charged: f64,
 }
 
 impl CostBreakdown {
@@ -40,13 +45,15 @@ impl CostBreakdown {
         sebi_fee: 0.0,
         stamp_duty: 0.0,
         gst: 0.0,
+        shown_not_charged: 0.0,
     };
 
-    /// The plain float sum of the six components, in rupees. For the total a
-    /// rounding mode reports, use `CostModel::reported_total`.
+    /// The plain float sum of the six components, less what is shown but not charged,
+    /// in rupees. For the total a rounding mode reports, use `CostModel::reported_total`.
     #[inline]
     pub fn total(&self) -> f64 {
         self.brokerage + self.stt + self.exchange_txn + self.sebi_fee + self.stamp_duty + self.gst
+            - self.shown_not_charged
     }
 
     /// The components in `COMPONENT_NAMES` order.
@@ -62,7 +69,8 @@ impl CostBreakdown {
         ]
     }
 
-    /// A breakdown from components in `COMPONENT_NAMES` order.
+    /// A breakdown from components in `COMPONENT_NAMES` order, with nothing shown but
+    /// not charged.
     #[inline]
     pub fn from_components(components: [f64; 6]) -> CostBreakdown {
         let [brokerage, stt, exchange_txn, sebi_fee, stamp_duty, gst] = components;
@@ -73,6 +81,7 @@ impl CostBreakdown {
             sebi_fee,
             stamp_duty,
             gst,
+            shown_not_charged: 0.0,
         }
     }
 
@@ -85,6 +94,7 @@ impl CostBreakdown {
         self.sebi_fee += other.sebi_fee;
         self.stamp_duty += other.stamp_duty;
         self.gst += other.gst;
+        self.shown_not_charged += other.shown_not_charged;
     }
 }
 

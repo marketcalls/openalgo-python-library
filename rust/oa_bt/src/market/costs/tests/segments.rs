@@ -65,7 +65,13 @@ fn segment_codes_start_with_the_exchange_code() {
 
 #[test]
 fn options_segments_are_exactly_the_options_brokerage_class() {
-    let options = [Segment::NfoOpt, Segment::BfoOpt, Segment::BfoOptOther];
+    let options = [
+        Segment::NfoOpt,
+        Segment::BfoOpt,
+        Segment::BfoOptOther,
+        Segment::McxOpt,
+        Segment::CdsOpt,
+    ];
     for segment in Segment::ALL {
         let is_option = options.contains(&segment);
         assert_eq!(segment.is_option(), is_option, "{segment:?}");
@@ -90,6 +96,9 @@ fn each_exchange_has_its_own_contract_note() {
         (Segment::BfoOptOther, NoteGroup::BseFo),
         (Segment::McxFut, NoteGroup::Mcx),
         (Segment::McxFutKapas, NoteGroup::Mcx),
+        (Segment::McxOpt, NoteGroup::Mcx),
+        (Segment::CdsFut, NoteGroup::NseCds),
+        (Segment::CdsOpt, NoteGroup::NseCds),
     ];
     for (segment, group) in rows {
         assert_eq!(segment.note_group(), group, "{segment:?}");
@@ -111,6 +120,12 @@ fn exchange_kind_and_product_resolve_to_the_segment() {
         (Exchange::Bfo, Future, Product::Nrml, Segment::BfoFut),
         (Exchange::Mcx, Future, Product::Nrml, Segment::McxFut),
         (Exchange::Mcx, Future, Product::Mis, Segment::McxFut),
+        (Exchange::Mcx, Opt, Product::Nrml, Segment::McxOpt),
+        (Exchange::Mcx, Opt, Product::Mis, Segment::McxOpt),
+        (Exchange::Cds, Future, Product::Nrml, Segment::CdsFut),
+        (Exchange::Cds, Future, Product::Mis, Segment::CdsFut),
+        (Exchange::Cds, Opt, Product::Nrml, Segment::CdsOpt),
+        (Exchange::Cds, Opt, Product::Mis, Segment::CdsOpt),
     ];
     for (exchange, kind, product, segment) in rows {
         assert_eq!(resolve(exchange, kind, product), Ok(segment));
@@ -255,36 +270,88 @@ fn an_unknown_segment_code_is_an_error() {
 }
 
 #[test]
-fn currency_and_mcx_option_codes_are_unsupported() {
-    // Section 2 (currency) and MCX options are out of scope.
-    for code in ["CDS_FUT", "CDS_OPT", "BCD_FUT", "BCD_OPT", "MCX_OPT"] {
-        let result = Segment::from_code(code);
+fn nse_currency_and_mcx_option_codes_are_segments() {
+    for (code, segment) in [
+        ("MCX_OPT", Segment::McxOpt),
+        ("CDS_FUT", Segment::CdsFut),
+        ("CDS_OPT", Segment::CdsOpt),
+    ] {
+        assert_eq!(Segment::from_code(code), Ok(segment));
+    }
+}
+
+#[test]
+fn bse_currency_codes_are_unsupported_and_named() {
+    for code in ["BCD_FUT", "BCD_OPT"] {
+        let error = Segment::from_code(code).unwrap_err();
+        assert!(matches!(error, CostError::UnsupportedSegment(_)), "{code}");
         assert!(
-            matches!(result, Err(CostError::UnsupportedSegment(_))),
-            "{code}"
+            error.to_string().contains("BSE currency derivatives"),
+            "{error}"
         );
     }
 }
 
 #[test]
-fn currency_exchanges_are_unsupported() {
-    for exchange in [Exchange::Cds, Exchange::Bcd] {
-        for kind in [InstrumentKind::Future, InstrumentKind::Option] {
-            let result = resolve(exchange, kind, Product::Nrml);
-            assert!(
-                matches!(result, Err(CostError::UnsupportedSegment(_))),
-                "{exchange:?}"
-            );
-        }
+fn the_bse_currency_exchange_is_unsupported_and_named() {
+    for kind in [InstrumentKind::Future, InstrumentKind::Option] {
+        let error = resolve(Exchange::Bcd, kind, Product::Nrml).unwrap_err();
+        assert!(
+            matches!(error, CostError::UnsupportedSegment(_)),
+            "{kind:?}"
+        );
+        assert!(
+            error.to_string().contains("BSE currency derivatives"),
+            "{error}"
+        );
     }
 }
 
 #[test]
-fn mcx_options_are_unsupported() {
-    let result = resolve(Exchange::Mcx, InstrumentKind::Option, Product::Nrml);
+fn mcx_options_on_a_non_agri_commodity_resolve_by_the_commodity() {
+    for commodity in ["COPPER", "crudeoil", " GOLDM "] {
+        let result = Segment::resolve(
+            Exchange::Mcx,
+            InstrumentKind::Option,
+            Product::Nrml,
+            None,
+            Some(commodity),
+        );
+        assert_eq!(result, Ok(Segment::McxOpt), "{commodity:?}");
+    }
+}
+
+#[test]
+fn mcx_options_on_an_agri_commodity_are_unsupported_and_named() {
+    for commodity in ["CARDAMOM", "MENTHAOIL", "KAPAS"] {
+        let error = Segment::mcx_option(commodity).unwrap_err();
+        assert!(
+            matches!(error, CostError::UnsupportedSegment(_)),
+            "{commodity}"
+        );
+        assert!(error.to_string().contains(commodity), "{error}");
+    }
+}
+
+#[test]
+fn mcx_options_on_an_unknown_commodity_or_without_one_are_errors() {
     assert_eq!(
-        result,
-        Err(CostError::UnsupportedSegment("MCX options".to_string()))
+        Segment::mcx_option("PLATINUM"),
+        Err(CostError::UnknownName {
+            kind: NameKind::Commodity,
+            name: "PLATINUM".to_string()
+        })
+    );
+    let without = Segment::resolve(
+        Exchange::Mcx,
+        InstrumentKind::Option,
+        Product::Nrml,
+        None,
+        None,
+    );
+    assert!(
+        matches!(without, Err(CostError::InvalidCombination { .. })),
+        "{without:?}"
     );
 }
 
@@ -310,6 +377,9 @@ fn combinations_that_do_not_exist_are_errors() {
         (Exchange::Bfo, Opt, Product::Cnc),
         (Exchange::Mcx, Equity, Product::Mis),
         (Exchange::Mcx, Future, Product::Cnc),
+        (Exchange::Mcx, Opt, Product::Cnc),
+        (Exchange::Cds, Future, Product::Cnc),
+        (Exchange::Cds, Equity, Product::Mis),
     ];
     for (exchange, kind, product) in rows {
         let result = resolve(exchange, kind, product);

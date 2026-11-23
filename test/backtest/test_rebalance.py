@@ -308,7 +308,8 @@ def test_a_quarterly_rebalance_is_charged_as_delivery(quarterly):
     value = costs["quantity_units"] * costs["price_rupees"]
     buys, sells = costs["side"] == "BUY", costs["side"] == "SELL"
     assert set(costs["segment"]) == {"NSE_EQ_DELIVERY"}
-    assert (costs["brokerage"] == 0).all()
+    # The default (standard) delivery brokerage: 2.5 percent or Rs 20 an order, the lower.
+    assert np.allclose(costs["brokerage"], np.minimum(0.025 * value, 20.0))
     assert np.allclose(costs["stt"], STT_RATE * value)
     assert np.allclose(costs.loc[buys, "stamp_duty"], STAMP_RATE_BUY * value[buys])
     assert (costs.loc[sells, "stamp_duty"] == 0).all()

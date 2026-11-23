@@ -84,7 +84,7 @@ fn total_is_the_sum_of_the_components() {
             .fill_cost(segment, side, price, quantity, day)
             .unwrap();
         let sum: f64 = cost.components().iter().sum();
-        assert_close(cost.total(), sum);
+        assert_close(cost.total(), sum - cost.shown_not_charged);
     });
 }
 
@@ -227,7 +227,13 @@ fn calculator_rounding_moves_tax_by_at_most_half_a_rupee_and_the_rest_by_a_paisa
                 "{segment:?} exchange"
             );
             assert!((a.sebi_fee - c.sebi_fee).abs() <= 0.006, "{segment:?} sebi");
-            assert!((a.gst - c.gst).abs() <= 0.011, "{segment:?} gst");
+            // GST on what the calculator shows but leaves out of its GST base (the IPFT
+            // of NSE currency futures) is the accrual's alone.
+            let gst_left_out = 0.18 * c.shown_not_charged;
+            assert!(
+                (a.gst - gst_left_out - c.gst).abs() <= 0.011,
+                "{segment:?} gst"
+            );
         }
     }
 }

@@ -145,8 +145,9 @@ class ReferenceTables:
     ) -> float:
         """Rupee value of a one-rupee price move for one unit of quantity.
 
-        1.0 on NFO and BFO, from `mcx_contracts` on MCX. Raises `ReferenceDataError` for
-        an uncovered MCX underlying and for any other exchange.
+        1.0 on NFO and BFO, from `mcx_contracts` on MCX and `currency_contracts` on CDS.
+        Raises `ReferenceDataError` for an uncovered MCX or CDS underlying and for any other
+        exchange.
         """
         expiry_day = None if expiry is None else as_date(expiry, "expiry")
         exchange, day = derivative_exchange(exchange), as_date(on_date)

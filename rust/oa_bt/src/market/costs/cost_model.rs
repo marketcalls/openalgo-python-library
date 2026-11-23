@@ -5,10 +5,10 @@ use crate::model::{Day, Side};
 
 use super::book::{RateStatus, ScheduleBook};
 use super::breakdown::{CostBreakdown, DpCharge};
-use super::brokerage::Brokerage;
+use super::brokerage::{Brokerage, BrokerageRule};
 use super::error::CostError;
 use super::rounding::{calculator_paise, calculator_rupee, round_sum, Rounding, Unit};
-use super::rules::{accrue_fill, calculator_cost};
+use super::rules::{accrue_fill, calculator_cost, calculator_ipft};
 use super::schedule::{CostSchedule, SegmentRow};
 use super::segment::Segment;
 
@@ -49,12 +49,12 @@ impl CostModel {
         }
     }
 
-    /// The default model: the built-in Indian schedules, the Zerodha preset and
+    /// The default model: the built-in Indian schedules, the standard preset and
     /// contract-note rounding. Errors: as `ScheduleBook::builtin`.
     pub fn builtin() -> Result<CostModel, CostError> {
         Ok(CostModel::new(
             ScheduleBook::builtin()?,
-            Brokerage::zerodha(),
+            Brokerage::standard(),
             Rounding::ContractNote,
         ))
     }
@@ -77,8 +77,9 @@ impl CostModel {
     /// The total of a breakdown as this model's rounding mode reports it, in rupees.
     ///
     /// In calculator mode the components are whole paise and the calculator's last
-    /// step rounds their sum to the paisa. In contract-note mode it is the plain sum
-    /// of the unrounded accruals.
+    /// step rounds their sum, less what a line shows but the calculator does not
+    /// charge (`CostBreakdown::shown_not_charged`), to the paisa. In contract-note mode
+    /// it is the plain sum of the unrounded accruals.
     pub fn reported_total(&self, cost: &CostBreakdown) -> f64 {
         match self.rounding {
             Rounding::ContractNote => cost.total(),
@@ -133,15 +134,31 @@ impl CostModel {
         quantity: f64,
     ) -> CostBreakdown {
         let rule = self.brokerage.rule(segment.brokerage_class());
+        self.cost_by_rule(priced, rule, segment, side, price, quantity)
+    }
+
+    /// `cost_under` with brokerage by `rule` in place of the preset's rule for the
+    /// segment.
+    #[inline]
+    fn cost_by_rule(
+        &self,
+        priced: &Priced<'_>,
+        rule: &BrokerageRule,
+        segment: Segment,
+        side: Side,
+        price: f64,
+        quantity: f64,
+    ) -> CostBreakdown {
         let rates = &priced.row.rates;
         let gst = priced.schedule.gst_rule();
+        let ipft = calculator_ipft(segment);
         match (self.rounding, side) {
             (Rounding::ContractNote, _) => accrue_fill(rates, gst, rule, side, price * quantity),
             (Rounding::Calculator, Side::Buy) => {
-                calculator_cost(rates, gst, rule, price, 0.0, quantity)
+                calculator_cost(rates, gst, rule, ipft, (price, 0.0, quantity))
             }
             (Rounding::Calculator, Side::Sell) => {
-                calculator_cost(rates, gst, rule, 0.0, price, quantity)
+                calculator_cost(rates, gst, rule, ipft, (0.0, price, quantity))
             }
         }
     }
@@ -177,11 +194,28 @@ impl CostModel {
         quantity: f64,
         day: Day,
     ) -> Result<CostBreakdown, CostError> {
+        let rule = self.brokerage.rule(segment.brokerage_class());
+        self.fill_cost_by_rule(rule, segment, side, price, quantity, day)
+    }
+
+    /// `fill_cost` with brokerage by `rule` in place of the preset's rule for the
+    /// segment (the part of an order charged at a second segment's rates, `split`).
+    /// Errors: as `fill_cost`.
+    #[inline]
+    pub(super) fn fill_cost_by_rule(
+        &self,
+        rule: &BrokerageRule,
+        segment: Segment,
+        side: Side,
+        price: f64,
+        quantity: f64,
+        day: Day,
+    ) -> Result<CostBreakdown, CostError> {
         check_amount("price", price)?;
         check_amount("quantity", quantity)?;
         check_amount("traded value (price x quantity)", price * quantity)?;
         let priced = self.priced(segment, day)?;
-        Ok(self.cost_under(&priced, segment, side, price, quantity))
+        Ok(self.cost_by_rule(&priced, rule, segment, side, price, quantity))
     }
 
     /// The cost in rupees of one fill worth `value` rupees (the premium value for an
@@ -248,9 +282,8 @@ impl CostModel {
             &priced.row.rates,
             priced.schedule.gst_rule(),
             rule,
-            buy_price,
-            sell_price,
-            quantity,
+            calculator_ipft(segment),
+            (buy_price, sell_price, quantity),
         ))
     }
 
@@ -289,8 +322,11 @@ impl CostModel {
     /// mode.
     ///
     /// Errors: `NotAnOption` when `segment` is not an options segment,
+    /// `UnsupportedSegment` for MCX options (an exercised MCX option devolves into a
+    /// futures position and pays CTT on its settlement price, which is not modelled),
     /// `InvalidInput` when an amount or their product is negative, infinite or NaN,
-    /// and the errors of `status`.
+    /// and the errors of `status`. NSE currency options pay no STT, so their
+    /// exercise costs nothing here.
     pub fn exercise_stt(
         &self,
         segment: Segment,
@@ -300,6 +336,11 @@ impl CostModel {
     ) -> Result<f64, CostError> {
         if !segment.is_option() {
             return Err(CostError::NotAnOption(segment));
+        }
+        if segment == Segment::McxOpt {
+            return Err(CostError::UnsupportedSegment(
+                "the exercise of an MCX option (it devolves into a futures position)".to_string(),
+            ));
         }
         check_amount("intrinsic value", intrinsic)?;
         check_amount("quantity", quantity)?;

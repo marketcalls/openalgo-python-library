@@ -9,15 +9,18 @@ mod batch;
 mod charges;
 mod contract_note;
 mod ctt;
+mod currency;
 mod data_file;
 mod errors;
 mod history;
 mod invariants;
 mod mcx;
+mod mcx_options;
 mod presets;
 mod rate_card;
 mod schedules;
 mod segments;
+mod split_order;
 mod ties;
 mod user_schedules;
 mod worked_examples;
@@ -41,9 +44,9 @@ fn builtin_book() -> ScheduleBook {
     ScheduleBook::builtin().unwrap()
 }
 
-/// Built-in schedules, Zerodha brokerage, unrounded accruals.
+/// Built-in schedules, Zerodha brokerage (the reference note's), unrounded accruals.
 fn accrual_model() -> CostModel {
-    CostModel::builtin().unwrap()
+    CostModel::new(builtin_book(), Brokerage::zerodha(), Rounding::ContractNote)
 }
 
 /// Built-in schedules, Zerodha brokerage, calculator rounding.

@@ -24,7 +24,7 @@ fn wrap(result: Result<Brokerage, oa_bt::market::costs::CostError>) -> PyResult<
 
 #[pymethods]
 impl PyBrokerage {
-    /// A built-in preset by name: "zerodha" or "zero_brokerage".
+    /// A built-in preset by name: "standard", "zerodha" or "zero_brokerage".
     #[staticmethod]
     fn named(name: &str) -> PyResult<PyBrokerage> {
         wrap(Brokerage::from_name(name))

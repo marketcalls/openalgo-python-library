@@ -54,7 +54,7 @@ impl NameKind {
                 "use a code from the segment table (Segment::ALL), for example \
                  NSE_EQ_DELIVERY, NFO_OPT or MCX_FUT"
             }
-            NameKind::Exchange => "use NSE, BSE, NFO, BFO or MCX (upper case)",
+            NameKind::Exchange => "use NSE, BSE, NFO, BFO, MCX or CDS (upper case)",
             NameKind::Product => "use CNC, MIS or NRML",
             NameKind::Instrument => "use EQ, FUT or OPT (CE and PE are accepted for options)",
             NameKind::BseGroup => {
@@ -67,8 +67,8 @@ impl NameKind {
                  MCX_FUT_AGRI_CTT for any other agri one"
             }
             NameKind::Preset => {
-                "built-in presets are zerodha and zero_brokerage; build others from a flat \
-                 amount, a percentage with a cap, or custom rules"
+                "built-in presets are standard (the default), zerodha and zero_brokerage; \
+                 build others from a flat amount, a percentage with a cap, or custom rules"
             }
             NameKind::Rounding => "use contract_note or calculator",
         }
@@ -86,8 +86,8 @@ pub enum CostError {
         /// The name as given.
         name: String,
     },
-    /// A real market segment that this engine does not cost yet (currency
-    /// derivatives and MCX options).
+    /// A real market segment that this engine does not cost yet (BSE currency
+    /// derivatives, MCX options on an agri commodity, the exercise of an MCX option).
     UnsupportedSegment(String),
     /// A numeric segment id outside the segment table.
     UnknownSegmentId(u8),
@@ -202,8 +202,8 @@ fn unknown_name(f: Out, kind: NameKind, name: &str) -> fmt::Result {
 fn unsupported_segment(f: Out, what: &str) -> fmt::Result {
     write!(
         f,
-        "{what} is not costed yet: currency derivatives (CDS, BCD) and MCX options are out of \
-         scope for this release, so leave these instruments out or cost them yourself"
+        "{what} is not costed yet: it is out of scope for this release, so leave these \
+         instruments out or cost them yourself"
     )
 }
 

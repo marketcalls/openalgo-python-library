@@ -61,6 +61,7 @@ from ._plan_catch_up import StrategyPlan
 from ._reconcile_final import final_read
 from ._reconcile_findings import Reconciliation
 from ._session_banner import limit_lines
+from ._session_figures import notes_charges
 from ._session_loop import Session
 from ._session_named import (
     NamedLegs,
@@ -283,7 +284,8 @@ def _summary(
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
-    none) from `stopped`'s outputs, the slippage of their MARKET fills and their stops'
+    none) from `stopped`'s outputs, at the day's first start what their contract notes
+    charged (`notes_charges`), the slippage of their MARKET fills and their stops'
     fills against the backtest's (`stopped`'s slippages, `_fill_comparison`), the session's
     counts, the legs
     `named` gives (`_session_named.named_legs`), each differing one a mismatch too unless
@@ -295,6 +297,8 @@ def _summary(
     outputs, slipped = stopped
     legs = named.legs
     traded, counted = figures.day(session, outputs, unprotected_s, slippages=slipped)
+    tables = {name: output for name, (output, _) in outputs.items()}
+    first_start = parts.journal_session.starts == 1
     return SessionSummary(
         day=parts.spec.day,
         mode=parts.mode,
@@ -318,6 +322,7 @@ def _summary(
         shared=tuple(instrument.line() for instrument in named.shared),
         limits=limit_lines(session),
         versions=tuple(session.versions.ids.values()),
+        notes_charges=notes_charges(traded.charges, tables) if first_start else None,
     )
 
 

@@ -77,10 +77,10 @@ jobs:
           . .venv/bin/activate
           pip install 'maturin>=1.7,<2.0' pytest hypothesis
           maturin develop
-      - name: pytest (test/backtest, feed, indicators)
+      - name: pytest (test/backtest, feed, indicators, REST)
         run: |
           . .venv/bin/activate
-          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py -q
+          pytest test/backtest test/test_feed_*.py test/test_indicators_fixes.py test/test_indicators_causality.py test/test_rest_*.py -q
 
   # ---------- Build + import smoke test on Linux ----------
   smoke:
