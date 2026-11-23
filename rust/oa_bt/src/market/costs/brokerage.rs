@@ -100,6 +100,28 @@ impl BrokerageRule {
         }
     }
 
+    /// The most one executed order pays under the rule, in rupees: nothing, the flat
+    /// amount, or the cap (`f64::INFINITY` for a rate with no cap).
+    pub(super) fn most_per_order(&self) -> f64 {
+        match *self {
+            BrokerageRule::Zero => 0.0,
+            BrokerageRule::Flat(amount) => amount,
+            BrokerageRule::Rate { cap, .. } => cap,
+        }
+    }
+
+    /// The same rule, charging at most `rupees` per executed order.
+    pub(super) fn at_most(&self, rupees: f64) -> BrokerageRule {
+        match *self {
+            BrokerageRule::Zero => BrokerageRule::Zero,
+            BrokerageRule::Flat(amount) => BrokerageRule::Flat(amount.min(rupees)),
+            BrokerageRule::Rate { rate, cap } => BrokerageRule::Rate {
+                rate,
+                cap: cap.min(rupees),
+            },
+        }
+    }
+
     fn validate(&self) -> Result<(), CostError> {
         match *self {
             BrokerageRule::Zero => Ok(()),

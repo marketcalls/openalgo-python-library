@@ -5,7 +5,7 @@ use crate::model::{Day, Side};
 
 use super::book::{RateStatus, ScheduleBook};
 use super::breakdown::{CostBreakdown, DpCharge};
-use super::brokerage::Brokerage;
+use super::brokerage::{Brokerage, BrokerageRule};
 use super::error::CostError;
 use super::rounding::{calculator_paise, calculator_rupee, round_sum, Rounding, Unit};
 use super::rules::{accrue_fill, calculator_cost, calculator_ipft};
@@ -134,6 +134,21 @@ impl CostModel {
         quantity: f64,
     ) -> CostBreakdown {
         let rule = self.brokerage.rule(segment.brokerage_class());
+        self.cost_by_rule(priced, rule, segment, side, price, quantity)
+    }
+
+    /// `cost_under` with brokerage by `rule` in place of the preset's rule for the
+    /// segment.
+    #[inline]
+    fn cost_by_rule(
+        &self,
+        priced: &Priced<'_>,
+        rule: &BrokerageRule,
+        segment: Segment,
+        side: Side,
+        price: f64,
+        quantity: f64,
+    ) -> CostBreakdown {
         let rates = &priced.row.rates;
         let gst = priced.schedule.gst_rule();
         let ipft = calculator_ipft(segment);
@@ -179,11 +194,28 @@ impl CostModel {
         quantity: f64,
         day: Day,
     ) -> Result<CostBreakdown, CostError> {
+        let rule = self.brokerage.rule(segment.brokerage_class());
+        self.fill_cost_by_rule(rule, segment, side, price, quantity, day)
+    }
+
+    /// `fill_cost` with brokerage by `rule` in place of the preset's rule for the
+    /// segment (the part of an order charged at a second segment's rates, `split`).
+    /// Errors: as `fill_cost`.
+    #[inline]
+    pub(super) fn fill_cost_by_rule(
+        &self,
+        rule: &BrokerageRule,
+        segment: Segment,
+        side: Side,
+        price: f64,
+        quantity: f64,
+        day: Day,
+    ) -> Result<CostBreakdown, CostError> {
         check_amount("price", price)?;
         check_amount("quantity", quantity)?;
         check_amount("traded value (price x quantity)", price * quantity)?;
         let priced = self.priced(segment, day)?;
-        Ok(self.cost_under(&priced, segment, side, price, quantity))
+        Ok(self.cost_by_rule(&priced, rule, segment, side, price, quantity))
     }
 
     /// The cost in rupees of one fill worth `value` rupees (the premium value for an

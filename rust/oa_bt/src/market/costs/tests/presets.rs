@@ -306,7 +306,7 @@ fn built_in_presets_are_found_by_name() {
 
 #[test]
 fn an_unknown_preset_name_is_an_error() {
-    for name in ["upstox", "Zerodha", "Standard", "", "flat", "zero"] {
+    for name in ["my_broker", "Zerodha", "Standard", "", "flat", "zero"] {
         assert_eq!(
             Brokerage::from_name(name),
             Err(CostError::UnknownName {

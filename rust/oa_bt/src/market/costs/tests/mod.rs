@@ -20,6 +20,7 @@ mod presets;
 mod rate_card;
 mod schedules;
 mod segments;
+mod split_order;
 mod ties;
 mod user_schedules;
 mod worked_examples;

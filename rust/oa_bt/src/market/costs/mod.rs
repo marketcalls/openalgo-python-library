@@ -14,6 +14,7 @@
 //! | `rounding` | Rounding modes; exact rounding of sums; calculator rounding |
 //! | `rules` | The arithmetic for one fill, unrounded and calculator-rounded |
 //! | `cost_model` | `CostModel`: per-fill cost, round trip, DP charge, exercise STT |
+//! | `split` | One order charged at two segments' rates (CNC, part intraday): one brokerage |
 //! | `batch` | The same per-fill cost over slices |
 //! | `note` | Contract-note aggregation and rounding |
 //! | `breakdown`, `error` | Result and error types |
@@ -71,6 +72,7 @@ mod rounding;
 mod rules;
 mod schedule;
 mod segment;
+mod split;
 
 #[cfg(test)]
 mod tests;

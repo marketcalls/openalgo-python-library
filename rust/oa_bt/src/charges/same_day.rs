@@ -14,8 +14,8 @@
 //! - the DP charge is paid once per scrip and day when units are sold from holdings,
 //!   and refunded when later buys of the day turn every such sale into an intraday one.
 //!
-//! A fill split between the two rates is costed as two parts, so a per-order brokerage
-//! that is not zero on delivery would be charged on each part.
+//! A fill split between the two rates is still one executed order: its brokerage is
+//! charged once (`CostModel::split_fill_cost`), never once per part.
 
 use crate::exec::InstrumentId;
 use crate::market::costs::{CostBreakdown, CostError, CostModel, Segment};
@@ -147,8 +147,9 @@ impl SameDayBook {
     }
 }
 
-/// The cost of a CNC fill with `intraday_units` at the intraday rates and
-/// `delivery_units` at the delivery rates, both in price units (`price_units`).
+/// The cost of a CNC fill, one executed order, with `intraday_units` at the intraday
+/// rates and `delivery_units` at the delivery rates, both in price units (`price_units`):
+/// `CostModel::split_fill_cost`, which charges its brokerage once.
 ///
 /// Errors: those of `CostModel::fill_cost`.
 pub(super) fn split_cost(
@@ -159,14 +160,13 @@ pub(super) fn split_cost(
     (intraday_units, delivery_units): (f64, f64),
     day: Day,
 ) -> Result<CostBreakdown, CostError> {
-    let mut cost = CostBreakdown::ZERO;
-    if intraday_units > 0.0 {
-        cost.add(&model.fill_cost(segments.intraday, side, price_rupees, intraday_units, day)?);
-    }
-    if delivery_units > 0.0 {
-        cost.add(&model.fill_cost(segments.delivery, side, price_rupees, delivery_units, day)?);
-    }
-    Ok(cost)
+    model.split_fill_cost(
+        side,
+        price_rupees,
+        (segments.intraday, intraday_units),
+        (segments.delivery, delivery_units),
+        day,
+    )
 }
 
 /// `new` less `old`, component by component (amounts may be negative).

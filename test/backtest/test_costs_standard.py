@@ -12,6 +12,7 @@ the test's comment.
 import inspect
 
 import pytest
+from accounting_runs import CAPITAL, session_bars
 
 import openalgo.backtest as bt
 from openalgo.backtest import costs
@@ -118,4 +119,31 @@ def test_the_sweeps_take_the_backtests_default_charges(verb):
 
 def test_an_unknown_preset_name_lists_the_built_in_presets():
     with pytest.raises(CostError, match=r"standard \(the default\), zerodha and zero_brokerage"):
-        costs.preset("upstox")
+        costs.preset("my_broker")
+
+
+class PartSale(bt.Strategy):
+    """Buys 400 SBIN at its first 1-minute bar and sells 200 of them at its third."""
+
+    symbol = "SBIN"
+    exchange = "NSE"
+    interval = "1m"
+
+    def on_bar(self, bar):
+        if len(self.close) == 1:
+            self.buy(qty=400)
+        elif len(self.close) == 3:
+            self.sell(qty=200)
+
+
+def test_a_cnc_buy_partly_sold_the_same_day_pays_the_brokerage_of_one_order():
+    # Both fills at 1,000.00 on 2026-11-04 (accounting_runs). The buy is then 200 units
+    # intraday and 200 delivery, one executed order: Rs 20 under the default preset, not
+    # Rs 20 a part. GST is 18 percent of brokerage 20 + exchange 12.28 (0.00297 percent
+    # plus IPFT 0.0001 percent of 4,00,000) + SEBI 0.40 = 5.8824. The sale is all
+    # intraday: Rs 20.
+    run = bt.backtest(
+        PartSale, data=session_bars(), capital=CAPITAL, base="1m", product="CNC", slippage=0
+    )
+    assert list(run.costs["brokerage"]) == [20.0, 20.0]
+    assert run.costs["gst"].iloc[0] == pytest.approx(5.8824, abs=1e-9)
