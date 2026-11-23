@@ -1,11 +1,13 @@
 """An NSE currency futures trade end to end from the built-in reference tables (item C-4
 of 2.4.1): a USDINR future on the user's own 1-minute bars, one lot.
 
-USDINR29DEC26FUT: one lot is one contract of USD 1,000 quoted in rupees per dollar, so the
-`currency_contracts` table gives lot 1 and multiplier 1,000: a one-rupee move is Rs 1,000
-a lot. One CDS session, 2026-11-20 (09:00 to 17:00 IST), NRML, the default costs in
-contract-note rounding, no slippage, capital 10,00,000. The strategy buys one lot at the
-first bar's close and exits at the third's; each order fills at the next bar's open:
+USDINR29DEC26FUT: one lot is USD 1,000 quoted in rupees per dollar, and quantity counts
+dollars, as OpenAlgo counts it (its Charges API prices BUY 1000 USDINR29DEC26FUT at 88.5 as
+a trade value of 88,500), so the `currency_contracts` table gives lot 1,000 and multiplier
+1: a one-rupee move is Rs 1,000 a lot, and qty=1000 is one lot. One CDS session,
+2026-11-20 (09:00 to 17:00 IST), NRML, the default costs in contract-note rounding, no
+slippage, capital 10,00,000. The strategy buys one lot at the first bar's close and exits
+at the third's; each order fills at the next bar's open:
 
     bars 0 to 2   88.3300   the buy fills at bar 1's open, 88.3300
     bars 3 on     the exit price, at which the sell fills at bar 3's open
@@ -59,11 +61,21 @@ class UsdInrTrip(bt.Strategy):
             self.exit()
 
 
-def run(exit_price: float) -> bt.Result:
+class UsdInrTripInUnits(UsdInrTrip):
+    """The same trip with its quantity in dollars: qty=1000, OpenAlgo's one lot."""
+
+    def on_bar(self, bar):
+        if len(self.close) == 1:
+            self.buy(qty=1_000)
+        elif len(self.close) == 3:
+            self.exit()
+
+
+def run(exit_price: float, strategy: type[bt.Strategy] = UsdInrTrip) -> bt.Result:
     with warnings.catch_warnings():
         # The currency contract terms are unverified until NSE's specification is read.
         warnings.simplefilter("ignore", ReferenceDataWarning)
-        return bt.backtest(UsdInrTrip, data=bars(exit_price), capital=CAPITAL, slippage=0)
+        return bt.backtest(strategy, data=bars(exit_price), capital=CAPITAL, slippage=0)
 
 
 @pytest.fixture(scope="module")
@@ -71,10 +83,10 @@ def result() -> bt.Result:
     return run(88.3525)
 
 
-def test_one_lot_is_one_contract_bought_and_sold_at_the_next_bar_opens(result):
+def test_one_lot_is_a_thousand_dollars_bought_and_sold_at_the_next_bar_opens(result):
     fills = result.fills
     assert list(fills["side"]) == ["BUY", "SELL"]
-    assert list(fills["quantity_units"]) == [1.0, 1.0]
+    assert list(fills["quantity_units"]) == [1_000.0, 1_000.0]
     assert list(fills["price_rupees"]) == [88.33, 88.3525]
 
 
@@ -104,3 +116,13 @@ def test_the_pnl_of_a_lot_is_the_price_move_times_a_thousand(result):
 def test_one_rupee_of_price_move_is_rs_1000_a_lot():
     trade = run(ENTRY + 1.0).trades.iloc[0]
     assert trade["gross_pnl_rupees"] == pytest.approx(1_000.0, abs=1e-9)
+
+
+def test_a_quantity_of_a_thousand_is_one_lot():
+    # qty=1000 buys USD 1,000, one lot: the fills, the gross of 22.50 and the day's note of
+    # 48.25 are those of lots=1.
+    in_units = run(88.3525, UsdInrTripInUnits)
+    assert list(in_units.fills["quantity_units"]) == [1_000.0, 1_000.0]
+    trade = in_units.trades.iloc[0]
+    assert trade["gross_pnl_rupees"] == pytest.approx(22.5, abs=1e-9)
+    assert trade["costs_rupees"] == pytest.approx(48.25, abs=1e-9)

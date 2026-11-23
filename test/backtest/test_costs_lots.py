@@ -61,8 +61,25 @@ def test_the_segment_follows_the_symbol_when_only_the_product_is_given():
     assert (option.segment, future.segment) == ("MCX_OPT", "CDS_FUT")
 
 
+@pytest.mark.parametrize(
+    ("symbol", "price"),
+    [
+        # USD 1,000 a lot quoted per dollar: lot 1,000 x multiplier 1.
+        ("USDINR29DEC26FUT", 88.33),
+        # JPY 1,00,000 a lot quoted per 100 yen: lot 1,00,000 x multiplier 0.01.
+        ("JPYINR29DEC26FUT", 57.5),
+    ],
+)
+def test_one_currency_lot_is_a_thousand_price_units(symbol, price):
+    by_lots = costs.trade_cost(
+        "BUY", price, date=DAY, lots=1, symbol=symbol, exchange="CDS", product="NRML"
+    )
+    by_units = costs.trade_cost("BUY", price, 1_000, DAY, segment="CDS_FUT")
+    assert by_lots.as_dict() == by_units.as_dict()
+
+
 def test_two_lots_cost_what_twice_the_price_units_cost():
-    # Two USDINR lots are 2,000 units of the quoted price.
+    # Two USDINR lots are USD 2,000: 2,000 units of the quoted price.
     by_lots = costs.trade_cost(
         "BUY", 88.33, date=DAY, lots=2, symbol="USDINR29DEC26FUT", exchange="CDS", product="NRML"
     )
@@ -155,7 +172,7 @@ def test_trade_costs_refuse_an_exchange_without_a_symbol():
     ("option", "exchange", "segment", "units"),
     [
         ("COPPER24DEC26900CE", "MCX", "MCX_OPT", 2_500),  # the COPPER futures lot
-        ("USDINR29DEC2688.5CE", "CDS", "CDS_OPT", 1_000),  # one USDINR futures contract
+        ("USDINR29DEC2688.5CE", "CDS", "CDS_OPT", 1_000),  # the USDINR futures lot, USD 1,000
     ],
 )
 def test_a_lot_of_an_mcx_or_currency_option_is_its_underlyings_futures_lot(

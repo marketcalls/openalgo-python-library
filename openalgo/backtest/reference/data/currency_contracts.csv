@@ -6,16 +6,21 @@
 #   valid_from, valid_to   trade dates the row applies to, both inclusive (empty valid_to: open)
 #   expiry_from, expiry_to contract expiry dates the row applies to, both inclusive
 #                          (empty: unbounded on that side)
-#   lot_size               units of quantity in one lot. OpenAlgo's master contract gives
-#                          lotsize 1 for these contracts (read on 2026-11-23 for the weekly
-#                          USDINR04DEC26FUT and the monthly USDINR01JAN27FUT), so quantity
-#                          counts contracts and one lot is one contract
+#   lot_size               units of quantity in one lot. The unit is one unit of the base
+#                          currency, the unit OpenAlgo counts currency quantity in: its
+#                          Charges API prices "BUY 1000 USDINR29DEC26FUT at 88.5" as a trade
+#                          value of 88,500, and its sandbox prices a trade as price x
+#                          quantity x multiplier with multiplier 1. So USDINR, EURINR and
+#                          GBPINR are 1000 (USD, EUR or GBP 1,000) and JPYINR is 100000
+#                          (JPY 1,00,000)
 #   multiplier             rupees for a one-rupee move in the quoted price, per unit of
-#                          quantity: USDINR, EURINR and GBPINR are 1,000 units of the currency
-#                          quoted in rupees per unit, so 1,000; JPYINR is 1,00,000 yen quoted
-#                          in rupees per 100 yen, so 1,000 as well
+#                          quantity: trading unit divided by quotation unit, divided by
+#                          lot_size (USDINR: USD 1000 / 1 USD / 1000 = 1; JPYINR: JPY 100000
+#                          / 100 JPY / 100000 = 0.01). lot_size x multiplier is Rs 1,000 a
+#                          lot for every pair
 #   tick_size              price step in rupees of the quoted price
-#   freeze_qty             maximum order size in contracts
+#   freeze_qty             maximum order size in units of quantity (the same unit as
+#                          lot_size: 10,000 lots of USD 1,000 is 10000000)
 #   settlement             cash: the contracts settle in rupees
 #   trading_unit           the contract size, as the exchange states it
 #   quote_unit             the quantity of currency the price is quoted for
@@ -23,12 +28,18 @@
 #   status                 verified: checked against the source; unverified: not confirmed
 #   note                   which contracts the row covers
 #
+# A broker symbol master is not a source for these lots: a broker that counts currency
+# quantity in contracts reports lotsize 1 (OpenAlgo's master contract does so for CDS on
+# 2026-11-23, for the weekly USDINR04DEC26FUT and the monthly USDINR01JAN27FUT), and its
+# adapter does not convert CDS quantity as it does MCX. Snapshot rows on CDS are stored but
+# never used for terms (see snapshot_store.TRUSTED_EXCHANGES).
+#
 # The expiry of a contract is the date in its symbol (weekly and monthly contracts are both
 # listed); trading hours (09:00 to 17:00 IST) and holidays come from the calendar.
 #
 # The quantity freeze is that of NSE/CD/52655 (2022-06-16), which was read and states both
 # figures for currency futures and options: 10,001 lots from trade date 2022-06-20, so
-# orders of up to 10,000 contracts, and 5,001 lots before it, set by NSE/CD/49119. That
+# orders of up to 10,000 lots, and 5,001 lots before it, set by NSE/CD/49119. That
 # circular was not read, and the rows start on its date, 2021-07-31, a Saturday: the date
 # of the circular, not a confirmed effective trade date. Before it the freeze is not known,
 # and a backtest needs one, so there is no row: a currency futures backtest dated before
@@ -36,11 +47,11 @@
 # quotation and tick size are those of NSE's currency derivatives contract specification
 # for the INR pairs, which was not read here: every row is unverified until it is.
 underlying,exchange,valid_from,valid_to,expiry_from,expiry_to,lot_size,multiplier,tick_size,freeze_qty,settlement,trading_unit,quote_unit,source,status,note
-USDINR,CDS,2021-07-31,2022-06-19,,,1,1000,0.0025,5000,cash,USD 1000,1 USD,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
-USDINR,CDS,2022-06-20,,,,1,1000,0.0025,10000,cash,USD 1000,1 USD,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
-EURINR,CDS,2021-07-31,2022-06-19,,,1,1000,0.0025,5000,cash,EUR 1000,1 EUR,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
-EURINR,CDS,2022-06-20,,,,1,1000,0.0025,10000,cash,EUR 1000,1 EUR,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
-GBPINR,CDS,2021-07-31,2022-06-19,,,1,1000,0.0025,5000,cash,GBP 1000,1 GBP,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
-GBPINR,CDS,2022-06-20,,,,1,1000,0.0025,10000,cash,GBP 1000,1 GBP,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
-JPYINR,CDS,2021-07-31,2022-06-19,,,1,1000,0.0025,5000,cash,JPY 100000,100 JPY,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
-JPYINR,CDS,2022-06-20,,,,1,1000,0.0025,10000,cash,JPY 100000,100 JPY,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
+USDINR,CDS,2021-07-31,2022-06-19,,,1000,1,0.0025,5000000,cash,USD 1000,1 USD,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
+USDINR,CDS,2022-06-20,,,,1000,1,0.0025,10000000,cash,USD 1000,1 USD,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
+EURINR,CDS,2021-07-31,2022-06-19,,,1000,1,0.0025,5000000,cash,EUR 1000,1 EUR,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
+EURINR,CDS,2022-06-20,,,,1000,1,0.0025,10000000,cash,EUR 1000,1 EUR,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
+GBPINR,CDS,2021-07-31,2022-06-19,,,1000,1,0.0025,5000000,cash,GBP 1000,1 GBP,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
+GBPINR,CDS,2022-06-20,,,,1000,1,0.0025,10000000,cash,GBP 1000,1 GBP,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20
+JPYINR,CDS,2021-07-31,2022-06-19,,,100000,0.01,0.0025,500000000,cash,JPY 100000,100 JPY,NSE/CD/52655 (2022-06-16) for the freeze of 5001 lots set by NSE/CD/49119 (not read); contract terms from the NSE contract specification (not read),unverified,Every contract traded from the date of NSE/CD/49119 to 2022-06-19
+JPYINR,CDS,2022-06-20,,,,100000,0.01,0.0025,1000000000,cash,JPY 100000,100 JPY,NSE/CD/52655 (2022-06-16) for the freeze; contract terms from the NSE contract specification (not read),unverified,Every contract traded from 2022-06-20

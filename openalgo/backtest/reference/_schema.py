@@ -299,9 +299,11 @@ _SPECS = (
         span=("expiry_from", "expiry_to", SPAN_DATE),
         columns=_CONTRACT_COLUMNS,
         description=(
-            "NSE currency futures terms by trade date and contract expiry. lot_size 1: "
-            "OpenAlgo counts currency quantity in contracts; multiplier is the rupee value of "
-            "a one-rupee move in the quoted price for one contract (USDINR 1,000)"
+            "NSE currency futures terms by trade date and contract expiry. lot_size is the "
+            "contract size in units of the base currency, the unit OpenAlgo counts currency "
+            "quantity in (USDINR 1,000 dollars, JPYINR 1,00,000 yen); multiplier is the rupee "
+            "value of a one-rupee move in the quoted price for one unit of quantity (USDINR 1, "
+            "JPYINR 0.01, quoted per 100 yen)"
         ),
     ),
     TableSpec(

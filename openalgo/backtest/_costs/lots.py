@@ -5,14 +5,17 @@ quantity 1 is one lot). The cost engine counts price units, so that price times 
 is the traded value. One lot of a contract is `lot_size x multiplier` price units on a
 trade date, both read from the reference tables a backtest reads (`openalgo.backtest.
 reference`): one ALUMINI lot (1 MT quoted per kg) is 1 x 1,000 = 1,000 units, one COPPER
-lot is 2,500 x 1 units, one USDINR lot (USD 1,000) is 1 x 1,000 units.
+lot is 2,500 x 1 units, one USDINR lot (USD 1,000) is 1,000 x 1 units and one JPYINR lot
+(JPY 1,00,000 quoted per 100 yen) is 1,00,000 x 0.01 = 1,000 units.
 
 The lot unit itself follows OpenAlgo, which counts quantity in units for every broker and
 converts MCX quantity to contracts only inside its Zerodha adapter (server commit
 cf27e5f98, 2026-09-22, broker/zerodha/mapping/mcx_contract_size.py); its master contract
-carries the real market lot (CRUDEOIL 100, COPPER 2,500, GOLDM 100, ALUMINI 1) and lot 1
-for a currency contract. Everywhere else the engine keeps units, and strategies already
-take `lots=` on their orders.
+carries the real market lot on MCX (CRUDEOIL 100, COPPER 2,500, GOLDM 100, ALUMINI 1). A
+currency future counts units of its base currency (OpenAlgo's Charges API prices BUY 1000
+USDINR29DEC26FUT at 88.5 as a trade value of 88,500), so its lot is read from the
+`currency_contracts` table, never from a master contract that gives it as 1. Everywhere
+else the engine keeps units, and strategies already take `lots=` on their orders.
 
 An MCX or NSE currency option is counted at the lot and multiplier of its underlying's
 futures row (`mcx_contracts`, `currency_contracts`): an option on MCX or CDS has the
