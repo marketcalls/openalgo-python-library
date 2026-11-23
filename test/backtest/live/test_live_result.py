@@ -595,15 +595,17 @@ def rupees(amount: float) -> str:
 
 
 def test_a_first_starts_charges_line_names_what_its_contract_notes_charged(day):
-    # BuyAndHold sells 10 SBIN at 500.00: the sale's STT, 0.025 percent of Rs 5,000.00, is
-    # Rs 1.25 per fill and a whole rupee on the contract note, so the two differ.
-    summary = day.summary
-    charged = float(day.results["BuyAndHold"].contract_notes["charged_total"].sum())
-    assert summary.notes_charges == pytest.approx(charged)
-    assert rupees(charged) != rupees(summary.charges)
-    assert charges_line(day) == (
-        f"{rupees(summary.charges)} (modelled per fill; {rupees(charged)} on the contract notes)"
-    )
+    # BuyAndHold buys 10 SBIN at 500.00 and sells them at 500.00, intraday, on the zerodha
+    # preset: brokerage 0.03 percent of each side's Rs 5,000.00 (1.50), exchange charges
+    # 0.00307 percent (0.1535), SEBI fee Rs 10 a crore (0.005), GST 18 percent of those
+    # three (0.29853), stamp duty 0.003 percent on the buy (0.15), STT 0.025 percent on the
+    # sale (1.25).
+    # Per fill, rounded to the paisa: the buy 2.10703 is 2.11, the sale 3.20703 is 3.21,
+    # Rs 5.32 in all. On the contract note each line is the day's sum rounded once, STT and
+    # stamp duty to the rupee: brokerage 3.00, STT 1.25 is 1, exchange 0.307 is 0.31, SEBI
+    # 0.01, stamp duty 0.15 is 0, GST 0.59706 is 0.60: Rs 4.92.
+    assert day.summary.notes_charges == pytest.approx(4.92)
+    assert charges_line(day) == "Rs 5.32 (modelled per fill; Rs 4.92 on the contract notes)"
 
 
 def test_a_first_starts_net_on_the_contract_notes_is_its_strategies_net_profit(day):

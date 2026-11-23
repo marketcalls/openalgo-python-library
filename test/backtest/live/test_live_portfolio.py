@@ -384,9 +384,14 @@ def test_after_a_restart_the_portfolio_summary_states_its_scope_at_the_top(world
     lines = second.portfolio.summary().splitlines()
     assert lines[0] == "F" + RESTART_SCOPE[1:]
     # Below it, the account's own figures: this start's round trip alone, 10 SBIN bought at
-    # 505.00 and sold at 510.00, as its result counts it.
-    own = second.results["TwoRoundTrips"].metrics["net_profit"]
-    assert lines[1] == f"Net profit   : Rs {own:,.2f}"
+    # 505.00 and sold at 510.00 (gross Rs 50.00), less its contract note on the zerodha
+    # preset, each line the round trip's sum rounded once: brokerage 0.03 percent of
+    # Rs 5,050.00 and Rs 5,100.00 (3.045, 3.05), STT 0.025 percent of the sale (1.275, Rs 1),
+    # exchange charges 0.00307 percent of Rs 10,150.00 (0.3116, 0.31), SEBI fee Rs 10 a
+    # crore (0.0102, 0.01), stamp duty 0.003 percent of the buy (0.1515, Rs 0), GST 18
+    # percent of brokerage, exchange charges and SEBI fee (0.6060, 0.61): Rs 4.98, so
+    # 50.00 - 4.98 = 45.02.
+    assert lines[1] == "Net profit   : Rs 45.02"
     assert lines[4] == "Trades       : 1 (100% won)"
 
 

@@ -29,10 +29,13 @@ own, in name order:
   `_sunder_` entries (its member tables and the like) other than the functions a trader
   writes there (such as `_missing_`), a named tuple's `_field_defaults` (its `__new__`'s
   default values, hashed with `__new__`), an ABC's cache of its subclasses (`ABC_CACHE`),
-  and a Protocol's flags (`PROTOCOL_FLAGS`) and the hooks typing gives one that does not
-  define them (`PROTOCOL_HOOKS`; a hook the trader writes is hashed). An Enum's members
-  and their values are hashed, and a Flag's boundary with them (`FLAG_BOUNDARY`), so an
-  edit of either still changes the hash.
+  a Protocol's flags (`PROTOCOL_FLAGS`) and the hooks typing gives one that does not
+  define them (`PROTOCOL_HOOKS`; a hook the trader writes is hashed), and the `__init__`
+  typing writes onto a class built from a Protocol at its first instance, which is a
+  class's later in its method resolution order (that class's own entry, the same object:
+  a trader's `__init__` is hashed, and the class's id is the same before and after its
+  first instance). An Enum's members and their values are hashed, and a Flag's boundary
+  with them (`FLAG_BOUNDARY`), so an edit of either still changes the hash.
 
 A value Python cannot hash, at any depth (a list, dict, set or bytearray, a writable
 memoryview, a DataFrame, an ndarray, a dataclass that is not frozen: a value the strategy
@@ -148,7 +151,7 @@ def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
     for name, value in sorted(vars(klass).items(), key=lambda item: item[0]):
         member = prefix + name
         held = _callables(value)
-        if _derived(klass, name, held):
+        if _derived(klass, name, value, held):
             continue
         if held:
             functions[name] = [_callable(member, each, reading) for each in held]
@@ -159,27 +162,34 @@ def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
     return {"attributes": attributes, "functions": functions, "name": klass.__qualname__}
 
 
-def _derived(klass: type, name: str, held: list[Any]) -> bool:
-    """True for an entry `name` of `klass` that Python derives from the rest of a class it
-    builds (module docstring): an Enum's `_sunder_` entry that holds no Python function
-    (`held` are the callables it holds) other than a Flag's boundary, a named tuple's
-    `_field_defaults`, an ABC's cache and a Protocol's own entries (`_protocol_entry`)."""
+def _derived(klass: type, name: str, value: Any, held: list[Any]) -> bool:
+    """True for an entry `name` of `klass`, holding `value`, that Python derives from the
+    rest of a class it builds (module docstring): an Enum's `_sunder_` entry that holds no
+    Python function (`held` are the callables it holds) other than a Flag's boundary, a
+    named tuple's `_field_defaults`, an ABC's cache and a Protocol's own entries
+    (`_protocol_entry`)."""
     if isinstance(klass, enum.EnumType) and _is_sunder(name):
         if name == FLAG_BOUNDARY and issubclass(klass, enum.Flag):
             return False
         return not any(isinstance(each, FunctionType) for each in held)
     if name == ABC_CACHE and isinstance(klass, abc.ABCMeta):
         return True
-    if typing.Protocol in klass.__mro__ and _protocol_entry(name, held):
+    if typing.Protocol in klass.__mro__ and _protocol_entry(klass, name, value, held):
         return True
     return name == "_field_defaults" and issubclass(klass, tuple)
 
 
-def _protocol_entry(name: str, held: list[Any]) -> bool:
-    """True for an entry `name` that Python's typing module sets on a Protocol class: one
-    of its flags (`PROTOCOL_FLAGS`), or a hook of `PROTOCOL_HOOKS` whose callables (`held`)
-    are all typing's own functions, not a trader's."""
+def _protocol_entry(klass: type, name: str, value: Any, held: list[Any]) -> bool:
+    """True for an entry `name` of `klass`, holding `value`, that Python's typing module
+    sets on a class built from a Protocol: one of its flags (`PROTOCOL_FLAGS`), a hook of
+    `PROTOCOL_HOOKS` whose callables (`held`) are all typing's own functions, not a
+    trader's, or the `__init__` typing writes onto the class at its first instance: the
+    first one of its method resolution order that is not typing's, held by a class later
+    in that order, so `value` is that class's own entry, the same object. An `__init__`
+    the trader writes in the class body is a function of its own, never another class's."""
     if name in PROTOCOL_FLAGS:
+        return True
+    if name == "__init__" and any(vars(base).get(name) is value for base in klass.__mro__[1:]):
         return True
     typing_own = [getattr(each, "__module__", None) == typing.__name__ for each in held]
     return name in PROTOCOL_HOOKS and bool(typing_own) and all(typing_own)

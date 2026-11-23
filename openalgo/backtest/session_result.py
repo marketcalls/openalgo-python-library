@@ -52,8 +52,9 @@ not it has rows.
   attribute's, a nested class's too. A value the strategy rebinds on its class as it runs
   (a counter or a flag kept on the class) therefore gives a second start in the same
   process (a notebook kernel) another id, and its banner says the version changed, naming
-  each parameter whose value did: keep run state in `self.state` or on the instance
-  (`self.count`), not on the class.
+  each parameter whose value did, or, when none did, that a value kept on the class may
+  have: keep run state in `self.state` or on the instance (`self.count`), not on the
+  class.
 - `summary`: the day's figures across every start of the day: `gross_pnl`, `charges`
   (modelled: the broker's trade book carries none; each fill's rounded to the paisa, so a
   result's charges, its contract notes', differ from them by the notes' rounding, the

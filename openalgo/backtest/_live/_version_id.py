@@ -31,8 +31,12 @@ a flag kept on the class) is therefore part of the next start's id: a second `bt
 the same process, such as a notebook kernel, runs another version though nothing was
 edited, and its banner says the version changed. Keep run state in `self.state` or on the
 instance (`self.count`), not on the class. When the version changed, the banner names each
-parameter whose value differs between the two starts' run manifests (`moved_parameters`);
-the manifests hold no other class attribute, so a change elsewhere is not named.
+parameter whose value differs between the two starts' run manifests (`moved_parameters`),
+but one whose manifest text is not the text its id hashes (a set, or an object known by
+its memory address), since that text can differ where the id's does not. The manifests
+hold no other class attribute, so a change elsewhere is not named: when no parameter
+moved, the banner says of a class hashed by its compiled code that a value kept on its
+class may have.
 """
 
 from __future__ import annotations
@@ -67,17 +71,22 @@ class StrategyVersion:
     compiled_under: str | None = None
 
 
+def given_parameters(strategy: type, params: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The strategy's parameter values as given: its class's (`Strategy.parameters`) with
+    `params` over them."""
+    return strategy.parameters() | dict(params or {})
+
+
 def parameter_values(strategy: type, params: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The strategy's parameter values: its class's (`Strategy.parameters`) with `params`
-    over them, as JSON types."""
-    return plain(strategy.parameters() | dict(params or {}))
+    """The strategy's parameter values (`given_parameters`) as JSON types."""
+    return plain(given_parameters(strategy, params))
 
 
 def version_of(strategy: type, params: Mapping[str, Any] | None) -> StrategyVersion:
     """The version of `strategy` run with `params` (module docstring)."""
     source = strategy_source_hash(strategy)
     compiled = None if source is not None else compiled_code(strategy)
-    values = strategy.parameters() | dict(params or {})
+    values = given_parameters(strategy, params)
     canonical = {str(name): canonical_value(value) for name, value in values.items()}
     code = strategy.__qualname__ if compiled is None else compiled.code_hash
     hashed = {
@@ -118,16 +127,31 @@ class Started:
         return self.earlier is not None and self.earlier != self.version_id
 
 
-def moved_parameters(earlier: Mapping[str, Any], now: Mapping[str, Any]) -> tuple[str, ...]:
+def moved_parameters(
+    earlier: Mapping[str, Any], now: Mapping[str, Any], values: Mapping[str, Any]
+) -> tuple[str, ...]:
     """Each parameter whose value differs between two run manifests of a strategy, the
     day's `earlier` start's and this one's (`now`), in words: its name, its earlier value
     and its value now as canonical JSON ("hold 3 to 4"; "unset" for a side that has no
     such parameter), this start's parameters first, in their order, then those only the
-    earlier start had. A manifest that names no parameters has none."""
+    earlier start had. A manifest that names no parameters has none. `values` are this
+    start's parameter values as given (`given_parameters`, which `now` holds as text): one
+    whose text is not the text the version id hashes (`_text_hashed`) is left out, since
+    its text can differ where the id's does not."""
     before, after = _parameters(earlier), _parameters(now)
     names = [*after, *(name for name in before if name not in after)]
-    shown = [(name, _shown(before, name), _shown(after, name)) for name in names]
+    compared = [name for name in names if name not in values or _text_hashed(values[name])]
+    shown = [(name, _shown(before, name), _shown(after, name)) for name in compared]
     return tuple(f"{name} {old} to {new}" for name, old, new in shown if old != new)
+
+
+def _text_hashed(value: Any) -> bool:
+    """True when a parameter value's run manifest text (`_manifest.plain`) is the text its
+    version id hashes (`canonical_value`). False for a value holding a set or a frozenset
+    (its text's order follows the process's hash seed, where the id sorts its items) and
+    for an object whose text names its memory address (the id leaves the address out, and
+    the banner's by-type line names it)."""
+    return canonical_json(plain(value)) == canonical_json(canonical_value(value)[0])
 
 
 def _parameters(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -182,11 +206,22 @@ class StartVersions:
 
 def _changed_line(one: Started) -> str:
     """The banner's line of a strategy whose version changed since the day's earlier start,
-    naming the parameters whose values changed when any did."""
-    moved = f"; the parameters whose values changed: {', '.join(one.moved)}" if one.moved else ""
+    naming the parameters whose values changed when any did. When none did, a class hashed
+    by its compiled code may have moved by a value kept on its class (module docstring),
+    which no run manifest holds, so the line says so with where run state belongs."""
+    if one.moved:
+        named = ", ".join(one.moved)
+        cause = f"its code or its parameters; the parameters whose values changed: {named}"
+    elif one.compiled_under is not None:
+        cause = (
+            "its code, its parameters or a value kept on its class; keep run state in "
+            "self.state or on the instance"
+        )
+    else:
+        cause = "its code or its parameters"
     return (
         f"{one.name}: its version changed since the day's earlier start, from {one.earlier} "
-        f"to {one.version_id} (its code or its parameters{moved})"
+        f"to {one.version_id} ({cause})"
     )
 
 
@@ -211,6 +246,7 @@ __all__ = [
     "StartVersions",
     "Started",
     "StrategyVersion",
+    "given_parameters",
     "moved_parameters",
     "parameter_values",
     "version_of",

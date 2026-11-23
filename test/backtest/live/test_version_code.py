@@ -20,6 +20,7 @@ import pathlib
 import subprocess
 import sys
 import typing
+from typing import Any
 
 import pytest
 from version_cells import CELL, EDITS, KEPT, edited, from_cell, with_member
@@ -31,7 +32,7 @@ from openalgo.backtest._live._version_id import (
     moved_parameters,
     version_of,
 )
-from openalgo.backtest._manifest import strategy_source_hash
+from openalgo.backtest._manifest import plain, strategy_source_hash
 
 HERE = pathlib.Path(__file__).parent
 #: The Python the compiled code is hashed under, as the banner names it.
@@ -522,6 +523,47 @@ def test_a_protocols_own_init_is_still_hashed():
     assert version_of(feed_holder(edited_init, ""), None).version_id != before
 
 
+#: A Protocol nested in `Cell`, a nested class with an __init__ of its own, and `Quote`, a
+#: class built from the Protocol with the bases `{bases}` and the body `{body}`.
+IMPLEMENTED = (
+    "class Feed(typing.Protocol):\n"
+    "        def price(self): ...\n\n"
+    "    class Base:\n"
+    "        def __init__(self):\n"
+    "            self.n = 1\n\n"
+    "    class Quote({bases}):\n"
+    "        width = 2\n"
+    "{body}"
+)
+#: `Quote`'s own __init__, as the trader writes it.
+QUOTE_INIT = "\n        def __init__(self):\n            self.n = 2\n"
+
+
+def implemented(bases: str = "Feed", body: str = "") -> type:
+    """`Cell` holding `IMPLEMENTED` with `bases` and `body`."""
+    return feed_holder("", IMPLEMENTED.format(bases=bases, body=body))
+
+
+@pytest.mark.parametrize(
+    "bases", ["Feed", "Feed, Base"], ids=["object's __init__", "a nested base's __init__"]
+)
+def test_a_protocols_subclass_keeps_its_version_id_once_built(bases):
+    # At the first instance of a class built from a Protocol, typing writes onto that class
+    # the first __init__ of its method resolution order that is not typing's own (object's,
+    # or Base's): Python's doing, not an edit of the trader's.
+    cell = implemented(bases)
+    before = version_of(cell, None).version_id
+    cell.Quote()
+    assert "__init__" in vars(cell.Quote)
+    assert version_of(cell, None).version_id == before
+
+
+def test_an_edit_of_a_protocols_subclasss_own_init_still_gives_a_new_version_id():
+    before = version_of(implemented(body=QUOTE_INIT), None).version_id
+    edited_init = QUOTE_INIT.replace("self.n = 2", "self.n = 3")
+    assert version_of(implemented(body=edited_init), None).version_id != before
+
+
 # ----- a nested Flag's boundary (2.4.1 item W-4) -----------------------------------------------
 
 #: A Flag nested in `Cell`, with the boundary it is given.
@@ -598,12 +640,99 @@ def test_the_banner_names_the_parameters_whose_values_changed_since_the_earlier_
     ids=["a flag set", "none", "one added", "one removed", "a name"],
 )
 def test_the_parameters_that_moved_are_read_from_the_two_starts_manifests(earlier, now, moved):
-    def manifest(parameters):
-        return {"strategy": {"name": "Cell", "parameters": parameters}}
-
-    assert moved_parameters(manifest(earlier), manifest(now)) == moved
+    assert moved_parameters(run_manifest(earlier), run_manifest(now), now) == moved
 
 
 def test_a_manifest_without_parameters_moves_none():
     # A row of the journal written before the manifests named parameters reads as none.
-    assert moved_parameters({}, {"strategy": {"parameters": {}}}) == ()
+    assert moved_parameters({}, {"strategy": {"parameters": {}}}, {}) == ()
+
+
+def run_manifest(parameters: dict[str, Any]) -> dict[str, Any]:
+    """A run manifest's strategy block holding `parameters` (JSON types), as the journal
+    gives it back."""
+    return {"strategy": {"name": "Cell", "parameters": parameters}}
+
+
+class Model:
+    """A parameter with no text of its value: its text names its memory address."""
+
+
+def test_an_object_known_by_its_address_is_not_named_as_moved():
+    # Each start builds its own object, at another address: the id leaves the address out
+    # (the banner's by-type line names the parameter), so the two starts' ids agree.
+    earlier, now = Model(), Model()
+    assert plain(earlier) != plain(now)
+    texts = [run_manifest(plain({"model": value})) for value in (earlier, now)]
+    assert moved_parameters(*texts, {"model": now}) == ()
+    cell = from_cell(CELL)
+    ids = [version_of(cell, {"model": value}).version_id for value in (earlier, now)]
+    assert ids[0] == ids[1]
+
+
+#: A parameter of names, which a run manifest writes as the text of a set.
+WATCH = ("SBIN", "INFY", "TCS")
+
+
+def another_process(value: Any) -> Any:
+    """`value`'s run manifest text as written by a process whose hash seed orders each set
+    the other way: each set's and frozenset's items reversed, a tuple's items in order."""
+    if isinstance(value, tuple):
+        return [another_process(item) for item in value]
+    items = ", ".join(repr(item) for item in reversed(list(value)))
+    return f"{{{items}}}" if isinstance(value, set) else f"frozenset({{{items}}})"
+
+
+@pytest.mark.parametrize(
+    "watch",
+    [set(WATCH), frozenset(WATCH), ("NSE", set(WATCH))],
+    ids=["a set", "a frozenset", "a set inside a tuple"],
+)
+def test_a_set_written_in_another_order_by_another_process_is_not_named_as_moved(watch):
+    # A set's text follows the process's hash seed, so a restart in a new process can
+    # write the same set in another order; the id sorts its items.
+    earlier = run_manifest({"watch": another_process(watch)})
+    now = run_manifest(plain({"watch": watch}))
+    assert earlier != now
+    assert moved_parameters(earlier, now, {"watch": watch}) == ()
+
+
+def test_a_parameter_that_was_an_object_and_is_now_a_number_is_named_as_moved():
+    # Only this start's value decides whether its text is the id's: the earlier text is
+    # compared as written.
+    earlier = run_manifest({"model": "<__main__.Model object at 0x1f>"})
+    assert moved_parameters(earlier, run_manifest({"model": 5}), {"model": 5}) == (
+        'model "<__main__.Model object at 0x1f>" to 5',
+    )
+
+
+def changed_line(source_hashed: bool, moved: tuple[str, ...] = ()) -> str:
+    """The banner's version-changed line of `Cell`, hashed by its source or by its compiled
+    code under CPython 3.12, with the parameters `moved`."""
+    started = Started(
+        "Cell",
+        "0123456789ab",
+        source_hashed,
+        {},
+        earlier="ba9876543210",
+        compiled_under=None if source_hashed else "CPython 3.12",
+        moved=moved,
+    )
+    return StartVersions((started,)).banner_lines()[1]
+
+
+def test_a_class_hashed_by_its_compiled_code_with_no_parameter_moved_names_its_class_values():
+    # Its id follows the values kept on its class too (2.4.1 item W-5), which no run
+    # manifest holds.
+    assert changed_line(source_hashed=False) == (
+        "Cell: its version changed since the day's earlier start, from ba9876543210 to "
+        "0123456789ab (its code, its parameters or a value kept on its class; keep run state "
+        "in self.state or on the instance)"
+    )
+
+
+def test_a_class_hashed_by_its_source_with_no_parameter_moved_names_its_code_or_parameters():
+    assert changed_line(source_hashed=True) == (
+        "Cell: its version changed since the day's earlier start, from ba9876543210 to "
+        "0123456789ab (its code or its parameters)"
+    )

@@ -13,7 +13,8 @@ and the restart match orders on.
 
 A restart whose version id of a strategy differs from the day's latest earlier start of it
 is allowed: the start banner says so, naming each parameter whose value differs between
-the two starts' run manifests (`_version_id.moved_parameters`), and the event
+the two starts' run manifests (`_version_id.moved_parameters`; not one whose text alone
+differs, a set's or an object's known by its memory address), and the event
 `version_changed` records both ids, so the record shows the trader changed the code or the
 parameters (or the strategy rebound a value on its class as it ran). The banner names every
 strategy's version id, each strategy whose source could not be hashed (a class built at
@@ -35,7 +36,13 @@ from .._pipeline_result import manifest_arguments
 from ..reference import default_tables
 from ._plan_catch_up import StrategyPlan
 from ._result_build import prepared_run
-from ._version_id import Started, StartVersions, moved_parameters, parameter_values
+from ._version_id import (
+    Started,
+    StartVersions,
+    given_parameters,
+    moved_parameters,
+    parameter_values,
+)
 
 #: The event of a strategy whose version differs from the day's earlier start's.
 VERSION_CHANGED = "version_changed"
@@ -72,6 +79,7 @@ def record_versions(session: Any) -> StartVersions:
         spec = part.spec
         manifest = start_manifest(part)
         before = earlier.get(spec.name)
+        values = given_parameters(spec.strategy, spec.params)
         one = Started(
             spec.name,
             spec.version.version_id,
@@ -80,7 +88,7 @@ def record_versions(session: Any) -> StartVersions:
             None if before is None else before.version_id,
             spec.version.by_type,
             spec.version.compiled_under,
-            () if before is None else moved_parameters(before.manifest, manifest),
+            () if before is None else moved_parameters(before.manifest, manifest, values),
         )
         journal.record_version(one.name, one.version_id, one.manifest, day=day)
         if one.changed:
