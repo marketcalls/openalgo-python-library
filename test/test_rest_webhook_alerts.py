@@ -12,11 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import httpx
+import numpy
 import pytest
 from rest_fakes import (
     API_KEY,
-    TIMED_OUT,
-    UNREACHABLE,
     answering,
     client_answering,
     failing,
@@ -73,6 +72,16 @@ def test_wait_for_delivery_asks_the_server_to_post_before_it_answers(channel):
     send(channel, recording(seen, QUEUED), "Stop-loss hit", wait_for_delivery=True)
 
     assert seen[0][2]["wait_for_delivery"] is True
+
+
+@CHANNELS
+def test_a_numpy_bool_for_wait_for_delivery_is_sent_as_the_bool_it_holds(channel):
+    # A flag read from pandas is a NumPy bool, which JSON cannot carry as it is.
+    seen = []
+
+    send(channel, recording(seen, QUEUED), "Stop-loss hit", wait_for_delivery=numpy.bool_(True))
+
+    assert [body["wait_for_delivery"] for _, _, body in seen] == [True]
 
 
 @CHANNELS
@@ -202,13 +211,21 @@ def test_a_message_over_the_limit_is_sent_whole_and_the_servers_refusal_comes_ba
 
 
 @CHANNELS
-def test_a_server_that_does_not_answer_in_time_gives_the_sdks_timeout_error(channel):
-    assert send(channel, failing(httpx.ReadTimeout("no answer")), "hello") == TIMED_OUT
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (httpx.ReadTimeout("no answer"), "timeout_error"),
+        (httpx.ConnectError("refused"), "connection_error"),
+    ],
+    ids=["timed-out", "unreachable"],
+)
+def test_a_server_that_does_not_answer_gives_the_error_telegram_gives(channel, failure, error_type):
+    with client_answering(failing(failure)) as client:
+        answer = getattr(client, channel.method)("hello")
+        telegram_answer = client.telegram(username="trader", message="hello")
 
-
-@CHANNELS
-def test_a_server_that_cannot_be_reached_gives_the_sdks_connection_error(channel):
-    assert send(channel, failing(httpx.ConnectError("refused")), "hello") == UNREACHABLE
+    assert answer == telegram_answer
+    assert answer["error_type"] == error_type
 
 
 @CHANNELS

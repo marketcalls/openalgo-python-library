@@ -3,6 +3,7 @@ OpenAlgo REST API Documentation - Slack Notification Methods
     https://docs.openalgo.in
 """
 
+from ._payload import plain_value
 from .base import BaseAPI
 
 
@@ -31,10 +32,13 @@ class SlackAPI(BaseAPI):
                          and returns at once. True posts it first and reports
                          whether Slack accepted it.
 
-        The SDK sends the message as given and leaves the checks to the server,
-        as telegram() and whatsapp() do: an empty message, one over 4000
-        characters or a wait_for_delivery that is not True or False comes back
-        as the server's 400 answer naming the field.
+        The SDK leaves the checks to the server. It sends the message as given,
+        as telegram() and whatsapp() do, so an empty message or one over 4000
+        characters comes back as the server's 400 answer naming the field.
+        whatsapp() turns wait_for_delivery into True or False with bool(); this
+        call sends it as given (a NumPy bool as the bool it holds), so the
+        server refuses a value that is not True or False instead of the SDK
+        reading the text "false" as True.
 
         Returns:
         dict: JSON response.
@@ -67,6 +71,6 @@ class SlackAPI(BaseAPI):
         payload = {
             "apikey": self.api_key,
             "message": message,
-            "wait_for_delivery": wait_for_delivery,
+            "wait_for_delivery": plain_value(wait_for_delivery),
         }
         return self._post("slack/notify", payload)

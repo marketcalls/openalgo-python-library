@@ -6,6 +6,7 @@ OpenAlgo REST API Documentation - Account Methods
 
 import httpx
 from typing import List, Dict, Any, Optional, Union
+from ._payload import plain_value
 from .base import BaseAPI
 
 class AccountAPI(BaseAPI):
@@ -541,8 +542,11 @@ class AccountAPI(BaseAPI):
         - symbol, exchange, product, action, quantity, price: the order as it was priced.
         - segment: the rate-card segment, e.g. "Equity Delivery" or "F&O Options".
         - trade_value: price times quantity, times the contract multiplier where
-          the symbol has one, in rupees.
-        - charges: every line in rupees.
+          the symbol has one: in rupees on the Indian exchanges, in the
+          instrument's quote currency on CRYPTO.
+        - charges: every line in rupees on the Indian exchanges. On CRYPTO every
+          line is zero until a venue fee is entered on /sandbox/commissions, and
+          is then that fee, charged as entered.
             - total: everything the order pays, the sum of every line below.
             - brokerage: brokerage under the saved plan for the segment.
             - taxes.gst: GST on brokerage, exchange transaction charges and SEBI fees.
@@ -583,7 +587,7 @@ class AccountAPI(BaseAPI):
             "exchange": exchange,
             "action": action,
             "product": product,
-            "quantity": quantity,
-            "price": price
+            "quantity": plain_value(quantity),
+            "price": plain_value(price)
         }
         return self._post("charges", payload)

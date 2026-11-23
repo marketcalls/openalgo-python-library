@@ -9,11 +9,10 @@ charges.md) and of restx_api/charges.py with services/charges_service.py.
 from __future__ import annotations
 
 import httpx
+import numpy
 import pytest
 from rest_fakes import (
     API_KEY,
-    TIMED_OUT,
-    UNREACHABLE,
     answering,
     client_answering,
     failing,
@@ -100,6 +99,42 @@ def test_charges_sends_an_option_lot_in_units_and_its_premium_as_given():
     assert (sent["quantity"], sent["price"]) == (65, 135.5)
 
 
+@pytest.mark.parametrize(
+    ("quantity", "price"),
+    [(numpy.int64(65), numpy.float64(135.5)), (numpy.int32(65), numpy.float32(135.5))],
+    ids=["64-bit", "32-bit"],
+)
+def test_charges_sends_numpy_figures_as_the_plain_numbers_they_hold(quantity, price):
+    # A quantity or price read from pandas (.iloc, .at, iterrows) is a NumPy scalar, and
+    # JSON cannot carry a NumPy integer as it is.
+    seen = []
+
+    with client_answering(recording(seen, {"status": "success", "data": {}})) as client:
+        client.charges(
+            symbol="NIFTY29DEC2626000CE",
+            exchange="NFO",
+            action="SELL",
+            product="NRML",
+            quantity=quantity,
+            price=price,
+        )
+
+    sent = [(body["quantity"], body["price"]) for _, _, body in seen]
+    assert sent == [(65, 135.5)]
+    assert isinstance(sent[0][0], int)
+
+
+def test_a_quantity_that_is_not_a_number_is_sent_as_given_for_the_server_to_refuse():
+    refused = {"status": "error", "message": "{'quantity': ['Not a valid integer.']}"}
+    seen = []
+
+    with client_answering(recording(seen, refused, status=400)) as client:
+        answer = client.charges(**{**RELIANCE_BUY, "quantity": "fifty"})
+
+    assert [body["quantity"] for _, _, body in seen] == ["fifty"]
+    assert answer == {**refused, "code": 400}
+
+
 def test_charges_returns_the_servers_priced_order_as_it_is():
     with client_answering(answering(200, RELIANCE_BUY_PRICED)) as client:
         answer = client.charges(**RELIANCE_BUY)
@@ -134,18 +169,21 @@ def test_an_invalid_api_key_comes_back_with_the_servers_message_and_code_403():
     assert answer == {"status": "error", "message": "Invalid openalgo apikey", "code": 403}
 
 
-def test_a_server_that_does_not_answer_in_time_gives_the_sdks_timeout_error():
-    with client_answering(failing(httpx.ReadTimeout("no answer"))) as client:
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (httpx.ReadTimeout("no answer"), "timeout_error"),
+        (httpx.ConnectError("refused"), "connection_error"),
+    ],
+    ids=["timed-out", "unreachable"],
+)
+def test_a_server_that_does_not_answer_gives_the_error_funds_gives(failure, error_type):
+    with client_answering(failing(failure)) as client:
         answer = client.charges(**RELIANCE_BUY)
+        funds_answer = client.funds()
 
-    assert answer == TIMED_OUT
-
-
-def test_a_server_that_cannot_be_reached_gives_the_sdks_connection_error():
-    with client_answering(failing(httpx.ConnectError("refused"))) as client:
-        answer = client.charges(**RELIANCE_BUY)
-
-    assert answer == UNREACHABLE
+    assert answer == funds_answer
+    assert answer["error_type"] == error_type
 
 
 def test_charges_takes_the_order_by_keyword_only():

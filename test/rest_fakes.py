@@ -20,19 +20,6 @@ HOST = "http://openalgo.invalid"
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
-# What every REST method of the SDK returns when the server does not answer in time, and
-# when it cannot be reached (the `except` arms of each mixin's request helper).
-TIMED_OUT = {
-    "status": "error",
-    "message": "Request timed out. The server took too long to respond.",
-    "error_type": "timeout_error",
-}
-UNREACHABLE = {
-    "status": "error",
-    "message": "Failed to connect to the server. Please check if the server is running.",
-    "error_type": "connection_error",
-}
-
 
 def client_answering(handler: Handler) -> api:
     """An `openalgo.api` client whose HTTP calls go to `handler`, a function of the request."""

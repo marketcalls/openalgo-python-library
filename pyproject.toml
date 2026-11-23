@@ -68,6 +68,7 @@ include = [
     "examples/backtest_quickstart.py",
     "openalgo/backtest/**/*.py",
     "openalgo/_feed_*.py",
+    "openalgo/_payload.py",
     "openalgo/discord.py",
     "openalgo/indicators/_anchors.py",
     "openalgo/indicators/causality.py",
