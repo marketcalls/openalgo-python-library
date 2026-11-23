@@ -32,10 +32,10 @@ future (GOLD is quoted per 10 grams with a 1 kg lot, so one lot is 100 units; on
 lot is USD 1,000, so 1,000 units). The helpers `trade_cost`, `round_trip_cost` and
 `trade_costs` also take `lots=` with `symbol=` and `exchange=`, as a broker's calculator
 counts commodity and currency trades: lots x lot_size x multiplier price units, read from
-the reference tables for the trade date (`_costs.lots`). A key or field
-ending in `_rate` is a fraction (0.001 is 0.1 percent); anything called `percent`
-takes percent units (`costs.percent(0.03, 20)` is 0.03 percent, at most Rs 20).
-Trade dates are IST calendar dates; a date string must be ISO, year first.
+the reference tables for the trade date (`_costs.lots`). A key or field ending in `_rate`
+is a fraction (0.001 is 0.1 percent); anything called `percent` takes percent units
+(`costs.percent(0.03, 20)` is 0.03 percent, at most Rs 20). Trade dates are IST calendar
+dates; a date string must be ISO, year first.
 
 One trade is one executed order: brokerage with a per-order cap or flat amount is
 charged once per trade. Cost an order that filled in several parts once, on its
@@ -48,9 +48,8 @@ and options (CDS). BSE currency derivatives (BCD), MCX options on an agri commod
 the exercise of an MCX option are not costed yet and raise CostError. Brokerage comes
 from a preset: "standard" (the default, what most brokers charge), "zerodha" or
 "zero_brokerage", or one built with `flat`, `percent` or `custom`. Nothing falls back
-silently: an unknown or missing
-segment, exchange, preset, scrip group, commodity or date raises CostError with a
-message that says what to do.
+silently: an unknown or missing segment, exchange, preset, scrip group, commodity or date
+raises CostError with a message that says what to do.
 
 Verification. Each schedule row records the last date its rates were checked
 against their source. A cost from rates that are not verified for the trade date
@@ -83,7 +82,7 @@ from ._costs.kernel import (
     call,
     native,
 )
-from ._costs.lots import Contract, contract_of, price_units
+from ._costs.lots import Contract, check_segment, contract_of, price_units
 from ._costs.model import CostModel
 from ._costs.notes import contract_note
 from ._costs.presets import (
@@ -201,10 +200,12 @@ def _segment(
 ) -> str:
     """The segment code from either `segment` or an exchange and product. A `contract`
     (from `symbol=`) supplies the instrument and underlying the caller left out, and its
-    exchange may be given with `segment`."""
+    exchange may be given with `segment`; the segment must be the contract's
+    (`check_segment`)."""
     if segment is not None:
         if product is not None or (exchange is not None and contract is None):
             raise CostError("pass either segment, or exchange and product, not both")
+        check_segment(contract, segment)
         return segment
     if exchange is None or product is None:
         raise CostError(
@@ -214,7 +215,9 @@ def _segment(
     if contract is not None:
         instrument = instrument or contract.instrument
         underlying = underlying or contract.underlying
-    return segment_for(exchange, product, instrument or "EQ", bse_group, underlying)
+    code = segment_for(exchange, product, instrument or "EQ", bse_group, underlying)
+    check_segment(contract, code)
+    return code
 
 
 _DATE = "date, the IST trade date such as '2026-11-12'"
@@ -259,9 +262,10 @@ def trade_cost(
                          symbol="ALUMINI31DEC26FUT", exchange="MCX")
 
     Raises CostError for unknown or invalid input (both or neither of quantity and lots,
-    lots without a symbol, part lots) and for a date before the first schedule version,
-    and the reference tables' ReferenceDataError for a contract they do not cover. Warns
-    when the rates are not verified for `date`. See `CostModel.trade`.
+    lots without a symbol, part lots, an index symbol, a segment or instrument that is not
+    the symbol's) and for a date before the first schedule version, and the reference
+    tables' ReferenceDataError for a contract they do not cover. Warns when the rates are
+    not verified for `date`. See `CostModel.trade`.
     """
     contract = contract_of(symbol, exchange)
     units = price_units(quantity, lots, contract, _required(date))
@@ -322,16 +326,25 @@ def trade_costs(
 
     `date` and `segment` are required. The quantity is `quantity` price units, or `lots`
     of the one contract `symbol` on `exchange`, each row's lots turned into price units
-    at the lot size and multiplier of its own date (see `trade_cost`).
+    at the lot size and multiplier of its own date (see `trade_cost`); every segment must
+    then be the contract's.
 
     Returns a DataFrame with one row per trade: its date and segment, the rupee
     amounts, and the schedule version and verification flags of its rates. Raises
-    CostError naming the first bad row, and as `trade_cost` for the quantity. See
+    CostError naming the first bad row, for `exchange` without `symbol`, for a segment
+    that is not the contract's, and as `trade_cost` for the quantity. See
     `CostModel.trades`.
     """
-    units = price_units(quantity, lots, contract_of(symbol, exchange), _required(date))
+    if exchange is not None and symbol is None:
+        raise CostError(
+            "exchange= is read only with symbol=, to name the contract whose lots= are "
+            "counted; trade_costs takes what is traded from segment="
+        )
+    contract = contract_of(symbol, exchange)
+    units = price_units(quantity, lots, contract, _required(date))
     model = _model(brokerage, rounding)
     code = _required(segment, "segment, a code such as 'MCX_FUT' (see costs.SEGMENTS)")
+    check_segment(contract, code)
     return model.trades(side, price, units, date, code, as_frame=as_frame)
 
 

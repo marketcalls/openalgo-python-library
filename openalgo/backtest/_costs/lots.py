@@ -13,6 +13,13 @@ cf27e5f98, 2026-09-22, broker/zerodha/mapping/mcx_contract_size.py); its master 
 carries the real market lot (CRUDEOIL 100, COPPER 2,500, GOLDM 100, ALUMINI 1) and lot 1
 for a currency contract. Everywhere else the engine keeps units, and strategies already
 take `lots=` on their orders.
+
+An MCX or NSE currency option is counted at the lot and multiplier of its underlying's
+futures row (`mcx_contracts`, `currency_contracts`): an option on MCX or CDS has the
+contract size of its underlying's future today, and the calculator figures of the COPPER
+and USDINR options rest on it. The tables carry no option rows, so a backtest of such an
+option still needs a `symbols` row for the exact contract and raises ReferenceDataError
+without one.
 """
 
 import datetime as dt
@@ -25,12 +32,18 @@ import numpy as np
 from ..errors import CostError
 from ..reference import default_tables
 from ..reference.symbols import EQUITY_EXCHANGES, parse_symbol
-from .inputs import common_length, day_to_date, floats, to_days
+from .inputs import common_length, day_to_date, floats, segment_ids, to_days
+from .kernel import SEGMENT_TABLE
 
-__all__ = ["INSTRUMENT_CODES", "Contract", "contract_of", "price_units"]
+__all__ = ["INSTRUMENT_CODES", "Contract", "check_segment", "contract_of", "price_units"]
 
 #: The cost model's instrument code of each instrument kind (`costs.segment_for`).
 INSTRUMENT_CODES = MappingProxyType({"equity": "EQ", "future": "FUT", "option": "OPT"})
+# The instrument code of each brokerage class of the segment table (`costs.segments()`).
+_CODE_OF_CLASS = MappingProxyType(
+    {"delivery": "EQ", "intraday": "EQ", "futures": "FUT", "options": "OPT"}
+)
+_KIND_WORDS = MappingProxyType({"EQ": "equity", "FUT": "futures", "OPT": "options"})
 
 
 @dataclass(frozen=True)
@@ -47,8 +60,9 @@ class Contract:
 def contract_of(symbol: str | None, exchange: str | None) -> Contract | None:
     """The contract an OpenAlgo `symbol` on `exchange` names, or None without a symbol.
 
-    Raises CostError for a symbol without its exchange or one that is not text, and the
-    reference tables' `SymbolError` for a symbol that is not an OpenAlgo symbol.
+    Raises CostError for a symbol without its exchange or one that is not text and for an
+    index, and the reference tables' `SymbolError` for a symbol that is not an OpenAlgo
+    symbol.
     """
     if symbol is None:
         return None
@@ -58,9 +72,39 @@ def contract_of(symbol: str | None, exchange: str | None) -> Contract | None:
             f"such as symbol='USDINR29DEC26FUT', exchange='CDS'; got {symbol!r} on {exchange!r}"
         )
     parsed = parse_symbol(symbol, exchange.strip().upper())
+    if parsed.kind not in INSTRUMENT_CODES:
+        raise CostError(
+            f"{parsed.symbol} on {parsed.exchange} is an {parsed.kind}, which is not traded: "
+            "give a share, futures or options symbol"
+        )
     return Contract(
         parsed.symbol, parsed.exchange, INSTRUMENT_CODES[parsed.kind], parsed.underlying
     )
+
+
+def check_segment(contract: Contract | None, segment: Any) -> None:
+    """Refuse a segment given with `symbol=` that is not the contract's.
+
+    `segment` is a code or an array of codes or ids, as the cost helpers take it. Each
+    must price the contract's exchange and kind (equity, futures or options), as its row of
+    `costs.segments()` says. Raises CostError for an unknown segment and for one that is
+    not the contract's; does nothing without a contract.
+    """
+    if contract is None:
+        return
+    size = 1 if isinstance(segment, str) else int(np.size(segment))
+    for index in np.unique(segment_ids(segment, size)).tolist():
+        row = SEGMENT_TABLE[index]
+        code = _CODE_OF_CLASS[row["brokerage_class"]]
+        if (row["exchange"], code) == (contract.exchange, contract.instrument):
+            continue
+        kind = _KIND_WORDS[contract.instrument]
+        raise CostError(
+            f"segment {row['code']!r} prices {row['exchange']} {_KIND_WORDS[code]}, not "
+            f"{contract.symbol}, which is {contract.exchange} {kind}: leave segment= out and "
+            f"give product= (the symbol sets the rest), or give a {contract.exchange} {kind} "
+            "segment (see costs.segments())"
+        )
 
 
 def _units_per_lot(contract: Contract, day: dt.date) -> float:

@@ -25,11 +25,10 @@ def contract_note(trades: pd.DataFrame) -> pd.DataFrame:
 
     A broker issues one contract note per trade day for each of NSE cash, BSE cash,
     NSE F&O, BSE F&O, MCX and NSE currency derivatives (CDS). On each note every charge
-    is summed exactly over the
-    day's trades; STT or CTT and stamp duty are rounded to the nearest rupee (50
-    paise up), and brokerage, exchange charge, SEBI fee and GST to the nearest paisa.
-    This rule is an assumption that still has to be checked against real contract
-    notes; the result says so in `attrs`.
+    is summed exactly over the day's trades; STT or CTT and stamp duty are rounded to
+    the nearest rupee (50 paise up), and brokerage, exchange charge, SEBI fee and GST to
+    the nearest paisa. This rule is an assumption that still has to be checked against
+    real contract notes; the result says so in `attrs`.
 
     Returns a DataFrame with one row per (date, note): date, note, fills, the six
     charged components, total (what the note charges), accrued_total (the unrounded

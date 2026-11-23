@@ -12,6 +12,7 @@ import pytest
 
 from openalgo.backtest import costs
 from openalgo.backtest.errors import CostError, ReferenceDataError
+from openalgo.backtest.reference import default_tables
 
 DAY = "2026-11-23"
 ZERODHA_CALCULATOR = {"brokerage": "zerodha", "rounding": "calculator"}
@@ -112,5 +113,60 @@ def test_a_contract_the_reference_tables_do_not_cover_raises_their_error():
     with pytest.raises(ReferenceDataError):
         costs.trade_cost(
             "BUY", 88.33, date=DAY, lots=1, symbol="USDINR29DEC26FUT", exchange="BCD",
-            segment="CDS_FUT",
+            product="NRML",
         )  # fmt: skip
+
+
+@pytest.mark.parametrize("quantity", [{"quantity": 100}, {"lots": 1}], ids=["quantity", "lots"])
+def test_an_index_is_refused_as_not_traded(quantity):
+    with pytest.raises(CostError, match="NIFTY on NSE_INDEX is an index, which is not traded"):
+        costs.trade_cost(
+            "BUY", 100, date=DAY, symbol="NIFTY", exchange="NSE_INDEX", product="MIS", **quantity
+        )
+
+
+FUTURE = {"symbol": "USDINR29DEC26FUT", "exchange": "CDS"}
+MISMATCHES = {
+    "an equity segment": {"segment": "NSE_EQ_DELIVERY", **FUTURE},
+    "an options segment": {"segment": "CDS_OPT", **FUTURE},
+    "another exchange's futures": {"segment": "MCX_FUT", **FUTURE},
+    "an instrument against the symbol": {"product": "NRML", "instrument": "OPT", **FUTURE},
+}
+
+
+@pytest.mark.parametrize("arguments", MISMATCHES.values(), ids=MISMATCHES)
+@pytest.mark.parametrize("quantity", [{"quantity": 1_000}, {"lots": 1}], ids=["quantity", "lots"])
+def test_a_segment_that_is_not_the_contracts_is_refused(arguments, quantity):
+    with pytest.raises(CostError, match="not USDINR29DEC26FUT, which is CDS futures"):
+        costs.trade_cost("BUY", 88.33, date=DAY, **quantity, **arguments)
+
+
+def test_trade_costs_refuse_a_segment_that_is_not_the_contracts():
+    with pytest.raises(CostError, match="not USDINR29DEC26FUT, which is CDS futures"):
+        costs.trade_costs(["BUY"], [88.33], date=DAY, segment="NSE_EQ_DELIVERY", lots=[1], **FUTURE)
+
+
+def test_trade_costs_refuse_an_exchange_without_a_symbol():
+    with pytest.raises(CostError, match="exchange= is read only with symbol="):
+        costs.trade_costs(["BUY"], [88.33], [1_000], DAY, "CDS_FUT", exchange="MCX")
+
+
+@pytest.mark.parametrize(
+    ("option", "exchange", "segment", "units"),
+    [
+        ("COPPER24DEC26900CE", "MCX", "MCX_OPT", 2_500),  # the COPPER futures lot
+        ("USDINR29DEC2688.5CE", "CDS", "CDS_OPT", 1_000),  # one USDINR futures contract
+    ],
+)
+def test_a_lot_of_an_mcx_or_currency_option_is_its_underlyings_futures_lot(
+    option, exchange, segment, units
+):
+    # The helpers read the contract-terms row of the underlying (mcx_contracts,
+    # currency_contracts), whose contract size the option shares today. A backtest of the
+    # option itself still needs a 'symbols' row for it: the built-in tables do not cover it.
+    by_lots = costs.trade_cost("BUY", 100.0, date=DAY, lots=1, symbol=option, exchange=exchange,
+                               product="NRML")  # fmt: skip
+    by_units = costs.trade_cost("BUY", 100.0, units, DAY, segment=segment)
+    assert by_lots.as_dict() == by_units.as_dict()
+    with pytest.raises(ReferenceDataError, match=f"No lot_size is known for {option}"):
+        default_tables().instrument(option, exchange, DAY)
