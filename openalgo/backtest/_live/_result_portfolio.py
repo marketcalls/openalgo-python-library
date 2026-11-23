@@ -4,6 +4,9 @@
 - **The strategies** are the session's own `Result`s (`SessionResult.results`, the same
   objects), so the portfolio covers this start only, as they do: after a restart it begins
   at the restart, and the day's figures across restarts stay `SessionResult.summary`'s.
+  A start after the day's first says so (`restart_scope`): its Assumptions line `scope`,
+  which its `summary()` prints first, names the restart's IST time and the start's number
+  in the day and points to the session summary. A first start states no scope.
 - **The account** is the strategies together on the sum of their capitals, each
   strategy's figures measured on its own capital, as fixed allocations are in a backtest.
   At each instant a strategy's slice closed, the account's equity is every strategy's
@@ -46,7 +49,9 @@ import pandas as pd
 
 from .._portfolio_figures import REFUSALS
 from .._portfolio_notes import rupees_text
+from .._portfolio_report import SCOPE_NOTE
 from .._portfolio_tables import ACCOUNT_COLUMNS, STRATEGY
+from .._result_tables import IST
 from .._risk_settings import NET_BASIS
 from .._strategy_args import PAISE_PER_RUPEE, SHARED_POOL, Account
 from ..portfolio_result import PortfolioResult
@@ -89,6 +94,12 @@ REFUSAL_STAMP = ("order_id", "slice", "slice_ts", "step")
 SHARED_NOTE = (
     f"the strategies trading one instrument {SHARED_RULE}; each strategy's charges are "
     "modelled on its own fills, where the broker charges one contract note for the account"
+)
+#: The scope of a start after the day's first (module docstring): the restart's IST time
+#: (hours and minutes) and the start's number in the day.
+RESTART_SCOPE = (
+    "from the restart at {time} IST (start {start} of the day): the day's figures across "
+    "restarts are in the session summary (SessionResult.summary_text())"
 )
 
 
@@ -189,18 +200,30 @@ def nothing_refused(arguments: LiveArguments) -> str | None:
     return words
 
 
+def restart_scope(started_ns: int, restarts: int) -> str | None:
+    """The scope a start's portfolio states (module docstring, `RESTART_SCOPE`): of a start
+    that began at `started_ns` (UTC nanoseconds) after `restarts` earlier starts of the
+    day; None for the day's first start, which states none."""
+    if not restarts:
+        return None
+    started = pd.Timestamp(started_ns, unit="ns", tz="UTC").tz_convert(IST)
+    return RESTART_SCOPE.format(time=f"{started:%H:%M}", start=restarts + 1)
+
+
 def session_portfolio(
     results: Mapping[str, Result],
     arguments: LiveArguments,
     funds_at_start: float,
     *,
     shared: bool,
+    scope: str | None = None,
 ) -> PortfolioResult:
     """The portfolio of a live session (module docstring): its strategies' `results`
     (name to `Result`, call order), the checked `bt.live` `arguments`, the funds OpenAlgo
-    reported at the start in rupees (`funds_at_start`), and whether an instrument was
-    shared by several strategies (`shared`). Raises what the strategies' tables raise
-    when they cannot be read."""
+    reported at the start in rupees (`funds_at_start`), whether an instrument was shared
+    by several strategies (`shared`) and the scope a start after the day's first states
+    (`restart_scope`; None states none). Raises what the strategies' tables raise when
+    they cannot be read."""
     account = session_account(results, arguments)
     funds = sum(account.capitals)
     records: dict[str, Any] = {
@@ -215,6 +238,8 @@ def session_portfolio(
         notes[REFUSED_NOTE] = nothing
     if shared:
         notes["shared_instrument_rules"] = SHARED_NOTE
+    if scope is not None:
+        notes[SCOPE_NOTE] = scope
     return PortfolioResult(account, results, records, notes=notes)
 
 
@@ -222,10 +247,12 @@ __all__ = [
     "ACCOUNT_NOTE",
     "LOCKED_OUT_NOTE",
     "REFUSAL_STAMP",
+    "RESTART_SCOPE",
     "SHARED_NOTE",
     "account_rows",
     "nothing_refused",
     "refused_records",
+    "restart_scope",
     "session_account",
     "session_portfolio",
 ]

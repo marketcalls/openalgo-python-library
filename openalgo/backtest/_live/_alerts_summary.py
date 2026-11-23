@@ -15,7 +15,10 @@ style of `Result.summary()`:
     End state   : flat
 
 Each strategy is named with its version id (18-multi-strategy 12.1), when the session gave
-them. A "Limits : SbinTrend at most 3 trades a day; account trade cap 4 trades a day" line
+them. The Charges line reads "Rs 182.40 (modelled per fill; Rs 181.00 on the contract
+notes)" when the strategies' contract notes, which round STT and stamp duty to whole rupees,
+charged another figure at the paisa (`notes_charges`, given at the day's first start only).
+A "Limits : SbinTrend at most 3 trades a day; account trade cap 4 trades a day" line
 follows the strategies when the session set daily limits (18-multi-strategy 2.5a). An
 "Alerts : 2 not delivered" line comes before the end state when an alert of the
 session did not reach OpenAlgo. The Slippage line adds "(1 MARKET fill not compared: no
@@ -79,7 +82,11 @@ class SessionSummary:
     fill's rounded to the paisa, so they add up across the day's restarts. A contract note
     rounds its lines once, so a strategy's `bt.Result` charges its fills the notes'
     charges: they differ from these by the notes' rounding, which
-    `Result.contract_notes` names (its `adjustment` column).
+    `Result.contract_notes` names (its `adjustment` column). `notes_charges` is rupees
+    the strategies' contract notes charged, what their results charge, given when their
+    results cover the day's fills (the day's first start) and None otherwise: after a
+    restart the results cover their start's fills only, while these figures cover the
+    day's.
     `slippage` is rupees the live MARKET fills cost beyond the fills the backtest models
     for the same orders, each at the open of the bar that opens at its decision with the
     run's modelled slippage (negative when live did better), or None when not one of the
@@ -108,11 +115,11 @@ class SessionSummary:
     (none: not given).
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
-    number (None is allowed for `slippage` only), when the seconds unprotected are
-    negative, when a count is not a whole number of at least zero, when a leg of
-    `differing`, `unconfirmed`, `shared` or `limits` is not named in words, when
-    `differing` names more legs than the mismatches counted, or when `versions` are given
-    and are not one id in words per strategy.
+    number (None is allowed for `slippage`, `stop_slippage` and `notes_charges`), when
+    the seconds unprotected are negative, when a count is not a whole number of at least
+    zero, when a leg of `differing`, `unconfirmed`, `shared` or `limits` is not named in
+    words, when `differing` names more legs than the mismatches counted, or when
+    `versions` are given and are not one id in words per strategy.
     """
 
     day: dt.date
@@ -137,10 +144,13 @@ class SessionSummary:
     versions: tuple[str, ...] = ()
     stop_slippage: float | None = None
     stop_slippage_not_compared: int = 0
+    notes_charges: float | None = None
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
         _check_figure("charges", self.charges)
+        if self.notes_charges is not None:
+            _check_figure("notes_charges", self.notes_charges)
         if self.slippage is not None:
             _check_figure("slippage", self.slippage)
         if self.stop_slippage is not None:
@@ -184,7 +194,7 @@ def summary_text(summary: SessionSummary) -> str:
     lines += [
         ("Trades", f"{summary.closed_trades} closed"),
         ("Gross P&L", _rupees(summary.gross_pnl)),
-        ("Charges", f"{_rupees(summary.charges)} (modelled)"),
+        ("Charges", _charges(summary)),
         ("Net P&L", _rupees(summary.net_pnl)),
         ("Slippage", _slippage(summary.slippage, summary.slippage_not_compared)),
         *_stop_line(summary),
@@ -206,6 +216,16 @@ def summary_text(summary: SessionSummary) -> str:
         f"broker {summary.broker}"
     )
     return "\n".join([title, *(f"{label:<{width}} : {value}" for label, value in lines)])
+
+
+def _charges(summary: SessionSummary) -> str:
+    """The Charges line (module docstring): the modelled charges, and the contract notes'
+    beside them when the summary has them and they differ at the paisa."""
+    modelled = _rupees(summary.charges)
+    notes = summary.notes_charges
+    if notes is None or _rupees(notes) == modelled:
+        return f"{modelled} (modelled)"
+    return f"{modelled} (modelled per fill; {_rupees(notes)} on the contract notes)"
 
 
 def _named(summary: SessionSummary) -> list[str]:
