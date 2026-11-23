@@ -246,6 +246,20 @@ class DayFigures:
         )
 
 
+def notes_charges(charges: float, outputs: Mapping[str, Mapping[str, Any]]) -> float:
+    """Rupees the strategies' contract notes charged their fills, what their results
+    charge: `charges`, the fills' modelled charges, each rounded to the paisa, with the
+    rounding adjustment of each settled note in `outputs` (each kernel session's
+    `finish()` tables, by strategy, read after its stop settled its notes) added. It covers
+    the day only at the day's first start, whose results hold the day's fills whole."""
+    adjustments = 0.0
+    for output in outputs.values():
+        notes = output["charges"]["notes"]
+        settled = zip(notes["adjustment"], notes["settled"], strict=True)
+        adjustments += sum(float(amount) for amount, posted in settled if posted)
+    return round(charges + adjustments, 2)
+
+
 def _own(session: Any, unprotected_s: float) -> SessionFigures:
     """This start's own counts so far, with `unprotected_s` seconds unprotected."""
     return SessionFigures(
@@ -327,4 +341,5 @@ __all__ = [
     "Earlier",
     "SessionFigures",
     "StrategyFigures",
+    "notes_charges",
 ]

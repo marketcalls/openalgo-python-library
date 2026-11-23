@@ -347,3 +347,43 @@ def test_each_shared_instrument_has_a_line_after_the_reconcile_line():
 def test_a_shared_instrument_is_named_in_words(words):
     with pytest.raises(ConfigError, match="shared names each leg in words"):
         replace(A_GOOD_DAY, shared=(words,))
+
+
+# ----- the charges on the contract notes (2.4.1 item W-2) ---------------------------------
+
+
+def test_the_charges_line_names_the_contract_notes_figure_when_their_rounding_differs():
+    # The notes round STT and stamp duty to whole rupees: Rs 182.40 per fill is Rs 181.00
+    # on the notes, so a result's net reads Rs 1.40 better than the summary's.
+    day = replace(A_GOOD_DAY, notes_charges=181.0)
+    assert line(day, "Charges") == "Rs 182.40 (modelled per fill; Rs 181.00 on the contract notes)"
+
+
+def test_the_net_pnl_stays_the_gross_pnl_less_the_modelled_charges_beside_the_notes():
+    day = replace(A_GOOD_DAY, notes_charges=181.0)
+    assert line(day, "Net P&L") == "Rs 1,067.60"
+
+
+@pytest.mark.parametrize(
+    "notes", [182.4, 182.404, 182.396], ids=["equal", "under half a paisa", "under half back"]
+)
+def test_the_charges_line_is_unchanged_when_the_contract_notes_agree_to_the_paisa(notes):
+    assert line(replace(A_GOOD_DAY, notes_charges=notes), "Charges") == "Rs 182.40 (modelled)"
+
+
+def test_the_charges_line_is_unchanged_without_a_contract_notes_figure():
+    assert A_GOOD_DAY.notes_charges is None
+    assert line(A_GOOD_DAY, "Charges") == "Rs 182.40 (modelled)"
+
+
+def test_the_contract_notes_figure_uses_indian_digit_grouping():
+    day = replace(A_GOOD_DAY, charges=123456.78, notes_charges=123455.0)
+    assert line(day, "Charges") == (
+        "Rs 1,23,456.78 (modelled per fill; Rs 1,23,455.00 on the contract notes)"
+    )
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, "181"], ids=["nan", "inf", "text"])
+def test_a_contract_notes_figure_that_is_not_a_finite_number_is_refused(value):
+    with pytest.raises(ConfigError, match="the session summary's notes_charges must be a finite"):
+        replace(A_GOOD_DAY, notes_charges=value)
