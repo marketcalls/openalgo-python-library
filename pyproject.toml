@@ -56,9 +56,10 @@ strip = true
 include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.ruff]
-# Lint and format gate for new code: the backtest package, the feed helper modules and
-# their tests. The older SDK modules predate this configuration and are not reformatted;
-# `ruff check` and `ruff format --check` with no path cover exactly the files below.
+# Lint and format gate for new code: the backtest package, the feed helper modules, the
+# newer REST modules and their tests. The older SDK modules predate this configuration
+# and are not reformatted; `ruff check` and `ruff format --check` with no path cover
+# exactly the files below.
 line-length = 100
 target-version = "py312"
 include = [
@@ -75,9 +76,11 @@ include = [
     "test/feed_*.py",
     "test/indicator_references.py",
     "test/live/*.py",
+    "test/rest_fakes.py",
     "test/test_feed_*.py",
     "test/test_indicators_causality.py",
     "test/test_indicators_fixes.py",
+    "test/test_rest_*.py",
 ]
 
 [tool.ruff.lint]

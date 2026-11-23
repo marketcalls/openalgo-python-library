@@ -485,3 +485,104 @@ class AccountAPI(BaseAPI):
                 payload[key] = value
 
         return self._make_request("margin", payload)
+
+    def charges(self, *, symbol, exchange, action, product, quantity, price):
+        """
+        Brokerage and statutory charges for one order, before it is placed.
+
+        OpenAlgo works the figures out from the brokerage plan saved on its
+        /sandbox/commissions page and the published statutory rates. No broker
+        is called, so the answer is the same in live and analyzer mode. They are
+        the server's estimate of what the order costs, separate from the backtest
+        engine's own cost model in openalgo.backtest.costs. One call prices one
+        order: a round trip is two calls, one per side.
+
+        Parameters:
+        - symbol (str): Trading symbol in OpenAlgo format, e.g. "RELIANCE". Required.
+        - exchange (str): Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX, NCDEX,
+                          NCO or CRYPTO. Required.
+        - action (str): BUY or SELL. Required.
+        - product (str): MIS, CNC or NRML. On NSE and BSE the product decides the
+                         segment: MIS is intraday, CNC is delivery. Required.
+        - quantity (int): Order quantity in units, never lots: one NIFTY lot of
+                          65 is 65. Required.
+        - price (float): Price per unit the order would trade at, above zero. For
+                         an option, the premium; for a MARKET order, the last
+                         traded price. Required.
+
+        Returns:
+        dict: JSON response with format:
+            {
+                "status": "success",
+                "data": {
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "product": "CNC",
+                    "action": "BUY",
+                    "quantity": 50,
+                    "price": 1350.0,
+                    "segment": "Equity Delivery",
+                    "trade_value": 67500.0,
+                    "charges": {
+                        "total": 104.13,
+                        "brokerage": 20.0,
+                        "taxes": {"gst": 3.99, "stt": 68.0, "stamp_duty": 10.0},
+                        "other_charges": {
+                            "transaction": 2.0,
+                            "clearing": 0.0,
+                            "ipft": 0.07,
+                            "sebi_turnover": 0.07
+                        }
+                    }
+                }
+            }
+
+        Data fields:
+        - symbol, exchange, product, action, quantity, price: the order as it was priced.
+        - segment: the rate-card segment, e.g. "Equity Delivery" or "F&O Options".
+        - trade_value: price times quantity, times the contract multiplier where
+          the symbol has one, in rupees.
+        - charges: every line in rupees.
+            - total: everything the order pays, the sum of every line below.
+            - brokerage: brokerage under the saved plan for the segment.
+            - taxes.gst: GST on brokerage, exchange transaction charges and SEBI fees.
+            - taxes.stt: Securities Transaction Tax, or Commodities Transaction Tax
+              on a commodity exchange.
+            - taxes.stamp_duty: stamp duty, charged on a buy only.
+            - other_charges.transaction: exchange transaction charges.
+            - other_charges.clearing: clearing charges, always 0.
+            - other_charges.ipft: Investor Protection Fund Trust levy, where the
+              exchange has one.
+            - other_charges.sebi_turnover: SEBI turnover fee.
+
+        STT and stamp duty are rounded to the nearest rupee, as on a contract note
+        for that one order; every other line is kept to the paisa. Not included:
+        depository (DP) charges on a delivery sell, and STT on an option that is
+        exercised at expiry.
+
+        Errors come back as the server's JSON body with the HTTP status in "code":
+        - 400: a field is missing or not an allowed value (the message names the
+          field), the symbol is not in the master contract, or the exchange is an
+          index exchange.
+        - 403: "Invalid openalgo apikey".
+
+        Example:
+            response = client.charges(
+                symbol="RELIANCE",
+                exchange="NSE",
+                action="BUY",
+                product="CNC",
+                quantity=50,
+                price=1350
+            )
+        """
+        payload = {
+            "apikey": self.api_key,
+            "symbol": symbol,
+            "exchange": exchange,
+            "action": action,
+            "product": product,
+            "quantity": quantity,
+            "price": price
+        }
+        return self._post("charges", payload)
