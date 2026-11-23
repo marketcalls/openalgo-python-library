@@ -10,6 +10,37 @@ A Python library for algorithmic trading using OpenAlgo's REST APIs and WebSocke
 - General Documentation: https://docs.openalgo.in
 - Source: https://github.com/marketcalls/openalgo-python-library
 
+## What's New in 2.4.1
+
+Charges closer to what most brokers bill, MCX options and NSE currency derivatives costed,
+cost helpers that count in lots, three new REST calls, and clearer live results after a
+restart.
+
+- **"standard" brokerage by default.** Delivery orders pay 2.5 percent of the order value or
+  Rs 20, whichever is lower; intraday orders 0.1 percent or Rs 20; futures 0.03 percent or
+  Rs 20; options Rs 20 per executed order. Backtests with delivery trades, and with intraday
+  orders below about Rs 66,667, now pay more brokerage plus the GST on it. Trades do not
+  change, and futures and options results are unchanged. Pass `costs="zerodha"` for the
+  figures of 2.4.0.
+- **MCX options and NSE currency derivatives are costed.** MCX options on non-agri
+  commodities and NSE currency futures and options are priced at their exchange rates, and
+  calculator rounding reproduces the broker's online calculator (one USDINR futures lot
+  bought at 88.3300 and sold at 88.3525: Rs 48.14). NSE currency futures on USDINR, EURINR,
+  GBPINR and JPYINR are in the built-in reference tables, counted in units of the base
+  currency as OpenAlgo counts them (a USDINR lot is 1,000), so a currency futures backtest
+  runs. `bt.live` refuses currency derivatives in this release.
+- **Cost helpers count in lots.** `trade_cost`, `round_trip_cost` and `trade_costs` take
+  `lots=` with `symbol=` and `exchange=`, as a broker's calculator counts commodity and
+  currency trades. The lot size and multiplier come from the reference tables for the trade
+  date.
+- **Three new REST calls.** `client.charges(...)` prices one order's brokerage and
+  statutory charges through OpenAlgo's Charges API before it is placed. `client.discord(...)`
+  and `client.slack(...)` post a message through the webhook saved in OpenAlgo.
+- **Live results after a restart.** A restarted start's portfolio summary and tearsheet say
+  they cover that start only, the daily summary names the contract notes' charges when they
+  differ from the modelled figure, and the start banner's version-changed line names the
+  parameters whose values changed.
+
 ## What's New in 2.4.0
 
 Several strategies on one account, in backtests and live, including two strategies on one

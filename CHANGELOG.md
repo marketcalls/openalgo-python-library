@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-24
+
 ### Added
 
 - `api.charges(symbol=..., exchange=..., action=..., product=..., quantity=..., price=...)` prices one order's brokerage and statutory charges before it is placed, through OpenAlgo's Charges API (`POST /api/v1/charges`). Quantity is in units (one NIFTY lot of 65 is 65) and price is per unit: the premium for an option, the last traded price for a MARKET order. The figures are OpenAlgo's estimate under the brokerage plan saved on its `/sandbox/commissions` page, separate from the backtest engine's own cost model (`openalgo.backtest.costs`). DP charges and STT on an exercised option are not included. A refused request comes back as the server's answer with the HTTP status in `code` (400 naming the field, 403 for an invalid API key).
