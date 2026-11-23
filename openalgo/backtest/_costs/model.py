@@ -56,7 +56,10 @@ class CostModel:
         `costs.contract_note()`. "calculator" rounds each trade or round trip the way
         the Zerodha brokerage calculator does (to the paisa for equity, equity and
         currency derivatives, within one paisa for MCX futures and options); pass
-        brokerage="zerodha" to compare with that calculator.
+        brokerage="zerodha" to compare with that calculator. On NSE currency futures
+        the calculator shows the IPFT levy in its exchange line but leaves it out of
+        GST and the total, and this mode does the same, so there the components add up
+        to more than the total by that IPFT (Rs 0.04 a side on one USDINR lot at 88.33).
     schedules : list of dict, optional
         User schedule versions, in the shape `costs.schedules()` returns (dates may
         be date objects or ISO strings). They go through the same validation and

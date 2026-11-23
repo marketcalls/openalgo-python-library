@@ -61,7 +61,9 @@ frame to `contract_note()` to round once per trade day and contract note, which 
 what a broker does (the exact rule is an assumption, reported with the result).
 `calculator` reproduces the Zerodha brokerage calculator under brokerage="zerodha", to
 the paisa for equity, equity and currency derivatives and within one paisa for MCX
-futures and options, and is meant for parity checks.
+futures and options, and is meant for parity checks. As that calculator does, on NSE
+currency futures it shows the IPFT levy in the exchange charge but leaves it out of GST
+and the total, so there the components add up to more than the total by the IPFT.
 """
 
 from collections.abc import Mapping

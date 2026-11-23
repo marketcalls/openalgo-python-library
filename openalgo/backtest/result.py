@@ -249,7 +249,10 @@ class Result(AnalysisMethods, ExportMethods):
         paid them, plus its DP charge; the column adds up to the run's charges), the cost
         schedule version, whether its rates are verified for the date, and the trade id
         once the trade has closed. Empty for a run with costs=None; `attrs["rounding"]`
-        is the rounding mode."""
+        is the rounding mode. In calculator rounding (a parity mode) an NSE currency
+        future's `exchange_txn` includes the IPFT levy, which `gst` and `cost` leave
+        out as the broker's calculator does, so its six components add up to more than
+        `cost` by the IPFT; in contract-note rounding (the default) they add up."""
         schedules = self._manifest.get("cost_schedules", [])
         return _result_costs.cost_frame(self._output, self._symbols, schedules)
 
