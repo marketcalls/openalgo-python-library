@@ -1646,6 +1646,58 @@ Telegram Alert Response:
 }
 ```
 
+### Discord Alert Example
+
+Posts to the Discord channel webhook saved on OpenAlgo's `/discord` page, while
+Discord is switched on at `/alerts`. At most 2000 characters; mentions are shown
+as text. The message is queued by default; `wait_for_delivery=True` posts it
+first and reports whether Discord accepted it. 30 requests per minute.
+
+```python
+response = client.discord("**NIFTY** crossed 26000!")
+print(response)
+```
+
+Discord Alert Response:
+
+```json
+{
+  "status": "success",
+  "message": "Notification queued."
+}
+```
+
+A refusal comes back with the server's message and the HTTP status in `code`:
+
+```json
+{
+  "status": "error",
+  "message": "Discord alerts are turned off. Turn them on from the Alerts page in OpenAlgo.",
+  "code": 409
+}
+```
+
+### Slack Alert Example
+
+Posts to the Slack incoming webhook saved on OpenAlgo's `/slack` page, while
+Slack is switched on at `/alerts`. At most 4000 characters; the server escapes
+`&`, `<` and `>`, so send the message as written. Queued by default, or posted
+first with `wait_for_delivery=True`. 30 requests per minute.
+
+```python
+response = client.slack("*NIFTY* crossed 26000!", wait_for_delivery=True)
+print(response)
+```
+
+Slack Alert Response:
+
+```json
+{
+  "status": "success",
+  "message": "Message sent to Slack."
+}
+```
+
 ### Funds Example
 
 ```python
@@ -1700,6 +1752,59 @@ Margin Response:
     "total_margin_required": 91555.7625,
     "span_margin": 0.0,
     "exposure_margin": 91555.7625
+  }
+}
+```
+
+### Charges Example
+
+Brokerage and statutory charges for one order, before it is placed. Quantity is
+in units (one NIFTY lot of 65 is 65) and price is per unit: the premium for an
+option, the last traded price for a MARKET order. The figures are OpenAlgo's
+estimate under the brokerage plan saved on its `/sandbox/commissions` page;
+DP charges and STT on an exercised option are not included.
+
+```python
+response = client.charges(
+    symbol="RELIANCE",
+    exchange="NSE",
+    action="BUY",
+    product="CNC",
+    quantity=50,
+    price=1350
+)
+print(response)
+```
+
+Charges Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "product": "CNC",
+    "action": "BUY",
+    "quantity": 50,
+    "price": 1350.0,
+    "segment": "Equity Delivery",
+    "trade_value": 67500.0,
+    "charges": {
+      "total": 104.13,
+      "brokerage": 20.0,
+      "taxes": {
+        "gst": 3.99,
+        "stt": 68.0,
+        "stamp_duty": 10.0
+      },
+      "other_charges": {
+        "transaction": 2.0,
+        "clearing": 0.0,
+        "ipft": 0.07,
+        "sebi_turnover": 0.07
+      }
+    }
   }
 }
 ```
