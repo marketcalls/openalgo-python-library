@@ -127,10 +127,63 @@ def test_a_restart_with_other_parameters_records_both_version_ids(world):
 
 
 def test_a_restart_with_other_parameters_says_so_in_the_banner(world):
+    # BuyAndHold holds 3 bars; the restart is given 4.
     two_starts(world, {"hold": 4})
     assert (
         f"BuyAndHold: its version changed since the day's earlier start, from {OWN} to "
-        f"{HOLD_4} (its code or its parameters)"
+        f"{HOLD_4} (its code or its parameters; the parameters whose values changed: hold 3 "
+        "to 4)"
+    ) in world.lines
+
+
+def deciding(self, bar):
+    """BuyAndHold's decision, called from a function of its own: other compiled code."""
+    BuyAndHold.on_bar(self, bar)
+
+
+def test_a_restart_with_edited_code_says_so_in_the_banner_with_no_parameter_named(world):
+    # A class built at run time whose on_bar differs between the starts, its parameters
+    # the same: nothing in the run manifests says which part of the code changed.
+    first = type("Edited", (BuyAndHold,), {"on_bar": BuyAndHold.on_bar})
+    second = type("Edited", (BuyAndHold,), {"on_bar": deciding})
+    world.stop_at(ist(14, 43))
+    live(world, first)
+    world.stop = StopFlag()
+    world.stop_at(ist(14, 45))
+    live(world, second)
+    before, after = version_of(first, None).version_id, version_of(second, None).version_id
+    assert (
+        f"Edited: its version changed since the day's earlier start, from {before} to "
+        f"{after} (its code or its parameters)"
+    ) in world.lines
+
+
+def trading_once(self, bar):
+    """BuyAndHold's decision, after noting on the class that the strategy has traded."""
+    type(self).traded = True
+    BuyAndHold.on_bar(self, bar)
+
+
+def test_a_flag_the_strategy_sets_on_its_class_moves_its_version_at_a_restart(world):
+    # The id follows the class's values when a start begins (2.4.1 item W-5): the first
+    # start sets `traded`, a parameter, on the class, so the restart in the same process
+    # runs another version and the banner names the value that moved. Run state belongs in
+    # self.state or on the instance.
+    Marks = type("Marks", (BuyAndHold,), {"traded": False, "on_bar": trading_once})
+    before = version_of(Marks, None).version_id
+    world.stop_at(ist(14, 43))
+    live(world, Marks)
+    assert Marks.traded is True
+    after = version_of(Marks, None).version_id
+    world.stop = StopFlag()
+    world.stop_at(ist(14, 45))
+    live(world, Marks)
+    [changed] = events(world, "version_changed")
+    assert (changed["earlier"], changed["now"]) == (before, after)
+    assert (
+        f"Marks: its version changed since the day's earlier start, from {before} to "
+        f"{after} (its code or its parameters; the parameters whose values changed: traded "
+        "false to true)"
     ) in world.lines
 
 

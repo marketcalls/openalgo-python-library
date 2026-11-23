@@ -13,17 +13,24 @@ The classes are `version_cells`': `Cell` of a notebook cell, and the cell's edit
 
 from __future__ import annotations
 
+import abc
 import hashlib
 import os
 import pathlib
 import subprocess
 import sys
+import typing
 
 import pytest
 from version_cells import CELL, EDITS, KEPT, edited, from_cell, with_member
 
 import openalgo.backtest as bt
-from openalgo.backtest._live._version_id import Started, StartVersions, version_of
+from openalgo.backtest._live._version_id import (
+    Started,
+    StartVersions,
+    moved_parameters,
+    version_of,
+)
 from openalgo.backtest._manifest import strategy_source_hash
 
 HERE = pathlib.Path(__file__).parent
@@ -433,3 +440,170 @@ def test_the_banner_keeps_its_words_for_a_class_whose_code_cannot_be_read_either
         "Opaque: its source was not hashed (a class built at run time): its version id "
         "hashes its name and parameters only"
     ]
+
+
+# ----- Python's own ABC and Protocol entries (2.4.1 item W-3) -------------------------------
+
+#: Nested classes Python's abc and typing modules build entries for, each opened by its
+#: first line (or lines) in `Cell`'s body.
+ABSTRACT = {
+    "an ABC": "class Feed(abc.ABC):\n",
+    "an ABCMeta class": "class Feed(metaclass=abc.ABCMeta):\n",
+    "a Protocol": "class Feed(typing.Protocol):\n",
+    "a runtime-checkable Protocol": "@typing.runtime_checkable\n    class Feed(typing.Protocol):\n",
+}
+#: The body each class of `ABSTRACT` is given: an attribute and a method a trader writes.
+FEED_BODY = "        width = 2\n\n        def price(self):\n            return 500.0\n"
+
+
+def feed_holder(head: str, body: str = FEED_BODY) -> type:
+    """`Cell` holding the nested class that `head` opens, with `body`."""
+    return from_cell("import abc\n" + PRELUDE + with_member(head + body))
+
+
+@pytest.mark.parametrize("head", list(ABSTRACT.values()), ids=list(ABSTRACT))
+def test_a_nested_abc_or_protocol_names_none_of_pythons_own_entries_for_the_banner(head):
+    # abc keeps a cache of each class's subclasses on it (`_abc_impl`), whose text names
+    # its memory address: it is Python's, not a value of the trader's.
+    assert version_of(feed_holder(head), None).by_type == ()
+
+
+@pytest.mark.parametrize("head", list(ABSTRACT.values()), ids=list(ABSTRACT))
+def test_an_edit_of_a_nested_abc_or_protocol_still_gives_a_new_version_id(head):
+    before = version_of(feed_holder(head), None).version_id
+    method = feed_holder(head, FEED_BODY.replace("500.0", "505.0"))
+    attribute = feed_holder(head, FEED_BODY.replace("= 2", "= 3"))
+    assert version_of(method, None).version_id != before
+    assert version_of(attribute, None).version_id != before
+
+
+def nested_in_built(nested: type) -> type:
+    """A class built at run time, `Built`, holding `nested` (named `Built.Feed`) as `Feed`."""
+    nested.__qualname__ = "Built.Feed"
+    members = {"symbol": "SBIN", "exchange": "NSE", "Feed": nested}
+    return type("Built", (bt.Strategy,), members)
+
+
+def built_id(base: str) -> str:
+    """By hand, the version id of `Built` holding a `Feed` whose only entry of its own is
+    `width = 2`, with the base `base`: the compiled code hash of its canonical text, with
+    no parameters."""
+    feed = (
+        f'{{"bases":["{base}"],"class":{{"attributes":{{"width":2}},"functions":{{}},'
+        '"name":"Built.Feed"}}'
+    )
+    code = (
+        f'{{"classes":[{{"attributes":{{"Feed":{feed},"exchange":"NSE","symbol":"SBIN"}},'
+        f'"functions":{{}},"name":"Built"}}],"python":"{PYTHON}"}}'
+    )
+    source = f"compiled:sha256:{by_hand(code)}"
+    return by_hand(f'{{"parameters":{{}},"source":"{source}"}}')[:12]
+
+
+def test_an_abcs_cache_is_left_out_of_the_hash():
+    feed = type("Feed", (abc.ABC,), {"width": 2})
+    assert version_of(nested_in_built(feed), None).version_id == built_id("abc.ABC")
+
+
+@pytest.mark.parametrize("checkable", [False, True], ids=["a Protocol", "runtime-checkable"])
+def test_a_protocols_own_flags_and_hooks_are_left_out_of_the_hash(checkable):
+    # typing sets its flags, its subclass hook and an __init__ on the class: Python's code,
+    # the same for every Protocol, none of it the trader's.
+    feed = type("Feed", (typing.Protocol,), {"width": 2})
+    if checkable:
+        feed = typing.runtime_checkable(feed)
+    assert version_of(nested_in_built(feed), None).version_id == built_id("typing.Protocol")
+
+
+def test_a_protocols_own_init_is_still_hashed():
+    own = "class Feed(typing.Protocol):\n        def __init__(self):\n            self.n = 1\n"
+    before = version_of(feed_holder(own, ""), None).version_id
+    edited_init = own.replace("self.n = 1", "self.n = 2")
+    assert version_of(feed_holder(edited_init, ""), None).version_id != before
+
+
+# ----- a nested Flag's boundary (2.4.1 item W-4) -----------------------------------------------
+
+#: A Flag nested in `Cell`, with the boundary it is given.
+BITS = "class Bits(enum.Flag, boundary=enum.STRICT):\n        RED = 1\n        BLUE = 2\n"
+
+
+def test_an_edit_of_a_nested_flags_boundary_gives_a_new_version_id():
+    # The boundary decides what a value outside the members becomes (an error, the
+    # members it holds, a plain int): part of what the class does.
+    before = version_of(holding(BITS), None).version_id
+    conform = BITS.replace("enum.STRICT", "enum.CONFORM")
+    assert version_of(holding(conform), None).version_id != before
+
+
+def test_a_nested_flag_built_twice_gets_one_version_id_and_names_nothing():
+    first, second = version_of(holding(BITS), None), version_of(holding(BITS), None)
+    assert first.version_id == second.version_id
+    assert first.by_type == ()
+
+
+# ----- a value the strategy rebinds on its class as it runs (2.4.1 item W-5) ----------------
+
+
+def test_a_class_attribute_rebound_as_the_strategy_runs_moves_the_version_id():
+    # The id follows the class's attribute values when the session starts: a counter kept
+    # on the class gives the next start in the same process another id.
+    cell = from_cell(with_member("_count = 0"))
+    before = version_of(cell, None).version_id
+    cell._count += 1
+    assert version_of(cell, None).version_id != before
+
+
+def test_a_nested_class_attribute_rebound_as_the_strategy_runs_moves_the_version_id():
+    cell = from_cell(with_member("class Tally:\n        count = 0\n"))
+    before = version_of(cell, None).version_id
+    cell.Tally.count += 1
+    assert version_of(cell, None).version_id != before
+
+
+def test_a_counter_kept_on_the_instance_keeps_the_version_id():
+    cell = from_cell(with_member("_count = 0"))
+    before = version_of(cell, None).version_id
+    strategy = cell()
+    strategy._count += 1
+    assert (cell._count, version_of(cell, None).version_id) == (0, before)
+
+
+def test_the_banner_names_the_parameters_whose_values_changed_since_the_earlier_start():
+    started = Started(
+        "Cell",
+        "0123456789ab",
+        False,
+        {},
+        earlier="ba9876543210",
+        compiled_under="CPython 3.12",
+        moved=("traded false to true", "fast 9 to 10"),
+    )
+    assert StartVersions((started,)).banner_lines()[1] == (
+        "Cell: its version changed since the day's earlier start, from ba9876543210 to "
+        "0123456789ab (its code or its parameters; the parameters whose values changed: "
+        "traded false to true, fast 9 to 10)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("earlier", "now", "moved"),
+    [
+        ({"fast": 9, "traded": False}, {"fast": 9, "traded": True}, ("traded false to true",)),
+        ({"fast": 9}, {"fast": 9}, ()),
+        ({"fast": 9}, {"fast": 9, "slow": 21}, ("slow unset to 21",)),
+        ({"fast": 9, "slow": 21}, {"fast": 9}, ("slow 21 to unset",)),
+        ({"symbol": "SBIN"}, {"symbol": "INFY"}, ('symbol "SBIN" to "INFY"',)),
+    ],
+    ids=["a flag set", "none", "one added", "one removed", "a name"],
+)
+def test_the_parameters_that_moved_are_read_from_the_two_starts_manifests(earlier, now, moved):
+    def manifest(parameters):
+        return {"strategy": {"name": "Cell", "parameters": parameters}}
+
+    assert moved_parameters(manifest(earlier), manifest(now)) == moved
+
+
+def test_a_manifest_without_parameters_moves_none():
+    # A row of the journal written before the manifests named parameters reads as none.
+    assert moved_parameters({}, {"strategy": {"parameters": {}}}) == ()

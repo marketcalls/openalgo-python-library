@@ -27,9 +27,12 @@ own, in name order:
   datetime.time(9, 20). Python's own entries (`__module__`, `__doc__` and the like) are
   not hashed, nor those Python derives from the rest of a class it builds: an Enum's
   `_sunder_` entries (its member tables and the like) other than the functions a trader
-  writes there (such as `_missing_`), and a named tuple's `_field_defaults` (its
-  `__new__`'s default values, hashed with `__new__`). An Enum's members and their values
-  are hashed, so an edit of them still changes the hash.
+  writes there (such as `_missing_`), a named tuple's `_field_defaults` (its `__new__`'s
+  default values, hashed with `__new__`), an ABC's cache of its subclasses (`ABC_CACHE`),
+  and a Protocol's flags (`PROTOCOL_FLAGS`) and the hooks typing gives one that does not
+  define them (`PROTOCOL_HOOKS`; a hook the trader writes is hashed). An Enum's members
+  and their values are hashed, and a Flag's boundary with them (`FLAG_BOUNDARY`), so an
+  edit of either still changes the hash.
 
 A value Python cannot hash, at any depth (a list, dict, set or bytearray, a writable
 memoryview, a DataFrame, an ndarray, a dataclass that is not frozen: a value the strategy
@@ -45,22 +48,28 @@ name.
 
 Line numbers are not part of compiled code, so moving the class down its cell or adding a
 comment keeps the hash, while an edit of a method's body, a constant, a default argument
-or a class attribute changes it. Compiled code depends on the Python version, so the hashed
-text names it (`python_version`, "CPython 3.12"): the hash is the same in every process of
-that version, whatever its hash seed (every set's items are sorted), and another version
-gives another. A class whose code cannot be read at all, one that holds callables none of
-which is a Python function (every one a builtin or an object called as a method), gets
-None: its version id hashes its name instead (`_version_id`).
+or a class attribute changes it. The values are read as they are when the hash is taken,
+at each start: an immutable value the strategy rebinds on its class as it runs (an int
+counter kept on the class or on a nested class) changes the hash of the next start in the
+same process, so run state belongs in `self.state` or on the instance (`_version_id`).
+Compiled code depends on the Python version, so the hashed text names it
+(`python_version`, "CPython 3.12"): the hash is the same in every process of that version,
+whatever its hash seed (every set's items are sorted), and another version gives another.
+A class whose code cannot be read at all, one that holds callables none of which is a
+Python function (every one a builtin or an object called as a method), gets None: its
+version id hashes its name instead (`_version_id`).
 """
 
 from __future__ import annotations
 
+import abc
 import enum
 import functools
 import hashlib
 import inspect
 import platform
 import sys
+import typing
 from dataclasses import dataclass, field
 from types import BuiltinFunctionType, CodeType, FunctionType, ModuleType
 from typing import Any
@@ -70,6 +79,18 @@ from ._version_values import canonical_json, canonical_value
 
 #: The start of a compiled code hash, which stands in a version id where a source hash would.
 COMPILED_PREFIX = "compiled:sha256:"
+#: The entry `abc.ABCMeta` keeps on each class it builds in CPython: its cache of the
+#: subclasses registered and checked, whose text names its memory address.
+ABC_CACHE = "_abc_impl"
+#: The flags `typing.Protocol` sets on each class built from it: whether the class is a
+#: protocol, and whether `typing.runtime_checkable` marked it.
+PROTOCOL_FLAGS = frozenset({"_is_protocol", "_is_runtime_protocol"})
+#: The hooks `typing.Protocol` gives a class that does not define them itself: the subclass
+#: check, and an `__init__` that refuses to build a protocol.
+PROTOCOL_HOOKS = frozenset({"__init__", "__subclasshook__"})
+#: The entry an Enum of `enum.Flag` keeps its `boundary=` in: what a value outside its
+#: members becomes (an error, the members it holds, a plain int), so part of what it does.
+FLAG_BOUNDARY = "_boundary_"
 
 
 @dataclass(frozen=True)
@@ -141,10 +162,27 @@ def _class(klass: type, reading: _Reading, prefix: str = "") -> dict[str, Any]:
 def _derived(klass: type, name: str, held: list[Any]) -> bool:
     """True for an entry `name` of `klass` that Python derives from the rest of a class it
     builds (module docstring): an Enum's `_sunder_` entry that holds no Python function
-    (`held` are the callables it holds), or a named tuple's `_field_defaults`."""
+    (`held` are the callables it holds) other than a Flag's boundary, a named tuple's
+    `_field_defaults`, an ABC's cache and a Protocol's own entries (`_protocol_entry`)."""
     if isinstance(klass, enum.EnumType) and _is_sunder(name):
+        if name == FLAG_BOUNDARY and issubclass(klass, enum.Flag):
+            return False
         return not any(isinstance(each, FunctionType) for each in held)
+    if name == ABC_CACHE and isinstance(klass, abc.ABCMeta):
+        return True
+    if typing.Protocol in klass.__mro__ and _protocol_entry(name, held):
+        return True
     return name == "_field_defaults" and issubclass(klass, tuple)
+
+
+def _protocol_entry(name: str, held: list[Any]) -> bool:
+    """True for an entry `name` that Python's typing module sets on a Protocol class: one
+    of its flags (`PROTOCOL_FLAGS`), or a hook of `PROTOCOL_HOOKS` whose callables (`held`)
+    are all typing's own functions, not a trader's."""
+    if name in PROTOCOL_FLAGS:
+        return True
+    typing_own = [getattr(each, "__module__", None) == typing.__name__ for each in held]
+    return name in PROTOCOL_HOOKS and bool(typing_own) and all(typing_own)
 
 
 def _is_sunder(name: str) -> bool:

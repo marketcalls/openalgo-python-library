@@ -23,6 +23,16 @@ where a value Python cannot hash (one the strategy may change as it runs, such a
 is also known by its type alone (`_version_code`), since a change to it does not change the
 id. The banner's lines and each start's record of the versions are `StartVersions`
 (written by `_session_versions`).
+
+The id follows the class's attribute values as they are when the session starts: its
+parameters' always, and for a class hashed by its compiled code every class attribute's, a
+nested class's too. A value the strategy rebinds on its class as it runs (an int counter or
+a flag kept on the class) is therefore part of the next start's id: a second `bt.live` in
+the same process, such as a notebook kernel, runs another version though nothing was
+edited, and its banner says the version changed. Keep run state in `self.state` or on the
+instance (`self.count`), not on the class. When the version changed, the banner names each
+parameter whose value differs between the two starts' run manifests (`moved_parameters`);
+the manifests hold no other class attribute, so a change elsewhere is not named.
 """
 
 from __future__ import annotations
@@ -89,8 +99,9 @@ class Started:
     """One strategy's version at this start: its name, `version_id`, whether its source was
     hashed, its run `manifest` (JSON types), the version id of the day's latest earlier
     start of it (`earlier`, None at its first start of the day), the values hashed by
-    their type alone (`by_type`) and the Python its compiled code was hashed under
-    (`compiled_under`, as `StrategyVersion`'s)."""
+    their type alone (`by_type`), the Python its compiled code was hashed under
+    (`compiled_under`, as `StrategyVersion`'s) and, in words, each parameter whose value
+    differs from that earlier start's (`moved`, `moved_parameters`)."""
 
     name: str
     version_id: str
@@ -99,11 +110,35 @@ class Started:
     earlier: str | None = None
     by_type: tuple[str, ...] = ()
     compiled_under: str | None = None
+    moved: tuple[str, ...] = ()
 
     @property
     def changed(self) -> bool:
         """True when an earlier start of the day ran the strategy at another version."""
         return self.earlier is not None and self.earlier != self.version_id
+
+
+def moved_parameters(earlier: Mapping[str, Any], now: Mapping[str, Any]) -> tuple[str, ...]:
+    """Each parameter whose value differs between two run manifests of a strategy, the
+    day's `earlier` start's and this one's (`now`), in words: its name, its earlier value
+    and its value now as canonical JSON ("hold 3 to 4"; "unset" for a side that has no
+    such parameter), this start's parameters first, in their order, then those only the
+    earlier start had. A manifest that names no parameters has none."""
+    before, after = _parameters(earlier), _parameters(now)
+    names = [*after, *(name for name in before if name not in after)]
+    shown = [(name, _shown(before, name), _shown(after, name)) for name in names]
+    return tuple(f"{name} {old} to {new}" for name, old, new in shown if old != new)
+
+
+def _parameters(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The parameter values a run manifest holds (`_manifest.build_manifest`)."""
+    return (manifest.get("strategy") or {}).get("parameters") or {}
+
+
+def _shown(parameters: Mapping[str, Any], name: str) -> str:
+    """A parameter's value as `moved_parameters` writes and compares it: as canonical JSON,
+    so True and 1 differ as the version id's text does."""
+    return canonical_json(parameters[name]) if name in parameters else "unset"
 
 
 @dataclass(frozen=True)
@@ -125,19 +160,14 @@ class StartVersions:
 
     def banner_lines(self) -> list[str]:
         """The start banner's lines (`_session_versions`): the version ids, then each
-        strategy whose version changed since the day's earlier start, each whose source
-        was not hashed (and what was hashed instead), and each with values hashed by their
-        type alone (`by_type`)."""
+        strategy whose version changed since the day's earlier start (with the parameters
+        whose values changed, `moved`), each whose source was not hashed (and what was
+        hashed instead), and each with values hashed by their type alone (`by_type`)."""
         if not self.started:
             return []
         ids = ", ".join(f"{one.name} {one.version_id}" for one in self.started)
         lines = [f"Versions: {ids}"]
-        lines += [
-            f"{one.name}: its version changed since the day's earlier start, from "
-            f"{one.earlier} to {one.version_id} (its code or its parameters)"
-            for one in self.started
-            if one.changed
-        ]
+        lines += [_changed_line(one) for one in self.started if one.changed]
         lines += [_not_hashed_line(one) for one in self.started if not one.source_hashed]
         lines += [
             f"{one.name}: {', '.join(one.by_type)} has no fixed text of its value (an object "
@@ -148,6 +178,16 @@ class StartVersions:
             if one.by_type
         ]
         return lines
+
+
+def _changed_line(one: Started) -> str:
+    """The banner's line of a strategy whose version changed since the day's earlier start,
+    naming the parameters whose values changed when any did."""
+    moved = f"; the parameters whose values changed: {', '.join(one.moved)}" if one.moved else ""
+    return (
+        f"{one.name}: its version changed since the day's earlier start, from {one.earlier} "
+        f"to {one.version_id} (its code or its parameters{moved})"
+    )
 
 
 def _not_hashed_line(one: Started) -> str:
@@ -171,6 +211,7 @@ __all__ = [
     "StartVersions",
     "Started",
     "StrategyVersion",
+    "moved_parameters",
     "parameter_values",
     "version_of",
 ]
