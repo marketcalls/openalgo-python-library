@@ -171,7 +171,9 @@ class PortfolioResult(PortfolioExport):
         drawdown, closed trades with their win rate and the positions still open, its
         benchmark's return when it has one, and the quick overfitting checks of each
         strategy's own trades on a line each, none of the trades together
-        (`_portfolio_report`). Raises ConfigError when the run has no equity point."""
+        (`_portfolio_report`); first, the line of a run that states its scope (a restarted
+        live session's, which covers its start only: `assumptions["scope"]`). Raises
+        ConfigError when the run has no equity point."""
         return _portfolio_report.summary(self)
 
     def tearsheet(

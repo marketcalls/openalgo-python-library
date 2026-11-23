@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `bt.live`: the start banner's "its version changed since the day's earlier start" line now names each parameter whose value differs from that start's, for example "(its code or its parameters; the parameters whose values changed: hold 3 to 4)". A set parameter, or an object known by its memory address, is not named: its text does not show a change reliably (the version id still moves). For a strategy class defined in a notebook, the line reads "(its code, its parameters or a value kept on its class; keep run state in self.state or on the instance)".
+  - A strategy's version id follows its class's values as they are when the session starts. So a value the strategy changes on its class as it runs (a counter or a flag kept on the class) gives a second `bt.live` in the same notebook kernel a new version id. Keep run state in `self.state` or on the instance (`self.count`), not on the class. `SessionResult`'s documentation says so.
+
+### Fixed
+
+- `bt.live`: after a restart, `result.portfolio.summary()` says in its first line that it covers this start only, for example "From the restart at 14:15 IST (start 2 of the day): the day's figures across restarts are in the session summary (SessionResult.summary_text())". The combined tearsheet's Assumptions block has the same line, as `scope`. A first start's summary and tearsheet are unchanged. (Seen in the sandbox session of 2026-11-23: after a restart the account summary showed 6 trades and the day summary 8.)
+- `bt.live`: the daily summary's Charges line now names what the contract notes charged beside the modelled figure when the two differ at the paisa, for example "Charges : Rs 1,998.75 (modelled per fill; Rs 1,997.00 on the contract notes)". A contract note rounds STT and stamp duty to whole rupees; naming both figures lets you reconcile the day's net P&L with the strategies' net profit. The figure is `result.summary.notes_charges`: given at the day's first start, None after a restart (whose results cover that start only). Net P&L stays the modelled figure, and the line is unchanged when the two agree.
+- `bt.live`, a strategy class defined in a notebook: a class nested in it that is an ABC or a Protocol no longer names Python's `_abc_impl` on the banner's line of values hashed by their type, and Python's own ABC and Protocol entries are left out of the version id. A nested Flag's boundary is now part of the version id, so editing it gives a new one. Such a class (one holding a nested ABC, Protocol, Flag or IntFlag) gets a new version id once with this release: a restart on the day of the upgrade reports a version change for it.
+
 ## [2.4.0] - 2026-11-22
 
 ### Added
