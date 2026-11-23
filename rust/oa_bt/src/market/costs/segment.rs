@@ -11,7 +11,7 @@ use crate::model::Exchange;
 use super::error::{CostError, NameKind};
 
 /// Number of segments, and the length of the rate table in a schedule.
-pub const SEGMENT_COUNT: usize = 22;
+pub const SEGMENT_COUNT: usize = 25;
 
 /// One row of the rate card. The discriminant is the stable id used by the batch
 /// API and the Python binding.
@@ -64,6 +64,12 @@ pub enum Segment {
     /// MCX futures on an agri commodity that is not in rule 3 of the CTT Rules 2013,
     /// so not exempt from CTT (CTT on sells), at the standard exchange rate.
     McxFutAgriCtt = 21,
+    /// MCX options on a non-agri commodity (charges on premium value, CTT on sells).
+    McxOpt = 22,
+    /// NSE currency futures (USDINR, EURINR, GBPINR, JPYINR; no STT).
+    CdsFut = 23,
+    /// NSE currency options (charges on premium value; no STT).
+    CdsOpt = 24,
 }
 
 /// Which rule of a brokerage preset applies to a segment.
@@ -108,19 +114,22 @@ pub enum NoteGroup {
     BseFo = 3,
     /// MCX commodity derivatives.
     Mcx = 4,
+    /// NSE currency derivatives.
+    NseCds = 5,
 }
 
 impl NoteGroup {
     /// Every note group, in id order.
-    pub const ALL: [NoteGroup; 5] = [
+    pub const ALL: [NoteGroup; 6] = [
         NoteGroup::NseCash,
         NoteGroup::BseCash,
         NoteGroup::NseFo,
         NoteGroup::BseFo,
         NoteGroup::Mcx,
+        NoteGroup::NseCds,
     ];
 
-    /// A short code for listings: NSE_EQ, BSE_EQ, NFO, BFO, MCX.
+    /// A short code for listings: NSE_EQ, BSE_EQ, NFO, BFO, MCX, CDS.
     pub fn code(self) -> &'static str {
         match self {
             NoteGroup::NseCash => "NSE_EQ",
@@ -128,6 +137,7 @@ impl NoteGroup {
             NoteGroup::NseFo => "NFO",
             NoteGroup::BseFo => "BFO",
             NoteGroup::Mcx => "MCX",
+            NoteGroup::NseCds => "CDS",
         }
     }
 }
@@ -161,7 +171,7 @@ const fn info(
 #[rustfmt::skip]
 const TABLE: [SegmentInfo; SEGMENT_COUNT] = {
     use BrokerageClass::{Delivery, Futures, Intraday, Options};
-    use Exchange::{Bfo, Bse, Mcx, Nfo, Nse};
+    use Exchange::{Bfo, Bse, Cds, Mcx, Nfo, Nse};
     [
         info(Segment::NseEqDelivery, "NSE_EQ_DELIVERY", Nse, Delivery, "NSE equity delivery (CNC)"),
         info(Segment::NseEqIntraday, "NSE_EQ_INTRADAY", Nse, Intraday, "NSE equity intraday (MIS)"),
@@ -185,11 +195,14 @@ const TABLE: [SegmentInfo; SEGMENT_COUNT] = {
         info(Segment::McxFutKapas, "MCX_FUT_KAPAS", Mcx, Futures, "MCX KAPAS futures (agri, own exchange rate until 2024-09-30)"),
         info(Segment::BfoOptOther, "BFO_OPT_OTHER", Bfo, Options, "BSE Sensex 50 and stock options (charges on premium)"),
         info(Segment::McxFutAgriCtt, "MCX_FUT_AGRI_CTT", Mcx, Futures, "MCX futures, agri commodity outside the CTT exemption, at the standard exchange rate (CTT on sells)"),
+        info(Segment::McxOpt, "MCX_OPT", Mcx, Options, "MCX options on a non-agri commodity (charges on premium, CTT on sells)"),
+        info(Segment::CdsFut, "CDS_FUT", Cds, Futures, "NSE currency futures (no STT)"),
+        info(Segment::CdsOpt, "CDS_OPT", Cds, Options, "NSE currency options (charges on premium, no STT)"),
     ]
 };
 
-/// Codes of real segments that are deliberately not costed yet.
-const NOT_COSTED_YET: [&str; 5] = ["CDS_FUT", "CDS_OPT", "BCD_FUT", "BCD_OPT", "MCX_OPT"];
+/// Codes of real segments that are deliberately not costed yet: BSE currency derivatives.
+const NOT_COSTED_YET: [&str; 2] = ["BCD_FUT", "BCD_OPT"];
 
 impl Segment {
     /// Every segment, in id order.
@@ -225,15 +238,17 @@ impl Segment {
 
     /// Parse a segment code (exact, upper case).
     ///
-    /// Errors: `UnsupportedSegment` for a currency or MCX options code, which names a
-    /// real segment this engine does not cost yet, and `UnknownName` for anything
-    /// else that does not match.
+    /// Errors: `UnsupportedSegment` for a BSE currency derivatives code (BCD_FUT,
+    /// BCD_OPT), which names a real segment this engine does not cost yet, and
+    /// `UnknownName` for anything else that does not match.
     pub fn from_code(code: &str) -> Result<Segment, CostError> {
         if let Some(found) = TABLE.iter().find(|row| row.code == code) {
             return Ok(found.segment);
         }
         if NOT_COSTED_YET.contains(&code) {
-            return Err(CostError::UnsupportedSegment(format!("segment {code}")));
+            return Err(CostError::UnsupportedSegment(format!(
+                "segment {code} (BSE currency derivatives)"
+            )));
         }
         Err(CostError::unknown(NameKind::Segment, code))
     }
@@ -269,7 +284,8 @@ impl Segment {
             Exchange::Bse => NoteGroup::BseCash,
             Exchange::Nfo => NoteGroup::NseFo,
             Exchange::Bfo => NoteGroup::BseFo,
-            // Every remaining segment is an MCX future.
+            Exchange::Cds => NoteGroup::NseCds,
+            // Every remaining segment is an MCX future or option.
             _ => NoteGroup::Mcx,
         }
     }

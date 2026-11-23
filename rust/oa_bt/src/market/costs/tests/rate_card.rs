@@ -140,7 +140,10 @@ fn exchange_txn_bse_row() {
 #[test]
 fn only_nse_segments_carry_an_ipft_levy() {
     for segment in Segment::ALL {
-        let on_nse = matches!(segment.exchange(), Exchange::Nse | Exchange::Nfo);
+        let on_nse = matches!(
+            segment.exchange(),
+            Exchange::Nse | Exchange::Nfo | Exchange::Cds
+        );
         assert_eq!(
             current_rates(segment).ipft_rate > 0.0,
             on_nse,

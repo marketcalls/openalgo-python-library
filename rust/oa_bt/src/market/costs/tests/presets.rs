@@ -3,7 +3,7 @@
 use crate::model::Side;
 
 use super::super::{
-    Brokerage, BrokerageClass, BrokerageRule, CostError, DpFeeSource, NameKind, Segment,
+    Brokerage, BrokerageClass, BrokerageRule, CostError, CostModel, DpFeeSource, NameKind, Segment,
 };
 use super::{accrual_model, assert_close, model_with, snapshot_day};
 
@@ -22,8 +22,76 @@ fn brokerage_everywhere(preset: Brokerage) -> Vec<(Segment, f64)> {
 }
 
 #[test]
-fn zerodha_is_the_default_preset() {
-    assert_eq!(Brokerage::default(), Brokerage::zerodha());
+fn standard_is_the_default_preset() {
+    assert_eq!(Brokerage::default(), Brokerage::standard());
+    let model = CostModel::builtin().unwrap();
+    assert_eq!(*model.brokerage(), Brokerage::standard());
+}
+
+#[test]
+fn standard_preset_rules() {
+    // The maintainer's rules of 2026-11-23 and the lead's ruling: delivery 2.5 percent
+    // or Rs 20, intraday 0.1 percent or Rs 20, futures 0.03 percent or Rs 20, options a
+    // flat Rs 20, each per executed order.
+    let capped = |rate| BrokerageRule::Rate { rate, cap: 20.0 };
+    let rows = [
+        (BrokerageClass::Delivery, capped(0.025)),
+        (BrokerageClass::Intraday, capped(0.001)),
+        (BrokerageClass::Futures, capped(0.0003)),
+        (BrokerageClass::Options, BrokerageRule::Flat(20.0)),
+    ];
+    for (class, rule) in rows {
+        assert_eq!(*Brokerage::standard().rule(class), rule, "{class:?}");
+    }
+}
+
+#[test]
+fn standard_brokerage_on_equity_is_rs_20_or_the_lower_percentage() {
+    // Worked by hand. Delivery: 2.5 percent of Rs 1,14,000 is Rs 2,850, so Rs 20; of
+    // Rs 500 it is Rs 12.50. Intraday: 0.1 percent of Rs 1,14,000 is Rs 114, so Rs 20; of
+    // Rs 5,000 it is Rs 5.00. Zerodha charges no delivery brokerage.
+    let standard = model_with(Brokerage::standard());
+    let rows = [
+        (Segment::NseEqDelivery, 114_000.0, 20.0),
+        (Segment::NseEqDelivery, 500.0, 12.5),
+        (Segment::NseEqIntraday, 114_000.0, 20.0),
+        (Segment::NseEqIntraday, 5_000.0, 5.0),
+    ];
+    for (segment, value, brokerage) in rows {
+        for side in [Side::Buy, Side::Sell] {
+            let cost = standard.fill_cost_value(segment, side, value, snapshot_day());
+            assert_close(cost.unwrap().brokerage, brokerage);
+        }
+    }
+    let zerodha = accrual_model().fill_cost_value(
+        Segment::NseEqDelivery,
+        Side::Buy,
+        114_000.0,
+        snapshot_day(),
+    );
+    assert_eq!(zerodha.unwrap().brokerage, 0.0);
+}
+
+#[test]
+fn standard_brokerage_on_derivatives_is_the_zerodha_figure() {
+    // Futures 0.03 percent or Rs 20 (Rs 15 on Rs 50,000; Rs 20 on Rs 2.5 lakh) and
+    // options Rs 20, on every exchange.
+    let standard = model_with(Brokerage::standard());
+    for segment in Segment::ALL {
+        let class = segment.brokerage_class();
+        if !matches!(class, BrokerageClass::Futures | BrokerageClass::Options) {
+            continue;
+        }
+        for (value, futures) in [(50_000.0, 15.0), (ORDER_VALUE, 20.0)] {
+            let cost = standard.fill_cost_value(segment, Side::Sell, value, snapshot_day());
+            let expected = if class == BrokerageClass::Options {
+                20.0
+            } else {
+                futures
+            };
+            assert_close(cost.unwrap().brokerage, expected);
+        }
+    }
 }
 
 #[test]
@@ -194,6 +262,7 @@ fn the_dp_fee_says_where_it_comes_from() {
     // Zerodha publishes its own; other presets borrow it until the caller gives one.
     let rows = [
         (Brokerage::zerodha(), 13.0, DpFeeSource::ZerodhaPreset),
+        (Brokerage::standard(), 13.0, DpFeeSource::ZerodhaStandIn),
         (
             Brokerage::zero_brokerage(),
             13.0,
@@ -227,6 +296,7 @@ fn the_dp_fee_says_where_it_comes_from() {
 
 #[test]
 fn built_in_presets_are_found_by_name() {
+    assert_eq!(Brokerage::from_name("standard"), Ok(Brokerage::standard()));
     assert_eq!(Brokerage::from_name("zerodha"), Ok(Brokerage::zerodha()));
     assert_eq!(
         Brokerage::from_name("zero_brokerage"),
@@ -236,7 +306,7 @@ fn built_in_presets_are_found_by_name() {
 
 #[test]
 fn an_unknown_preset_name_is_an_error() {
-    for name in ["upstox", "Zerodha", "", "flat", "zero"] {
+    for name in ["upstox", "Zerodha", "Standard", "", "flat", "zero"] {
         assert_eq!(
             Brokerage::from_name(name),
             Err(CostError::UnknownName {

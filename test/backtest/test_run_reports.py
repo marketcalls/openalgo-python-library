@@ -64,7 +64,7 @@ def test_a_position_still_open_at_the_end_is_an_open_trade():
 def test_the_tearsheet_is_returned_or_written_with_the_assumptions(charged, tmp_path):
     html = charged.tearsheet()
     assert html.startswith("<!DOCTYPE html>") and "RoundTrip" in html
-    assert "zerodha (contract-note rounding)" in html
+    assert "standard (contract-note rounding)" in html
     target = tmp_path / "report.html"
     assert charged.tearsheet(target) == str(target)
     assert target.read_text(encoding="utf-8") == html
@@ -121,7 +121,7 @@ class EmaCross(bt.Strategy):
 def test_the_quick_start_runs_on_its_defaults_with_no_server():
     df = _five_minute_bars(dt.date(2026, 10, 5), dt.date(2026, 10, 30))
     result = bt.backtest(EmaCross, data=df, capital=200_000)
-    assert result.assumptions["costs"] == "zerodha (contract-note rounding)"
+    assert result.assumptions["costs"] == "standard (contract-note rounding)"
     assert result.assumptions["slippage"] == "default table"
     assert len(result.trades) > 0 and result.costs["total"].sum() > 0
     assert set(result.contract_notes["note_group"]) == {"NSE_EQ"}

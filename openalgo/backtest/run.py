@@ -82,7 +82,7 @@ def backtest(
     delay_entries: int = 0,
     delay_exits: int = 0,
     quantity_mode: str = "venue",
-    costs: str | None = "zerodha",
+    costs: str | None = "standard",
     slippage: Any = "default",
     margin: Any = None,
     product: str | None = None,
@@ -172,9 +172,10 @@ def backtest(
     quantity_mode: "venue" (the default: whole shares of cash equity and whole lots of
         derivatives, as an exchange accepts) or "fractional" (part shares of cash
         equity, for research; derivatives stay in whole lots).
-    costs: "zerodha" (the default) or another preset name, a preset from bt.costs, a
-        bt.costs.CostModel, or None (no charges, with a warning on every report); see
-        `_market`.
+    costs: "standard" (the default: what most brokers charge, Rs 20 or less an order and
+        on equity delivery too), "zerodha" (no delivery brokerage) or "zero_brokerage", a
+        preset from bt.costs, a bt.costs.CostModel, or None (no charges, with a warning on
+        every report); see `_market`.
     slippage: "default" (the dated per-class table), 0, bt.ticks(n), bt.pct(p),
         bt.slippage.bps(b) or bt.slippage.table(...); see `openalgo.backtest.slippage`.
     margin: the margin a futures position blocks. None (the default): 20 percent of the

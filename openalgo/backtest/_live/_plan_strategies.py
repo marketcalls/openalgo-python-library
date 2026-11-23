@@ -7,7 +7,9 @@ run live: `bt.from_signals` and `bt.from_arrays` strategies, strategies on sever
 symbols or a universe, futures series (an `underlying` with an `expiry`), daily or longer
 intervals, CNC and NRML (they need GTT orders live), and condition strategies
 (`entry_when`, `exit_when`, `short_when`, `cover_when`), whose arrays are computed ahead
-over the whole series (decision 5): their rules go in `on_bar`. It then resolves the
+over the whole series (decision 5): their rules go in `on_bar`. A strategy on a currency
+derivatives exchange (CDS, BCD) is refused with ConfigError: currency derivatives are
+backtest-only in 2.4.1, as no supervised sandbox session has traded them. It then resolves the
 strategy's settings for today as `bt.backtest` resolves them (`_settings.resolve`: a
 class attribute wins over the run argument of the same name, except the daily loss
 limit: live it is the `max_daily_loss=` of the call, in rupees, and a class attribute
@@ -53,6 +55,8 @@ from .series import DEFAULT_BASE
 LIVE_PRODUCT = "MIS"
 #: What a condition strategy declares in `init`, as messages name it.
 CONDITIONS = "entry_when, exit_when, short_when, cover_when"
+#: The currency derivatives exchanges, backtest-only in 2.4.1 (`refuse_currency`).
+CURRENCY_EXCHANGES = ("CDS", "BCD")
 
 
 @dataclass(frozen=True)
@@ -91,8 +95,10 @@ class StrategySpec:
 
 def refuse_unsupported(strategy: type[Strategy]) -> None:
     """Raise NotImplementedError for a strategy class 2.3.0 does not run live (module
-    docstring; condition strategies are found by `probe`), ConfigError for one whose
-    interval cannot be built from 1-minute bars."""
+    docstring; condition strategies are found by `probe`), ConfigError for one on a
+    currency derivatives exchange (`refuse_currency`) or whose interval cannot be built
+    from 1-minute bars."""
+    refuse_currency(strategy)
     maker = made_by(strategy)
     if maker is not None:
         raise not_supported(
@@ -124,6 +130,17 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
         )
     if strategy.interval:
         _check_interval(strategy.interval, DEFAULT_BASE)
+
+
+def refuse_currency(strategy: type[Strategy]) -> None:
+    """Raise ConfigError for a strategy on CDS or BCD: currency derivatives are backtest-only
+    in 2.4.1, since no supervised sandbox session has traded them yet (unit C of 2.4.1)."""
+    if strategy.exchange in CURRENCY_EXCHANGES:
+        raise ConfigError(
+            f"{strategy.__name__}: {strategy.exchange} currency derivatives are backtest-only "
+            "in this release (no supervised sandbox session has traded them yet); backtest "
+            "them with bt.backtest, or trade NSE, BSE, NFO, BFO or MCX live"
+        )
 
 
 def probe(

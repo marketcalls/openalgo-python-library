@@ -184,6 +184,18 @@ class TableSpec:
 
 
 _UNDERLYING_EXCHANGE = ("underlying", "exchange")
+# The columns of a contract-terms table (MCX futures, NSE currency futures): one layout,
+# so the two tables are read and looked up the same way.
+_CONTRACT_COLUMNS = (
+    Column("lot_size", _positive_int),
+    Column("multiplier", _positive_float),
+    Column("tick_size", _positive_float),
+    Column("freeze_qty", _positive_int, required=False),
+    Column("settlement", _one_of(DERIVATIVE_SETTLEMENTS), required=False),
+    Column("trading_unit", _text, required=False),
+    Column("quote_unit", _text, required=False),
+)
+
 _SPECS = (
     TableSpec(
         name="lot_sizes",
@@ -273,20 +285,23 @@ _SPECS = (
         name="mcx_contracts",
         key=_UNDERLYING_EXCHANGE,
         span=("expiry_from", "expiry_to", SPAN_DATE),
-        columns=(
-            Column("lot_size", _positive_int),
-            Column("multiplier", _positive_float),
-            Column("tick_size", _positive_float),
-            Column("freeze_qty", _positive_int, required=False),
-            Column("settlement", _one_of(DERIVATIVE_SETTLEMENTS), required=False),
-            Column("trading_unit", _text, required=False),
-            Column("quote_unit", _text, required=False),
-        ),
+        columns=_CONTRACT_COLUMNS,
         description=(
             "MCX futures terms by trade date and contract expiry. lot_size is the trading "
             "unit in the unit OpenAlgo counts quantity in (CRUDEOIL 100 barrels, GOLD 1 kg); "
             "multiplier is the rupee value of a one-rupee move in the quoted price for one "
             "unit of quantity"
+        ),
+    ),
+    TableSpec(
+        name="currency_contracts",
+        key=_UNDERLYING_EXCHANGE,
+        span=("expiry_from", "expiry_to", SPAN_DATE),
+        columns=_CONTRACT_COLUMNS,
+        description=(
+            "NSE currency futures terms by trade date and contract expiry. lot_size 1: "
+            "OpenAlgo counts currency quantity in contracts; multiplier is the rupee value of "
+            "a one-rupee move in the quoted price for one contract (USDINR 1,000)"
         ),
     ),
     TableSpec(

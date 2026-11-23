@@ -65,8 +65,8 @@
   "profit_kept": 1.0,
   "closed_turnover": 1418137.5,
   "total_slippage": 305.0,
-  "trading_cost": 2020.13,
-  "trading_cost_share_of_gross_pnl": 0.20389906636386576,
-  "trading_cost_bps": 14.244951564992817
+  "trading_cost": 2444.93,
+  "trading_cost_share_of_gross_pnl": 0.24677567499369163,
+  "trading_cost_bps": 17.240429789071932
  }
 }

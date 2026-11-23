@@ -57,7 +57,7 @@ def test_registry_names_every_built_in_table_and_its_file():
 @pytest.mark.parametrize("table", BUILTIN_TABLES)
 def test_registry_gives_each_table_an_iso_as_of_date_and_a_description(table):
     entry = _registry()[table]
-    assert dt.date.fromisoformat(entry["as_of"]) <= dt.date(2026, 11, 17)
+    assert dt.date.fromisoformat(entry["as_of"]) <= dt.date(2026, 11, 23)
     assert entry["description"]
 
 

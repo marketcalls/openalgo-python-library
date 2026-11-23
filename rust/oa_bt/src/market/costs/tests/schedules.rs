@@ -64,6 +64,11 @@ const UNCONFIRMED_SINCE_2024_10_01: [Segment; 4] = [
     Segment::BseEqIntradaySs,
 ];
 
+/// The rows added for 2.4.1, read from a broker bulletin for 2024-10-01 (unverified)
+/// and from the broker's charges page and calculator script on 2026-11-23 (verified
+/// through that day in the current version).
+const READ_ON_2026_11_23: [Segment; 3] = [Segment::McxOpt, Segment::CdsFut, Segment::CdsOpt];
+
 #[test]
 fn the_2024_10_01_version_is_verified_through_its_last_day_where_a_primary_source_confirms_it() {
     let older = version("IN-2024-10-01");
@@ -71,7 +76,9 @@ fn the_2024_10_01_version_is_verified_through_its_last_day_where_a_primary_sourc
     assert_eq!(older.gst_verified_through, last_day);
     for segment in Segment::ALL {
         let row = older.row(segment).unwrap();
-        if UNCONFIRMED_SINCE_2024_10_01.contains(&segment) {
+        let unconfirmed = UNCONFIRMED_SINCE_2024_10_01.contains(&segment)
+            || READ_ON_2026_11_23.contains(&segment);
+        if unconfirmed {
             assert_eq!(row.verified_through, None, "{segment:?}");
             assert!(!row.notes.is_empty(), "{segment:?}");
         } else {
@@ -91,6 +98,10 @@ fn the_current_version_is_verified_through_the_snapshot_day_where_a_source_confi
         if unconfirmed {
             assert_eq!(row.verified_through, None, "{segment:?}");
             assert!(!row.notes.is_empty(), "{segment:?}");
+        } else if READ_ON_2026_11_23.contains(&segment) {
+            let read_on = Some(days_from_civil(2026, 11, 23));
+            assert_eq!(row.verified_through, read_on, "{segment:?}");
+            assert!(row.notes.contains("Verified on 2026-11-23"), "{segment:?}");
         } else {
             assert_eq!(row.verified_through, Some(snapshot_day()), "{segment:?}");
         }

@@ -2,7 +2,7 @@
 
 Statutory and exchange charges are not part of a preset; they are the same for every
 broker and come from the dated schedules. A preset is validated and held by the
-kernel, and the Zerodha figures live there, so no rate is written here.
+kernel, and the standard and Zerodha figures live there, so no rate is written here.
 
 Units: amounts and caps are rupees per executed order. Anything called `percent`
 takes percent units (0.03 means 0.03 percent of order value). The kernel stores a
@@ -11,8 +11,9 @@ reports.
 
 The DP fee (depository participant fee on a delivery sell, rupees per scrip per sell
 day before GST): Zerodha publishes Rs 13 (Rs 3.5 CDSL plus Rs 9.5 Zerodha). No other
-preset has a published figure, so until you pass `dp_fee` Zerodha's Rs 13 stands in
-and `dp_fee_source` says "zerodha_stand_in"; every DP charge result repeats it.
+preset, the standard one included, has a published figure, so until you pass `dp_fee`
+Zerodha's Rs 13 stands in and `dp_fee_source` says "zerodha_stand_in"; every DP charge
+result repeats it.
 """
 
 import math
@@ -22,7 +23,16 @@ from ..errors import CostError
 from .inputs import number
 from .kernel import call, native
 
-__all__ = ["Brokerage", "custom", "flat", "percent", "preset", "zero_brokerage", "zerodha"]
+__all__ = [
+    "Brokerage",
+    "custom",
+    "flat",
+    "percent",
+    "preset",
+    "standard",
+    "zero_brokerage",
+    "zerodha",
+]
 
 _CLASSES = ("delivery", "intraday", "futures", "options")
 _RULE_FORMS = (
@@ -34,8 +44,9 @@ _RULE_FORMS = (
 class Brokerage:
     """A validated brokerage preset: one rule per kind of trade, plus the DP fee.
 
-    Build one with `zerodha()`, `flat()`, `percent()`, `zero_brokerage()` or
-    `custom()`. Instances are immutable; `with_dp_fee` returns a new one.
+    Build one with `standard()`, `zerodha()`, `flat()`, `percent()`,
+    `zero_brokerage()` or `custom()`. Instances are immutable; `with_dp_fee` returns a
+    new one.
     """
 
     __slots__ = ("_kernel", "_name")
@@ -46,7 +57,7 @@ class Brokerage:
 
     @property
     def name(self) -> str:
-        """A label for reports, such as "zerodha" or "flat(10)"."""
+        """A label for reports, such as "standard", "zerodha" or "flat(10)"."""
         return self._name
 
     @property
@@ -125,12 +136,26 @@ def _rule(name: str, spec: Any) -> tuple:
     return rule
 
 
+def standard() -> Brokerage:
+    """Standard, the default preset: what most brokers charge.
+
+    Equity delivery pays 2.5 percent of the order value or Rs 20 per executed order,
+    whichever is lower; equity intraday 0.1 percent or Rs 20; futures (equity, currency
+    and commodity) 0.03 percent or Rs 20; options (equity, currency and commodity) Rs 20
+    per executed order. No DP fee is published for it, so Zerodha's Rs 13 stands in and
+    results say so (see the module docstring); `standard().with_dp_fee(...)` sets your
+    broker's.
+    """
+    return _built("standard", native.CostBrokerage.named, "standard")
+
+
 def zerodha() -> Brokerage:
-    """Zerodha, the default preset.
+    """Zerodha: the preset its brokerage calculator uses.
 
     Delivery is free; intraday equity and futures pay 0.03 percent or Rs 20 per
     executed order, whichever is lower; options pay Rs 20 per executed order. The DP
-    fee is Zerodha's published Rs 13 (Rs 15.34 with GST) per scrip per sell day.
+    fee is Zerodha's published Rs 13 (Rs 15.34 with GST) per scrip per sell day. The
+    calculator rounding mode reproduces its calculator under this preset.
     """
     return _built("zerodha", native.CostBrokerage.named, "zerodha")
 
@@ -198,14 +223,15 @@ def custom(
 def preset(brokerage: "str | Brokerage") -> Brokerage:
     """Resolve a brokerage argument: a Brokerage, or the name of a built-in preset.
 
-    Built-in names are "zerodha" and "zero_brokerage". Raises CostError for any other
-    name or type: there is no default to fall back on.
+    Built-in names are "standard" (the default), "zerodha" and "zero_brokerage". Raises
+    CostError for any other name or type: there is no default to fall back on.
     """
     if isinstance(brokerage, Brokerage):
         return brokerage
     if isinstance(brokerage, str):
         return _built(brokerage, native.CostBrokerage.named, brokerage)
     raise CostError(
-        "brokerage must be a preset name or a Brokerage from costs.zerodha(), costs.flat(), "
-        f"costs.percent(), costs.zero_brokerage() or costs.custom(), got {brokerage!r}"
+        "brokerage must be a preset name or a Brokerage from costs.standard(), "
+        "costs.zerodha(), costs.flat(), costs.percent(), costs.zero_brokerage() or "
+        f"costs.custom(), got {brokerage!r}"
     )

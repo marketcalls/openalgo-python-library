@@ -10,6 +10,34 @@ use super::breakdown::CostBreakdown;
 use super::brokerage::BrokerageRule;
 use super::rounding::{calculator_paise, calculator_rupee};
 use super::schedule::{GstRule, SegmentRates, TaxBase, TaxUnit};
+use super::segment::Segment;
+
+/// What the calculator does with a segment's IPFT levy (calculator rounding only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CalculatorIpft {
+    /// Added to the exchange line, and so to the GST base and the total.
+    Charged,
+    /// Added to the exchange line only: the GST base and the total leave it out.
+    ShownOnly,
+}
+
+/// The calculator's IPFT rule of a segment.
+///
+/// For NSE currency futures the calculator shows the IPFT levy in its exchange line but
+/// leaves it out of GST and the total; every other segment charges what its exchange
+/// line shows. Source: the calculator script (read 2026-11-23, `cal_curr_fut` sums the
+/// transaction charge into its GST base and total before it adds the IPFT to the line)
+/// and the maintainer's screenshot of the same day: USDINR futures, one lot, buy 88.3300
+/// and sell 88.3525, turnover 1,76,682.50, exchange line 0.71 (0.6184 + 0.0883), GST
+/// 7.34 (18 percent of 40 + 0.62 + 0.18) and total 48.14. Its currency options
+/// (`cal_curr_opt`) charge the IPFT in all three: exchange 58.48, GST 17.76, total
+/// 116.42 for the same prices as premiums.
+pub(super) fn calculator_ipft(segment: Segment) -> CalculatorIpft {
+    match segment {
+        Segment::CdsFut => CalculatorIpft::ShownOnly,
+        _ => CalculatorIpft::Charged,
+    }
+}
 
 /// Unrounded cost of one fill worth `value` rupees (price times quantity in units;
 /// premium value for an option).
@@ -40,6 +68,7 @@ pub(super) fn accrue_fill(
         sebi_fee,
         stamp_duty,
         gst,
+        shown_not_charged: 0.0,
     }
 }
 
@@ -77,27 +106,32 @@ fn calculator_brokerage(rule: &BrokerageRule, value: f64) -> f64 {
 /// - The SEBI fee is computed on the turnover and rounded to the paisa.
 /// - GST is the rate times (brokerage + exchange charge + SEBI fee) as rounded
 ///   above, rounded to the paisa. For a version that leaves the SEBI fee out of the
-///   GST base (trades before 2022-07-18) it is left out here too.
+///   GST base (trades before 2022-07-18) it is left out here too. Where `ipft` is
+///   `ShownOnly` (NSE currency futures) the exchange charge in the base is the
+///   transaction charge without the IPFT, and the IPFT is `shown_not_charged`.
 /// - Stamp duty is on the buy value, rounded to the paisa and then to the rupee.
-/// - The total is the sum of the lines rounded to the paisa
-///   (`CostModel::reported_total`).
+/// - The total is the sum of the lines rounded to the paisa, less what is shown but
+///   not charged (`CostModel::reported_total`).
 ///
-/// Exactness. For equity and equity derivatives the result is the calculator's, to
-/// the paisa. For MCX futures it can differ by one paisa: the calculator takes lots
-/// and a contract multiplier and forms its products as price x lots x multiplier
-/// (and CTT as rate x price x lots x multiplier), while this engine takes units, so
-/// a product can differ in its last binary digit and round the other way.
+/// Exactness. For equity, equity derivatives and NSE currency derivatives the result
+/// is the calculator's, to the paisa. For MCX futures and options it can differ by one
+/// paisa: the calculator takes lots and a contract multiplier and forms its products
+/// as price x lots x multiplier (and CTT as rate x price x lots x multiplier), while
+/// this engine takes units, so a product can differ in its last binary digit and round
+/// the other way.
 ///
-/// One more difference from the calculator: a leg with no value is not an executed
+/// Two more differences from the calculator: a leg with no value is not an executed
 /// order and pays no flat brokerage (the calculator charges Rs 20 on an options leg
-/// with a price but zero quantity).
+/// with a price but zero quantity); and the options rule of a preset is applied to
+/// currency and commodity options as it is, while the calculator charges them 0.03
+/// percent of (premium + strike) x units capped at Rs 20, which is below Rs 20 only on
+/// an order whose strike value is under Rs 66,667.
 pub(super) fn calculator_cost(
     rates: &SegmentRates,
     gst: GstRule,
     rule: &BrokerageRule,
-    buy_price: f64,
-    sell_price: f64,
-    quantity: f64,
+    ipft: CalculatorIpft,
+    (buy_price, sell_price, quantity): (f64, f64, f64),
 ) -> CostBreakdown {
     let buy_value = buy_price * quantity;
     let sell_value = sell_price * quantity;
@@ -116,12 +150,14 @@ pub(super) fn calculator_cost(
         TaxUnit::Rupee => calculator_rupee(calculator_paise(tax)),
     };
 
-    let exchange_txn = calculator_paise(
-        calculator_paise(turnover * rates.exchange_txn_rate)
-            + calculator_paise(turnover * rates.ipft_rate),
-    );
+    let transaction = calculator_paise(turnover * rates.exchange_txn_rate);
+    let exchange_txn = calculator_paise(transaction + calculator_paise(turnover * rates.ipft_rate));
+    let (charged_exchange, shown_not_charged) = match ipft {
+        CalculatorIpft::Charged => (exchange_txn, 0.0),
+        CalculatorIpft::ShownOnly => (transaction, exchange_txn - transaction),
+    };
     let sebi_fee = calculator_paise(turnover * rates.sebi_rate);
-    let gst = calculator_paise(gst.on(brokerage, exchange_txn, sebi_fee));
+    let gst = calculator_paise(gst.on(brokerage, charged_exchange, sebi_fee));
     let stamp_duty = calculator_rupee(calculator_paise(buy_value * rates.stamp_buy_rate));
 
     CostBreakdown {
@@ -131,5 +167,6 @@ pub(super) fn calculator_cost(
         sebi_fee,
         stamp_duty,
         gst,
+        shown_not_charged,
     }
 }

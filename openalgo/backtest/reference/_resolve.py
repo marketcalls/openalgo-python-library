@@ -27,6 +27,7 @@ from . import tick_rules
 from ._rows import RefRow
 from ._store import how_to_supply, warn
 from ._terms import (
+    CONTRACT_TABLES,
     MCX,
     MCX_TABLE,
     Sources,
@@ -166,20 +167,22 @@ class _ListedDerivativeSource:
 _PER_UNIT = "price is quoted per unit of the underlying"
 
 
-class _McxFutureSource:
-    """Terms of an MCX futures contract from the `mcx_contracts` row of its underlying."""
+class _ContractTableSource:
+    """Terms of an MCX or NSE currency futures contract from the contract-terms row of its
+    underlying (`mcx_contracts`, `currency_contracts`)."""
 
-    def __init__(self, request: _Request) -> None:
+    def __init__(self, request: _Request, table: str) -> None:
         self._request = request
-        self._key = (request.parsed.underlying, MCX)
+        self._table = table
+        self._key = (request.parsed.underlying, request.parsed.exchange)
 
     def find(self, term: str) -> _Found | None:
         store, day = self._request.sources.store, self._request.day
         expiry = self._request.parsed.expiry
-        row = contract_row(store, MCX_TABLE, self._key, day, expiry, term)
+        row = contract_row(store, self._table, self._key, day, expiry, term)
         value = row.values.get(term)
         if value is None:
-            raise store.missing(MCX_TABLE, self._key, day, detail=f" with a {term} value")
+            raise store.missing(self._table, self._key, day, detail=f" with a {term} value")
         return _Found(value, row)
 
 
@@ -187,8 +190,9 @@ def _no_source_error(request: _Request, term: str) -> ReferenceDataError:
     parsed = request.parsed
     return ReferenceDataError(
         f"No {term} is known for {parsed.symbol} on {parsed.exchange} on "
-        f"{request.day.isoformat()}. The built-in tables cover NFO and BFO contracts and MCX "
-        "futures only. Elsewhere the lot unit differs between brokers, so a 'symbols' row "
+        f"{request.day.isoformat()}. The built-in tables cover NFO and BFO contracts, MCX "
+        "futures and NSE currency futures on USDINR, EURINR, GBPINR and JPYINR only. "
+        "Elsewhere the lot unit differs between brokers, so a 'symbols' row "
         "must state lot_size, multiplier (rupees per one-rupee move per unit of quantity) "
         f"and settlement for the exact contract. {how_to_supply('symbols')}"
     )
@@ -280,7 +284,10 @@ def _is_snapshot(row: RefRow | None) -> bool:
 
 
 def _derivative_sources(request: _Request, exact: RefRow | None) -> tuple[list[_Source], bool]:
-    """Sources for a future or an option, and whether the MCX table supplies the lot."""
+    """Sources for a future or an option, and whether the MCX table supplies the lot.
+
+    A future on MCX or CDS with no exact-symbol row takes its terms from the contract-terms
+    table of its exchange (`_terms.CONTRACT_TABLES`)."""
     parsed = request.parsed
     if parsed.exchange in LISTED_DERIVATIVE_EXCHANGES:
         stated = None if exact is None else exact.values.get("underlying_type")
@@ -292,8 +299,11 @@ def _derivative_sources(request: _Request, exact: RefRow | None) -> tuple[list[_
         sources: list[_Source] = [] if exact is None else [_SymbolRowSource(exact, terms)]
         return [*sources, _ListedDerivativeSource(request, kind)], False
     sources = [] if exact is None else [_SymbolRowSource(exact, _DERIVATIVE_TERMS)]
-    from_mcx_table = exact is None and parsed.exchange == MCX and parsed.kind == "future"
-    return sources + ([_McxFutureSource(request)] if from_mcx_table else []), from_mcx_table
+    from_table = exact is None and parsed.kind == "future"
+    table = CONTRACT_TABLES.get(parsed.exchange) if from_table else None
+    if table is None:
+        return sources, False
+    return [*sources, _ContractTableSource(request, table)], table == MCX_TABLE
 
 
 def _check_mcx_lot_unit(request: _Request, lot_size: int) -> None:
