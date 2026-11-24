@@ -73,7 +73,8 @@
 //!   (`venue_ticks`, tick mode): a target exits through the position's exit owner, a trail
 //!   or a breakeven moves the broker's stop. The session's own calls for a leg (`protect`,
 //!   `reprice_exit`, an exit at a limit) are in `venue_protect`. Leg rules are MIS only in
-//!   a session: CNC and NRML legs are held as GTTs.
+//!   a session: a CNC or NRML leg's stop is held as a GTT, which a session does not carry
+//!   yet.
 //! - **Not built yet** (`KernelError::NotBuilt`, `venue_requests`): leg rules on CNC and NRML, GTT orders,
 //!   futures series and rebalancing.
 //!

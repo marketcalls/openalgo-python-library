@@ -49,7 +49,7 @@ fn status(output: &RunOutput) -> OrderStatus {
 #[test]
 fn a_gtt_buy_below_the_market_waits_for_a_fall_with_its_child_one_percent_above() {
     let (_, gtts, _) = run_daily(&july(&[]), gtt_buy(1450.0), no_change);
-    let leg = gtts[0].legs[0];
+    let leg = gtts[0].leg;
     assert_eq!(leg.role, GttLegRole::Order);
     assert_eq!(leg.direction, TriggerDirection::Falling);
     // 1450 x 1.01 = 1464.50.
@@ -100,7 +100,7 @@ fn a_gtt_breakout_buy_whose_bar_gaps_past_its_child_is_cancelled_unfilled() {
     // 1580 and its low 1570 never comes back to the limit.
     let bars = july(&[(3, (1580.0, 1590.0, 1570.0, 1585.0))]);
     let (output, gtts, _) = run_daily(&bars, gtt_buy(1550.0), no_change);
-    assert_eq!(gtts[0].legs[0].direction, TriggerDirection::Rising);
+    assert_eq!(gtts[0].leg.direction, TriggerDirection::Rising);
     assert_eq!(
         events_at(&output, day_open(july_2025(3))),
         ["GttTriggered g1", "GttChildCanceled g1", "Canceled"]
@@ -157,7 +157,7 @@ fn a_gtt_with_a_trigger_and_a_price_uses_the_price_as_its_child_limit() {
     );
     let acts = vec![(july_2025(1), Act::Submit(request))];
     let (_, gtts, _) = run_daily(&july(&[]), acts, no_change);
-    let leg = gtts[0].legs[0];
+    let leg = gtts[0].leg;
     assert_eq!(
         (leg.trigger_rupees, leg.child_limit_rupees),
         (1450.0, 1452.0)

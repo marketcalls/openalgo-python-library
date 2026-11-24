@@ -1,12 +1,15 @@
-//! GTT orders for positional trades in the slice sequence (04-execution 4.4): the GTTs
-//! that hold a CNC or NRML position's stop and target, their life between fills, and
-//! the session-open check.
+//! GTT orders for positional trades in the slice sequence (04-execution 4.4): the GTT
+//! that holds a CNC or NRML position's stop, its life between fills, and the
+//! session-open check. The position's targets are the engine's, as an MIS leg's are
+//! (design 20-positional-live P6); the leg test of step 3 decides whether the stop or a
+//! target comes first in a bar (`gtt_levels`).
 //!
 //! | When | What | Step |
 //! |---|---|---|
-//! | A fill opens a CNC or NRML position with levels | its GTTs are placed (`GttPlaced`), in force from step 3 of a step-2 fill (SPEC-02), from the next slice otherwise | the fill's |
-//! | The leg's levels or quantity change (trail, breakeven, an add, a partial exit, a target) | the GTTs follow by `gtt_plan`: modified (`GttModified`, GTT-3), placed or cancelled; in force from the next slice | 4 |
-//! | Any exit that is not a GTT's own (a signal, the daily loss limit, the drawdown halt, the time exit) | every GTT on the position is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9) | the exit's |
+//! | A fill opens a CNC or NRML position with a stop | its stop GTT is placed for all the open units (`GttPlaced`), in force from step 3 of a step-2 fill (SPEC-02), from the next slice otherwise | the fill's |
+//! | The leg's stop or units change (trail, breakeven, an add, a partial exit, a target that leaves units) | the stop GTT follows by `gtt_plan`: modified (`GttModified`, GTT-3), placed or cancelled; in force from the next slice | 4 |
+//! | A target's exit that leaves units | the stop GTT stays and is cut to the units left in step 4 | the exit's |
+//! | Any other exit that is not the GTT's own (a signal, a target's exit of the whole position, the daily loss limit, the drawdown halt, the time exit) | the stop GTT is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9) | the exit's |
 //! | A strategy GTT order ends (cancelled, rejected) | its GTT is cancelled | the order's |
 //! | A session opens | every GTT older than 360 days is cancelled and placed again (GTT-2); a backtest assumes the engine runs at every session open (GTT-4) | 1 |
 //!
@@ -19,23 +22,22 @@ use crate::exec::{
 };
 use crate::model::{Product, Side, TsNanos};
 use crate::portfolio::{FillEffect, FillKind, PositionKey};
-use crate::rms::ExitReason;
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
-use super::gtt_plan::{kind_of, needs_modification, protective_plan, ChildTerms, PlannedGtt};
+use super::gtt_plan::{needs_modification, protective_plan, ChildTerms, PlannedStop};
 use super::kernel::Engine;
 
-/// The engine's own exit after a GTT child did not fill through its bar, waiting for
-/// the instrument's next base-bar open (04-execution 4.4 item 3, LEAD-10).
+/// The engine's own exit after a stop GTT's child did not fill through its bar, waiting
+/// for the instrument's next base-bar open (04-execution 4.4 item 3, LEAD-10), reason
+/// `leg_sl`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct FollowUpExit {
     pub(super) key: PositionKey,
     pub(super) gtt: GttId,
     pub(super) units: f64,
-    pub(super) reason: ExitReason,
 }
 
 /// The GTTs of a run and what the slice sequence keeps about them.
@@ -47,10 +49,11 @@ pub(super) struct GttDesk {
     pub(super) follow_ups: Vec<FollowUpExit>,
 }
 
-/// True when a product holds its stops and targets as GTTs: CNC and NRML, which carry
-/// overnight. By decision GTT-10 reading A, 04-execution 4.4 then governs their stops
-/// and targets (a trigger and a child LIMIT) instead of the engine-held rule that a
-/// level crossed at the open fills at the open, which stays for MIS.
+/// True when a product holds its stop as a GTT: CNC and NRML, which carry overnight.
+/// By decision GTT-10 reading A, 04-execution 4.4 then governs their stop (a trigger and
+/// a child LIMIT) instead of the engine-held rule that a level crossed at the open fills
+/// at the open; their targets keep that rule, as an MIS leg's (design
+/// 20-positional-live P6).
 pub(super) fn held_as_gtt(product: Product) -> bool {
     matches!(product, Product::Cnc | Product::Nrml)
 }
@@ -89,7 +92,7 @@ impl Engine {
             })
     }
 
-    /// How the children of `key`'s GTTs are priced.
+    /// How the child of `key`'s stop GTT is priced.
     fn child_terms(&self, key: PositionKey) -> Result<ChildTerms, KernelError> {
         let spec = self.spec(key.instrument)?;
         let held = self.held_units(key);
@@ -100,8 +103,8 @@ impl Engine {
         })
     }
 
-    /// After every fill: a fill that opens a CNC or NRML position with levels places
-    /// the GTTs that hold them, right after the fill's events.
+    /// After every fill: a fill that opens a CNC or NRML position with a stop places the
+    /// GTT that holds it, right after the fill's events.
     ///
     /// Errors: `Exec` for a level that is not a usable price.
     pub(super) fn place_gtts_after_entry(
@@ -113,27 +116,26 @@ impl Engine {
         if effect.kind != FillKind::Entry || !held_as_gtt(key.product) {
             return Ok(());
         }
-        let Some(leg) = self.leg(key.instrument, key.product) else {
+        let Some(planned) = self
+            .leg(key.instrument, key.product)
+            .and_then(protective_plan)
+        else {
             return Ok(());
         };
-        let plan = protective_plan(leg);
         let eligible = eligible_from(stamp, &self.slice_of(stamp)?);
-        for planned in plan {
-            self.place_protective(stamp, key, &planned, eligible)?;
-        }
+        self.place_protective(stamp, key, &planned, eligible)?;
         Ok(())
     }
 
-    /// Place one planned GTT on `key` and write `GttPlaced`.
+    /// Place the planned stop GTT on `key` and write `GttPlaced`.
     fn place_protective(
         &mut self,
         stamp: EventStamp,
         key: PositionKey,
-        planned: &PlannedGtt,
+        planned: &PlannedStop,
         eligible_from: TsNanos,
     ) -> Result<GttId, KernelError> {
         let terms = self.child_terms(key)?;
-        let legs = terms.legs(planned)?;
         let id = self.gtts.book.next_id();
         let gtt = Gtt {
             id,
@@ -141,14 +143,12 @@ impl Engine {
             product: key.product,
             side: terms.child_side(),
             quantity_units: planned.quantity_units,
-            kind: kind_of(&legs),
-            legs,
-            purpose: GttPurpose::Protect(planned.slot),
+            leg: terms.stop(planned.stop_rupees)?,
+            purpose: GttPurpose::Protect,
             status: GttStatus::Active,
             created_on: self.trade_day(stamp),
             eligible_from,
             last_modified_slice: None,
-            fired: None,
         };
         self.gtts.book.insert(gtt)?;
         self.emit_gtt(stamp, GttEventName::Placed, id);
@@ -163,12 +163,13 @@ impl Engine {
     }
 
     /// Cancel-then-exit, decision GTT-9 reading A: before any fill that reduces a CNC or
-    /// NRML position and is not a protective GTT's own exit (a signal, a strategy GTT,
-    /// the daily loss limit, the drawdown halt, the time exit, the close of a reversal),
-    /// every GTT holding the
-    /// position's levels is cancelled in the same step, so the position never has two
-    /// exit owners (08-live-trading 6.2). Levels that remain after a partial exit get
-    /// new GTTs in step 4.
+    /// NRML position and is not its stop GTT's own exit (a signal, a strategy GTT, a
+    /// target that closes the position, the daily loss limit, the drawdown halt, the time
+    /// exit, the close of a reversal), the GTT holding the position's stop is cancelled in
+    /// the same step, so the position never has two exit owners (08-live-trading 6.2). A
+    /// stop that remains after a partial exit gets a new GTT in step 4. A target's exit
+    /// that leaves units keeps the GTT instead, which step 4 cuts to the units left
+    /// (design 20-positional-live section 2).
     pub(super) fn cancel_gtts_before_exit(
         &mut self,
         stamp: EventStamp,
@@ -177,14 +178,15 @@ impl Engine {
         let key = request.key;
         let own_exit = request.gtt.is_some_and(|id| {
             let purpose = self.gtts.book.get(id).map(|gtt| gtt.purpose);
-            matches!(purpose, Some(GttPurpose::Protect(_)))
+            purpose == Some(GttPurpose::Protect)
         });
         if own_exit || !held_as_gtt(key.product) {
             return Ok(());
         }
         let held = self.held_units(key);
         let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        if !reduces {
+        let target_leaves_units = request.target_index.is_some() && request.units < held.abs();
+        if !reduces || target_leaves_units {
             return Ok(());
         }
         for id in self.gtts.book.protecting(key.instrument, key.product) {
@@ -206,10 +208,10 @@ impl Engine {
         }
     }
 
-    /// Step 4, after the ratchets: every CNC or NRML leg's GTTs follow its levels and
-    /// quantity. A slot whose GTT is in force is modified when GTT-3 allows, a slot
-    /// with none is placed, a GTT whose slot is gone is cancelled. A position whose GTT
-    /// fired and awaits the engine's exit is left alone.
+    /// Step 4, after the ratchets: every CNC or NRML leg's stop GTT follows its stop and
+    /// units. A GTT in force is modified when GTT-3 allows, a stop with none is placed, a
+    /// GTT whose leg has no stop is cancelled. A position whose GTT fired and awaits the
+    /// engine's exit is left alone.
     ///
     /// Errors: `Exec` for a level that is not a usable price.
     pub(super) fn sync_gtts(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
@@ -226,54 +228,45 @@ impl Engine {
                 Some(leg) if !waiting => protective_plan(leg),
                 _ => continue,
             };
-            self.sync_position(stamp, slice, key, &plan)?;
+            self.sync_position(stamp, slice, key, plan)?;
         }
         Ok(())
     }
 
+    /// The position's stop GTT made to match `plan`: the first one in force modified (or
+    /// one placed when none is), any other cancelled; all cancelled when `plan` is none.
     fn sync_position(
         &mut self,
         stamp: EventStamp,
         slice: &SliceInfo,
         key: PositionKey,
-        plan: &[PlannedGtt],
+        plan: Option<PlannedStop>,
     ) -> Result<(), KernelError> {
         let active = self.gtts.book.protecting(key.instrument, key.product);
-        for id in &active {
-            let slot = self.gtts.book.get(*id).map(|gtt| gtt.purpose);
-            let kept = plan
-                .iter()
-                .any(|p| slot == Some(GttPurpose::Protect(p.slot)));
-            if !kept {
-                self.cancel_gtt(stamp, *id)?;
-            }
+        let kept = plan.and(active.first().copied());
+        for id in active.iter().filter(|id| Some(**id) != kept) {
+            self.cancel_gtt(stamp, *id)?;
         }
-        for planned in plan {
-            let held = active.iter().copied().find(|id| {
-                self.gtts.book.get(*id).map(|gtt| gtt.purpose)
-                    == Some(GttPurpose::Protect(planned.slot))
-            });
-            match held {
-                Some(id) => self.modify_protective(stamp, slice, key, id, planned)?,
-                None => {
-                    self.place_protective(stamp, key, planned, slice.close)?;
-                }
-            }
+        match (plan, kept) {
+            (Some(planned), Some(id)) => self.modify_protective(stamp, slice, key, id, &planned),
+            (Some(planned), None) => self
+                .place_protective(stamp, key, &planned, slice.close)
+                .map(|_| ()),
+            (None, _) => Ok(()),
         }
-        Ok(())
     }
 
-    /// Modify a protective GTT to its planned levels and quantity when GTT-3 allows.
+    /// Modify the stop GTT to its planned level and quantity when GTT-3 allows.
     fn modify_protective(
         &mut self,
         stamp: EventStamp,
         slice: &SliceInfo,
         key: PositionKey,
         id: GttId,
-        planned: &PlannedGtt,
+        planned: &PlannedStop,
     ) -> Result<(), KernelError> {
         let terms = self.child_terms(key)?;
-        let legs = terms.legs(planned)?;
+        let leg = terms.stop(planned.stop_rupees)?;
         let slice_number = stamp.slice;
         let Some(gtt) = self.gtts.book.get(id) else {
             return Ok(());
@@ -282,7 +275,7 @@ impl Engine {
         let quantity = planned.quantity_units;
         if !needs_modification(
             gtt,
-            &legs,
+            &leg,
             quantity,
             slice_number,
             &policy,
@@ -292,8 +285,7 @@ impl Engine {
         }
         self.gtts.book.apply(id, GttAction::Modify)?;
         if let Some(gtt) = self.gtts.book.get_mut(id) {
-            gtt.kind = kind_of(&legs);
-            gtt.legs = legs;
+            gtt.leg = leg;
             gtt.quantity_units = quantity;
             gtt.last_modified_slice = Some(slice_number);
             gtt.eligible_from = slice.close;
@@ -303,7 +295,7 @@ impl Engine {
     }
 
     /// Step 1: at a session open every active GTT older than the policy allows is
-    /// cancelled and placed again with the same legs and quantity (decision GTT-2), so a
+    /// cancelled and placed again with the same trigger and quantity (decision GTT-2), so a
     /// position held past a broker's GTT expiry stays protected. The re-created GTT is
     /// in force from step 3 of this slice.
     ///

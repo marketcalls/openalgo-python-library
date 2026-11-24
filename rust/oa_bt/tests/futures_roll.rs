@@ -374,6 +374,39 @@ fn a_stop_crossed_at_the_near_open_exits_there_and_nothing_rolls() {
 }
 
 #[test]
+fn a_target_crossed_at_the_near_open_exits_there_by_the_engine_and_nothing_rolls() {
+    // Entry 25,000.00 on 07-28, stop 150 points (24,850.00), target 100 points
+    // (25,100.00). The near contract opens the roll session at 25,120.00, beyond the
+    // target: the engine sells at that open in step 2, as an MIS leg's target fills,
+    // after cancelling the stop GTT (20-positional-live P6), and nothing rolls.
+    let rules = LegRules {
+        target: Some(Distance::Points(100.0)),
+        ..stop(150.0)
+    };
+    let gap = (25_120.0, 25_130.0, 25_110.0, 25_125.0);
+    let output = rolled(rules, &[(30, gap)], &[]);
+    let rows = fills(&output);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[1],
+        (
+            30,
+            Step::OpenFills,
+            0,
+            Side::Sell,
+            75.0,
+            25_120.0,
+            FillAt::Open,
+            "leg_target"
+        )
+    );
+    assert_eq!(
+        names_at(&output, 30),
+        ["leg_target_hit", "GttCanceled", "PositionClosed"]
+    );
+}
+
+#[test]
 fn a_new_lot_size_rolls_the_nearest_whole_number_of_lots() {
     // 150 units (two lots of 75) roll into two lots of 65: 130 units.
     let mut kernel = engine(65, market(&[], &[]));

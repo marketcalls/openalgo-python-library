@@ -5,11 +5,12 @@
 //! the engine's exits and the square-off have filled at this open, every open position
 //! on the near contract, in the order the positions opened:
 //!
-//! 1. A level already crossed at the near contract's open exits there instead: a GTT
-//!    (CNC, NRML) whose trigger is crossed fires in step 2 and its child fills by the
-//!    GTT rules; an engine-held MIS level fills at the open with its own reason. What is
-//!    left of the position rolls; a position whose GTT child did not fill keeps waiting
-//!    for the engine's exit on the near contract and does not roll.
+//! 1. A level already crossed at the near contract's open exits there instead: a CNC or
+//!    NRML stop GTT whose trigger is crossed fires in step 2 and its child fills by the
+//!    GTT rules; an engine-held level (an MIS leg's, a CNC or NRML leg's target) fills at
+//!    the open with its own reason. What is left of the position rolls; a position whose
+//!    GTT child did not fill keeps waiting for the engine's exit on the near contract and
+//!    does not roll.
 //! 2. The near contract is closed at its open and the next opened at its open, near
 //!    leg first, both plus slippage and charged, both with reason `roll` and no order
 //!    (position events only). The near contract's GTTs are cancelled before its fill
@@ -98,33 +99,23 @@ impl Engine {
     }
 
     /// A level of the position already crossed at the near contract's open exits it
-    /// there (SPEC-19): its GTT fires in step 2 (GTT-9), or an MIS level fills at the
-    /// open.
+    /// there (SPEC-19): a CNC or NRML stop GTT fires in step 2 (GTT-9), or an
+    /// engine-held level fills at the open.
     fn exit_levels_crossed_at_open(
         &mut self,
         slice: &SliceInfo,
         key: PositionKey,
         bar: &BarPrices,
     ) -> Result<(), KernelError> {
-        if held_as_gtt(key.product) {
-            for id in self.gtts.book.protecting(key.instrument, key.product) {
-                let crossed = self.gtts.book.get(id).is_some_and(|gtt| {
-                    gtt.legs
-                        .iter()
-                        .any(|leg| leg.direction.reached(bar.open, leg.trigger_rupees))
-                });
-                if crossed && self.held_units(key) != 0.0 {
-                    self.test_gtt(slice, id, bar, Step::OpenFills)?;
-                }
-            }
-            return Ok(());
-        }
         let at_open = BarPrices {
             open: bar.open,
             high: bar.open,
             low: bar.open,
             close: bar.open,
         };
+        if held_as_gtt(key.product) {
+            return self.test_positional_leg(slice, key, (&at_open, bar), Step::OpenFills);
+        }
         let hits = match self.legs.iter().find(|(k, _)| *k == key) {
             Some((_, leg)) => leg.test_bar(&at_open),
             None => return Ok(()),

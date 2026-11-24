@@ -107,7 +107,7 @@
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_phase` (resumed by `steps::resume_open_phase` after a timer pause); intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2); futures switches are planned before the run (`futures`); then, under a delay, the cancellations and modifications whose delay has ended (`held_changes::apply_held_changes`, stamped in step 2) | times, GTTs and rolls yes; lot-size change events no |
 //! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35, or the end of the order's delay, `delay`; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar; under a fill model they fill in step 3 instead, `fill_model`), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
-//! | 3 resting orders, leg levels | first a portfolio run's account breach found while the slice was open cancels the working entries and adds (`account_breach`); then `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
+//! | 3 resting orders, leg levels | first a portfolio run's account breach found while the slice was open cancels the working entries and adds (`account_breach`); then `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12; a CNC or NRML leg's targets alike, its stop fired as its GTT, `gtt_levels`), `gtt_fire::test_gtts` (strategy GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale; the open trades see the slice's bar (`excursion`) | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, daily profit target (`daily_caps`), drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`); a portfolio run's account breach after them, or in step 1 when it was found between slices (`account_breach`) | yes (combined rules: Phase 3) |
@@ -180,8 +180,9 @@
 //! | `modify` | `modify`: a full replacement of a working order |
 //! | `order_fill` | Where and how an order fills; the price of any fill (slippage, limits) |
 //! | `market_fill` | The price a backtest fills a MARKET order at, for a bar the caller names, recording nothing (a live session's slippage against the backtest) |
-//! | `gtt` | GTTs holding CNC and NRML levels: placement, cancel-then-exit, step-4 sync, renewal |
-//! | `gtt_plan` | Which GTTs a positional leg needs (GTT-11) and when one is modified (GTT-3) |
+//! | `gtt` | The GTT holding a CNC or NRML position's stop: placement, cancel-then-exit, step-4 sync, renewal |
+//! | `gtt_plan` | The stop GTT a positional leg needs (design 20-positional-live P6) and when it is modified (GTT-3) |
+//! | `gtt_levels` | A CNC or NRML leg against a bar: its targets as an MIS leg's, its stop by its GTT, in the order of step 3 |
 //! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
 //! | `gtt_orders` | Strategy GTT orders (`validity="gtt"`), the per-segment order shape |
 //! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
@@ -221,7 +222,7 @@
 //! (entry, add, reduce, exit by fraction, `reverse=True`, modification), GTT orders,
 //! the quantity, tick, freeze, product, entry-window, market-closed and reverse checks,
 //! leg rules (stop, targets, every trail form, breakeven, `after_first_target`)
-//! engine-held on MIS and held as GTTs on CNC and NRML, the square-off, timers
+//! engine-held, with a CNC or NRML leg's stop held as a GTT, the square-off, timers
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
 //! options, futures at the default of D23 or the run's own `margin=`), delivery cash
@@ -260,6 +261,7 @@ mod futures;
 mod futures_plan;
 mod gtt;
 mod gtt_fire;
+mod gtt_levels;
 mod gtt_orders;
 mod gtt_plan;
 mod held_changes;

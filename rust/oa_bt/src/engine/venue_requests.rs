@@ -4,7 +4,7 @@
 //!
 //! | Refused | Why |
 //! |---|---|
-//! | Leg rules on CNC or NRML | those legs are held as GTTs, which a session does not carry; MIS legs are the broker's and the kernel's (`venue_legs`, `venue_ticks`) |
+//! | Leg rules on CNC or NRML | their stop is held as a GTT, which a session does not carry yet; MIS legs are the broker's and the kernel's (`venue_legs`, `venue_ticks`) |
 //! | A GTT order, `rebalance()` | not built for a live session |
 //! | Modifying a partly filled order | not built: cancel it and place a new one for the rest |
 //! | Modifying an order whose last modification waits, or an exit not sent yet | one modification at a time; an exit waiting for its cancels has nothing at the venue |

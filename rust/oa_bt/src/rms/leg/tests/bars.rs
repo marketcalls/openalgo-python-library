@@ -14,7 +14,10 @@ fn hits(side: Side, average: f64, b: crate::rms::leg::BarPrices) -> Vec<LevelHit
         .unwrap_or_default()
 }
 
-fn summary(hits: &[LevelHit]) -> Vec<(LevelKind, f64, f64, FillAt, f64)> {
+/// A hit as (kind, level, price, where, units).
+type HitRow = (LevelKind, f64, f64, FillAt, f64);
+
+fn summary(hits: &[LevelHit]) -> Vec<HitRow> {
     hits.iter()
         .map(|h| {
             (
@@ -137,6 +140,50 @@ fn a_stop_in_the_range_beats_several_targets() {
     assert_eq!(
         got.map(|hits| summary(&hits)),
         Ok(vec![(LevelKind::Stop, 990.0, 990.0, FillAt::Level, 100.0)])
+    );
+}
+
+/// Entry 415.50 long, 50 units: the leg's own stop 413.50 and target 418.50; the bar
+/// from 413.40 to 418.60 opens at 415.40 (trace-02a 09:31, where the leg's stop wins).
+fn against(stop_rupees: Option<f64>) -> Result<Vec<HitRow>, String> {
+    let both = bar(415.4, 418.6, 413.4, 416.0);
+    open(stop_and_target(2.0, 3.0), Side::Buy, 415.5, 50.0)
+        .map(|leg| summary(&leg.test_bar_against(&both, stop_rupees)))
+        .map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_stop_given_in_place_of_the_legs_own_is_the_one_tested() {
+    // A stop held at 413.00 (a GTT that has not followed the leg yet): the low 413.40
+    // does not reach it, so the target fills although the leg's own stop was reached.
+    assert_eq!(
+        against(Some(413.0)),
+        Ok(vec![(
+            LevelKind::Target(0),
+            418.5,
+            418.5,
+            FillAt::Level,
+            50.0
+        )])
+    );
+    // A stop held at 413.45 is reached: it beats the target, at its own level.
+    assert_eq!(
+        against(Some(413.45)),
+        Ok(vec![(LevelKind::Stop, 413.45, 413.45, FillAt::Level, 50.0)])
+    );
+}
+
+#[test]
+fn with_no_stop_given_only_the_targets_are_tested() {
+    assert_eq!(
+        against(None),
+        Ok(vec![(
+            LevelKind::Target(0),
+            418.5,
+            418.5,
+            FillAt::Level,
+            50.0
+        )])
     );
 }
 

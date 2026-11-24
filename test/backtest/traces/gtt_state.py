@@ -1,10 +1,11 @@
 """The GTT orders of a case, replayed from its expected events (04-execution 4.4).
 
-On a CNC or NRML position the stop and the target are held as a GTT: a SINGLE GTT for a
-stop or a target alone, one OCO GTT for both. A GTT is placed (GttPlaced), may be replaced
-by a trail or breakeven (GttModified, in force from the next base bar), and ends either
-cancelled by the engine (GttCanceled) or fired by a bar (GttTriggered), after which its
-child order fills (GttChildFilled) or is cancelled unfilled (GttChildCanceled).
+On a CNC or NRML position the stop is held as one SINGLE GTT for the whole position; the
+targets are held by the engine, as an MIS leg's are (20-positional-live P6). A GTT is
+placed (GttPlaced), may be replaced by a trail, a breakeven, an add or a target's partial
+exit (GttModified, in force from the next base bar), and ends either cancelled by the
+engine (GttCanceled) or fired by a bar (GttTriggered), after which its child order fills
+(GttChildFilled) or is cancelled unfilled (GttChildCanceled).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ def end_of_slice(slice_ist: str) -> Moment:
 
 
 def is_positional(case: Case, instrument: str) -> bool:
-    """True when the instrument's product holds its stops and targets as GTTs (CNC, NRML)."""
+    """True when the instrument's product holds its stop as a GTT (CNC, NRML)."""
     for declared in case["instruments"]:
         if declared["symbol"] == instrument:
             return declared["product"] in vocab.GTT_PRODUCTS
@@ -70,6 +71,6 @@ def active_gtts(case: Case, before: Moment) -> dict[str, Event]:
 
 
 def trigger_of(event: Event, leg: str) -> Decimal | None:
-    """The trigger price in rupees of one leg ("stop" or "target") of a GTT event."""
+    """The trigger price in rupees of one leg (vocabulary.GTT_LEGS) of a GTT event."""
     value = event[f"{leg}_trigger_rupees"]
     return None if value is None else rupees(value)

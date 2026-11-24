@@ -22,9 +22,9 @@
 //! | `error` | `RmsError` |
 //!
 //! Built: the leg rules (stop, target and several targets, every trailing form,
-//! breakeven, `after_first_target`), engine-held on MIS legs and held as GTT orders on
-//! CNC and NRML positions (`engine::gtt`, which keeps this module's leg state as the
-//! source of the levels); the daily loss limit, the drawdown halt, the trading state
+//! breakeven, `after_first_target`), engine-held, with a CNC or NRML position's stop held
+//! as a GTT order (`engine::gtt`, which keeps this module's leg state as the source of
+//! the levels); the daily loss limit, the drawdown halt, the trading state
 //! and the entry gates (daily loss gate, halted, cooldown, maximum positions) and the
 //! scale-in limits on adds, the daily trade caps, the daily profit target and the order
 //! value cap (18-multi-strategy 2.5a), which the engine evaluates in step 6 and at submission

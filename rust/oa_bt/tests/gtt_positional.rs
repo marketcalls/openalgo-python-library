@@ -1,8 +1,10 @@
 #![cfg(all(feature = "costs", feature = "time"))]
-//! GTTs holding the stops and targets of CNC positions (04-execution 4.4 and the
-//! decisions GTT-1 to GTT-11): which GTTs a position gets, how they fire, how they
-//! follow trails and adds, cancel-then-exit, the engine's exit after an unfilled child,
-//! slippage on child fills and the 360-day renewal.
+//! The GTT holding the stop of a CNC position (04-execution 4.4, design
+//! 20-positional-live P6 and the decisions GTT-1 to GTT-10): the one SINGLE GTT a
+//! position gets, how it fires, how it follows trails, adds and targets, cancel-then-exit,
+//! the engine's exit after an unfilled child, slippage on child fills and the 360-day
+//! renewal. The targets are the engine's, tested as an MIS leg's (`positional_targets`
+//! has the worked cases of the change).
 //!
 //! A daily strategy on daily bars from 2025-07-01, CNC, no charges. Every order is
 //! decided at a day's close and fills at the next day's open; a day the test does not
@@ -11,9 +13,7 @@
 mod order_support;
 
 use oa_bt::engine::{RunOutput, Step};
-use oa_bt::exec::{
-    FillAt, FillFlags, Gtt, GttKind, GttLegRole, GttStatus, OrderType, QuantitySpec,
-};
+use oa_bt::exec::{FillAt, FillFlags, Gtt, GttLegRole, GttStatus, OrderType, QuantitySpec};
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{Day, Product, Side};
 use oa_bt::rms::{Distance, LegRules, StrategyRiskConfig, TargetSpec, TrailSpec};
@@ -62,17 +62,12 @@ fn fill_rows(output: &RunOutput) -> Vec<(i64, Step, Side, f64, f64, FillAt, &'st
     fills(output)
 }
 
-/// A GTT's (stop, target) triggers, rupees.
-type Triggers = (Option<f64>, Option<f64>);
-
-fn triggers(gtt: &Gtt) -> Triggers {
-    (
-        gtt.trigger(GttLegRole::Stop),
-        gtt.trigger(GttLegRole::Target),
-    )
+/// A GTT's stop trigger, rupees.
+fn stop_trigger(gtt: &Gtt) -> Option<f64> {
+    gtt.trigger(GttLegRole::Stop)
 }
 
-// ---------------------------------------------------------------- which GTTs (GTT-11)
+// ---------------------------------------------------------------- which GTT (P6)
 
 #[test]
 fn a_stop_alone_is_one_single_gtt_for_the_whole_position() {
@@ -80,25 +75,27 @@ fn a_stop_alone_is_one_single_gtt_for_the_whole_position() {
     assert_eq!(gtts.len(), 1);
     let gtt = &gtts[0];
     assert_eq!(
-        (gtt.kind, gtt.side, gtt.quantity_units),
-        (GttKind::Single, Side::Sell, 10.0)
+        (gtt.leg.role, gtt.side, gtt.quantity_units),
+        (GttLegRole::Stop, Side::Sell, 10.0)
     );
-    assert_eq!(triggers(gtt), (Some(1450.0), None));
+    assert_eq!(stop_trigger(gtt), Some(1450.0));
     // The child sells 1 percent below the trigger: 1435.50 (GTT-1).
-    assert_eq!(gtt.legs[0].child_limit_rupees, 1435.5);
+    assert_eq!(gtt.leg.child_limit_rupees, 1435.5);
     assert_eq!(gtt.status, GttStatus::Active);
 }
 
 #[test]
-fn a_stop_with_a_target_is_one_oco_gtt() {
+fn a_stop_with_a_target_is_one_stop_gtt_and_the_target_stays_with_the_engine() {
     let rules = LegRules {
         target: Some(points(30.0)),
         ..stop(50.0)
     };
     let (_, gtts, _) = run_daily(&july(&[]), buy_on_the_first(rules), zero_slippage);
     assert_eq!(gtts.len(), 1);
-    assert_eq!(gtts[0].kind, GttKind::Oco);
-    assert_eq!(triggers(&gtts[0]), (Some(1450.0), Some(1530.0)));
+    assert_eq!(
+        (stop_trigger(&gtts[0]), gtts[0].quantity_units),
+        (Some(1450.0), 10.0)
+    );
 }
 
 /// 100 units, stop 50 points, targets 20 points for half and 40 points for 30 percent.
@@ -120,26 +117,20 @@ fn two_targets() -> Vec<(Day, Act)> {
 }
 
 #[test]
-fn several_targets_are_one_oco_each_and_a_single_stop_for_the_remainder() {
+fn several_targets_are_one_stop_gtt_for_the_whole_position() {
     let (_, gtts, _) = run_daily(&july(&[]), two_targets(), zero_slippage);
-    let held: Vec<(GttKind, f64, Triggers)> = gtts
+    let held: Vec<(f64, Option<f64>)> = gtts
         .iter()
-        .map(|gtt| (gtt.kind, gtt.quantity_units, triggers(gtt)))
+        .map(|gtt| (gtt.quantity_units, stop_trigger(gtt)))
         .collect();
-    assert_eq!(
-        held,
-        [
-            (GttKind::Oco, 50.0, (Some(1450.0), Some(1520.0))),
-            (GttKind::Oco, 30.0, (Some(1450.0), Some(1540.0))),
-            (GttKind::Single, 20.0, (Some(1450.0), None)),
-        ]
-    );
+    assert_eq!(held, [(100.0, Some(1450.0))]);
 }
 
 #[test]
-fn a_target_gtt_that_fires_leaves_the_others_working_until_the_stop() {
-    // 07-03 reaches 1525: the first target (1520) fills 50. 07-04 falls to 1445: the
-    // stop legs of the other two GTTs sell 30 and 20 at 1450.
+fn a_first_target_fills_by_the_engine_and_the_stop_gtt_sells_what_is_left() {
+    // 07-03 reaches 1525: the engine's first target (1520) sells 50 and g1 is cut to the
+    // 50 left in step 4. 07-04 falls to 1445: g1 sells those 50 (30 of the second target
+    // and the 20 of the remainder) at 1450, in one child order.
     let bars = july(&[
         (3, (1505.0, 1525.0, 1500.0, 1510.0)),
         (4, (1505.0, 1508.0, 1445.0, 1450.0)),
@@ -160,20 +151,19 @@ fn a_target_gtt_that_fires_leaves_the_others_working_until_the_stop() {
         exits,
         [
             (50.0, 1520.0, "leg_target", Some(0)),
-            (30.0, 1450.0, "leg_sl", None),
-            (20.0, 1450.0, "leg_sl", None),
+            (50.0, 1450.0, "leg_sl", None),
         ]
     );
     let statuses: Vec<GttStatus> = gtts.iter().map(|gtt| gtt.status).collect();
-    assert_eq!(statuses, [GttStatus::ChildFilled; 3]);
+    assert_eq!(statuses, [GttStatus::ChildFilled]);
 }
 
-// ---------------------------------------------------------------- firing (OCO)
+// ---------------------------------------------------------------- the stop GTT and a target in one bar
 
 #[test]
-fn an_oco_target_fires_inside_the_range_and_cancels_its_stop() {
-    // Stop 1450, target 1530. 07-03 trades up to 1535: the target leg fires at 1530; its
-    // child sells at 1514.70 or better, marketable at 1530.
+fn a_target_reached_inside_the_range_exits_by_the_engine_after_cancelling_the_gtt() {
+    // Stop 1450, target 1530. 07-03 trades up to 1535: the engine sells at the target
+    // 1530, as an MIS leg's target fills, after cancelling the stop GTT.
     let rules = LegRules {
         target: Some(points(30.0)),
         ..stop(50.0)
@@ -195,42 +185,39 @@ fn an_oco_target_fires_inside_the_range_and_cancels_its_stop() {
     );
     assert_eq!(
         events_at(&output, day),
-        [
-            "GttTriggered g1",
-            "leg_target_hit",
-            "GttChildFilled g1",
-            "PositionClosed"
-        ]
+        ["leg_target_hit", "GttCanceled g1", "PositionClosed"]
     );
-    assert_eq!(gtts[0].fired, Some(GttLegRole::Target));
+    assert_eq!(gtts[0].status, GttStatus::Canceled);
 }
 
 #[test]
-fn with_both_triggers_inside_one_bar_the_stop_fires() {
+fn with_the_stop_and_a_target_inside_one_bar_the_stop_gtt_fires() {
     let rules = LegRules {
         target: Some(points(30.0)),
         ..stop(50.0)
     };
     let bars = july(&[(3, (1500.0, 1535.0, 1445.0, 1500.0))]);
     let (output, gtts, _) = run_daily(&bars, buy_on_the_first(rules), zero_slippage);
-    assert_eq!(gtts[0].fired, Some(GttLegRole::Stop));
-    assert_eq!(output.fills[1].fill.price_rupees, 1450.0);
+    assert_eq!(gtts[0].status, GttStatus::ChildFilled);
+    let exit = output.fills[1].fill;
+    assert_eq!((exit.price_rupees, exit.gtt), (1450.0, Some(gtts[0].id)));
 }
 
 #[test]
-fn a_target_crossed_at_the_open_fires_before_a_stop_inside_the_range() {
+fn a_target_crossed_at_the_open_exits_before_a_stop_inside_the_range() {
     // 07-03 opens at 1540, beyond the target 1530, then falls through the stop 1450:
-    // the target fires at the open and its child sells at the open.
+    // the engine sells at the open by the target, and the stop GTT is cancelled.
     let rules = LegRules {
         target: Some(points(30.0)),
         ..stop(50.0)
     };
     let bars = july(&[(3, (1540.0, 1545.0, 1440.0, 1450.0))]);
     let (output, gtts, _) = run_daily(&bars, buy_on_the_first(rules), zero_slippage);
-    assert_eq!(gtts[0].fired, Some(GttLegRole::Target));
+    assert_eq!(gtts[0].status, GttStatus::Canceled);
+    let exit = output.fills[1].fill;
     assert_eq!(
-        (output.fills[1].fill.price_rupees, output.fills[1].fill.at),
-        (1540.0, FillAt::Open)
+        (exit.price_rupees, exit.at, exit.reason.code()),
+        (1540.0, FillAt::Open, "leg_target")
     );
 }
 
@@ -280,8 +267,8 @@ fn an_add_modifies_the_gtt_to_the_new_quantity_and_stop_in_step_4() {
         ["Filled", "PositionChanged", "GttModified g1"]
     );
     assert_eq!(
-        (gtts[0].quantity_units, triggers(&gtts[0])),
-        (20.0, (Some(1460.0), None))
+        (gtts[0].quantity_units, stop_trigger(&gtts[0])),
+        (20.0, Some(1460.0))
     );
 }
 
@@ -322,8 +309,8 @@ fn a_partial_exit_cancels_the_gtt_and_places_one_for_the_rest_in_step_4() {
         ]
     );
     assert_eq!(
-        (gtts[1].quantity_units, triggers(&gtts[1])),
-        (6.0, (Some(1450.0), None))
+        (gtts[1].quantity_units, stop_trigger(&gtts[1])),
+        (6.0, Some(1450.0))
     );
 }
 
@@ -449,5 +436,5 @@ fn a_gtt_older_than_360_days_is_cancelled_and_placed_again_at_a_session_open() {
         (gtts[1].created_on, gtts[1].status),
         (renewal, GttStatus::Active)
     );
-    assert_eq!(triggers(&gtts[1]), (Some(1400.0), None));
+    assert_eq!(stop_trigger(&gtts[1]), Some(1400.0));
 }

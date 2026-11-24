@@ -4,7 +4,8 @@
 //!
 //! - Leg rules (`stop`, `target`, `targets`, `trail`, `breakeven`, `after_first_target`)
 //!   are taken on MIS orders of a session; on CNC and NRML they raise
-//!   `NotImplementedError` (those legs are held as GTTs).
+//!   `NotImplementedError` (their stop is held as a GTT, which a session does not carry
+//!   yet).
 //! - A leg's stop is the broker's: once the leg has a stop level (the fill that opens it,
 //!   or a trail or breakeven that sets one) a "place" command with the role "leg_stop"
 //!   goes out for the units filled, a reduce-only "SL-M" at the leg's level for cash

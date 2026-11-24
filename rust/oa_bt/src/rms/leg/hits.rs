@@ -9,6 +9,10 @@
 //! 3. When the stop does not fill, every working target the bar reaches fills, nearest
 //!    first, at its level, or at the open when crossed there.
 //!
+//! A CNC or NRML leg's stop is held at the broker as a GTT that follows the leg's stop
+//! from the next base bar; its bar test takes the stop at the GTT's trigger instead
+//! (`test_bar_against`), so its targets and its stop keep this order.
+//!
 //! On a tick (tick mode, and the server's 35 risk vectors): the ratchet first, then the
 //! stop, then the targets, all on the one price.
 
@@ -25,8 +29,15 @@ impl LegState {
     /// the engine fills them; a stop hit is the only hit. Bar prices are validated
     /// when the data is loaded, so nothing here can fail.
     pub fn test_bar(&self, bar: &BarPrices) -> Vec<LevelHit> {
+        self.test_bar_against(bar, self.stop.map(|stop| stop.level_rupees))
+    }
+
+    /// `test_bar` with the stop at `stop_rupees` in place of the leg's own: the trigger of
+    /// a CNC or NRML leg's stop GTT in force, which the engine fires instead of filling at
+    /// the level. `None` tests the targets alone (no stop held in this bar).
+    pub fn test_bar_against(&self, bar: &BarPrices, stop_rupees: Option<f64>) -> Vec<LevelHit> {
         let side = self.context.side;
-        if let Some(hit) = self.stop_hit(bar.open, FillAt::Open) {
+        if let Some(hit) = self.stop_hit(stop_rupees, bar.open, FillAt::Open) {
             return vec![hit];
         }
         let targets = self.working_targets_nearest_first();
@@ -34,7 +45,7 @@ impl LegState {
             .iter()
             .any(|target| target_reached(side, bar.open, target.level_rupees));
         if !crossed_at_open {
-            if let Some(hit) = self.stop_hit(bar.adverse(side), FillAt::Level) {
+            if let Some(hit) = self.stop_hit(stop_rupees, bar.adverse(side), FillAt::Level) {
                 return vec![hit];
             }
         }
@@ -61,7 +72,8 @@ impl LegState {
     pub fn on_tick(&mut self, last_price_rupees: f64) -> Result<TickOutcome, RmsError> {
         let price = positive("last price", last_price_rupees)?;
         let ratchet = self.ratchet_at(price)?;
-        let hits = match self.stop_hit(price, FillAt::Level) {
+        let stop_rupees = self.stop.map(|stop| stop.level_rupees);
+        let hits = match self.stop_hit(stop_rupees, price, FillAt::Level) {
             Some(hit) => vec![LevelHit {
                 price_rupees: price,
                 ..hit
@@ -76,20 +88,20 @@ impl LegState {
         Ok(TickOutcome { ratchet, hits })
     }
 
-    /// The stop hit when `price` reaches the stop, priced at `price` for the open and
-    /// at the level otherwise.
-    fn stop_hit(&self, price: f64, at: FillAt) -> Option<LevelHit> {
-        let stop = self.stop?;
-        if !stop_reached(self.context.side, price, stop.level_rupees) {
+    /// The stop hit when `price` reaches the stop at `stop_rupees`, priced at `price`
+    /// for the open and at the level otherwise.
+    fn stop_hit(&self, stop_rupees: Option<f64>, price: f64, at: FillAt) -> Option<LevelHit> {
+        let level = stop_rupees?;
+        if !stop_reached(self.context.side, price, level) {
             return None;
         }
         let price_rupees = match at {
             FillAt::Open => price,
-            _ => stop.level_rupees,
+            _ => level,
         };
         Some(LevelHit {
             kind: LevelKind::Stop,
-            level_rupees: stop.level_rupees,
+            level_rupees: level,
             price_rupees,
             at,
             quantity_units: self.held_units,
