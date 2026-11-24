@@ -22,13 +22,17 @@ the GTT follower's findings come as `GttOutcome`s. Every GTT is a SINGLE GTT (P6
   GTT taken as gone resting: nothing fired), triggered (its child found), child missed
   (the position moved by the GTT's units with no child found: the fill's price, flagged
   when the trade book did not give it), ended outside the session, expired, rejected
-  after placement, or a mismatch the engine never guesses through.
+  after placement, or a mismatch the engine never guesses through; and other terms (a
+  resting GTT whose row shows another trigger or other units than the journal's, which
+  stays followed: the broker holds a stop the session did not ask for).
 
 **Order.** The news reaches the loop in the order the order worker learned it: a call's
 answer comes before any outcome of the GTT it names (`GttNews`).
 
 **What the session must do with them (unit N3b).** Every outcome but IN_FLIGHT lets the
-leg's flight go (`_gtt_flight`), TRIGGERED included: the session binds the child
+leg's flight go (`_gtt_flight`), TRIGGERED included. OTHER_TERMS leaves the GTT resting
+and followed: the session must not protect the leg again beside it (a second stop), but
+alert and set the journal's terms again (a modify). The session binds the child
 (`BindGttChild`) in the same loop step it takes TRIGGERED, or the child's fill may be
 compared as an external one. A request the worker could not send is posted as
 `inbox.NotSent` naming it (OpenAlgo silent, the mode guard locked); the session hands it to
@@ -46,14 +50,12 @@ from dataclasses import dataclass
 
 from .._products import OVERNIGHT_PRODUCTS
 from ..errors import LiveError
-from ._journal_gtt_rows import GTT_SIDES, GttTerms
+from ._journal_gtt_rows import GTT_PURPOSES, GTT_SIDES, GttTerms
 from ._types import Purpose
 from ._venue_requests import Priority
 
 #: The flag of a fill whose price the books did not give: the GTT child's limit stands in.
 PRICE_UNVERIFIED = "price_unverified"
-#: What a GTT is for: a leg's stop, or a strategy's own order resting as a GTT.
-GTT_PURPOSES = frozenset({Purpose.STOP, Purpose.ENTRY})
 
 
 class GttAction(enum.Enum):
@@ -151,10 +153,12 @@ class GttEvent(enum.Enum):
     EXPIRED = "expired"
     REJECTED = "rejected"
     MISMATCH = "mismatch"
+    #: A resting GTT whose row shows other terms than the journal's (it rests still).
+    OTHER_TERMS = "other_terms"
 
     @property
     def resolves(self) -> bool:
-        """True for every event but IN_FLIGHT: the GTT's fate is decided."""
+        """True for every event but IN_FLIGHT: nothing of the GTT is in flight."""
         return self is not GttEvent.IN_FLIGHT
 
 

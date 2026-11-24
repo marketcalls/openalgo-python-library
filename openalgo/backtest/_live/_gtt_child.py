@@ -11,10 +11,11 @@ act on what these give.
   whose units or time cannot be read is a possible child the engine cannot tell apart
   (`unsure`): with any, or with more than one sure, the engine never guesses (rule 5).
 - **A GTT gone with no child** (`move_of`, 3.3): the broker's units of the leg against
-  those read just before the last read that showed it resting. Moved by exactly the GTT's
-  units on its side (a SELL lowers them, a BUY raises them: a long's stop, a short's stop
-  and a strategy's GTT entry alike, review M4): it fired and its child was missed.
-  Unchanged: it ended outside the session. Anything else: the engine cannot tell.
+  its baseline, those read just before the last read that showed it resting, moved by
+  what the session's own orders filled on the leg since (`_gtt_reads`). Moved by exactly
+  the GTT's units on its side (a SELL lowers them, a BUY raises them: a long's stop, a
+  short's stop and a strategy's GTT entry alike, review M4): it fired and its child was
+  missed. Unchanged: it ended outside the session. Anything else: the engine cannot tell.
 - **A missed child's price** (`missed_price`): the trade book's trades of the leg on the
   GTT's side by orders the session did not send, newest first, for the GTT's units,
   averaged; None when the trade book holds none (the GTT's limit stands in, flagged).
@@ -31,7 +32,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._journal_gtt_rows import GttBinding
+from ._journal_gtt_rows import GttBinding, GttTerms
 from ._order_book import CLOCK_SKEW_LIMIT_NS, book_time_ns
 from ._order_updates import units
 from ._reconcile_rules import adoption_price, leg_books
@@ -100,10 +101,10 @@ def child_candidates(
     return Candidates(tuple(sure), tuple(unsure))
 
 
-def move_of(gtt: GttBinding, before: int, now: int) -> Move:
-    """How the broker's units of `gtt`'s leg moved from `before` to `now` (module
-    docstring)."""
-    signed = gtt.terms.quantity if gtt.terms.side == "BUY" else -gtt.terms.quantity
+def move_of(terms: GttTerms, before: int, now: int) -> Move:
+    """How the broker's units of the leg of a GTT of `terms` moved from `before`, its
+    baseline, to `now` (module docstring)."""
+    signed = terms.quantity if terms.side == "BUY" else -terms.quantity
     if now - before == signed:
         return Move.FIRED
     return Move.UNCHANGED if now == before else Move.OTHER

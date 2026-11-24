@@ -53,7 +53,8 @@ same bars, priced by `_session_slippage`); `_exit_reasons` names why an order cl
 position. The order worker's GTT parts (20-positional-live 3) are `_gtt_send` (each GTT
 request sent journal first and confirmed by the GTT book, `_gtt_confirm`) and
 `_gtt_follow` (the GTTs the broker holds followed, each one's record `_gtt_followed`, a
-fired GTT's child found, `_gtt_child`), on `_gtt_calls` and `_gtt_reads`; their values
+fired GTT's child found, `_gtt_child`, each finding posted, `_gtt_outcomes`), on
+`_gtt_calls` and `_gtt_reads`; their values
 are `_gtt_types` and the book's rows `_gtt_book`; `_gtt_flight` holds a leg in flight for
 the reconciler while its GTT's fate is open. OpenAlgo's product names are `.._products`'.
 

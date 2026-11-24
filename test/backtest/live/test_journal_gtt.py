@@ -22,7 +22,8 @@ from journal_samples import (
     started_journal,
 )
 
-from openalgo.backtest._live._types import Mode
+from openalgo.backtest._live._journal_gtt_rows import refusal_note
+from openalgo.backtest._live._types import Mode, Purpose
 from openalgo.backtest._live.journal import GttState, GttTerms
 from openalgo.backtest.errors import JournalError
 
@@ -35,8 +36,12 @@ def path(tmp_path):
     return journal_path(tmp_path)
 
 
-def recorded(journal, gtt_id=1, request_id=7, terms=STOP, product="CNC") -> int:
-    return journal.record_gtt("ema", gtt_id, request_id, "SBIN", "NSE", product, terms)
+def recorded(
+    journal, gtt_id=1, request_id=7, terms=STOP, product="CNC", purpose=Purpose.STOP
+) -> int:
+    return journal.record_gtt(
+        "ema", gtt_id, request_id, "SBIN", "NSE", product, terms, purpose=purpose
+    )
 
 
 # ----- recording and binding --------------------------------------------------------------
@@ -50,6 +55,28 @@ def test_a_gtt_written_before_its_place_call_reads_back_as_requested(path):
     assert (gtt.day, gtt.strategy, gtt.gtt_id, gtt.request_id) == (DAY, "ema", 1, 7)
     assert (gtt.symbol, gtt.exchange, gtt.product, gtt.terms) == ("SBIN", "NSE", "CNC", STOP)
     assert (gtt.state, gtt.trigger_id, gtt.recorded_ns) == (GttState.REQUESTED, None, DAY_NS)
+    assert gtt.purpose is Purpose.STOP
+
+
+@pytest.mark.parametrize("purpose", [Purpose.EXIT, "stop"], ids=["an exit", "a word"])
+def test_a_gtt_is_a_legs_stop_or_a_strategys_entry(path, purpose):
+    with (
+        started_journal(path) as journal,
+        pytest.raises(JournalError, match="a leg's stop or a strategy's entry"),
+    ):
+        recorded(journal, purpose=purpose)
+
+
+def test_an_earlier_days_refusal_is_found_by_what_the_gtt_was_for(path):
+    with started_journal(path) as journal:
+        entry = recorded(journal, purpose=Purpose.ENTRY)
+        journal.set_gtt_state(entry, GttState.NOT_PLACED, note=refusal_note("too close"))
+
+    with started_journal(path, day=NEXT_DAY) as journal:
+        leg = ("ema", "SBIN", "NSE", "CNC")
+        found = [journal.refused_days(*leg, purpose) for purpose in (Purpose.ENTRY, Purpose.STOP)]
+
+    assert found == [[DAY], []]
 
 
 def test_each_gtt_has_its_own_number_in_order(path):

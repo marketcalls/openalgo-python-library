@@ -278,6 +278,21 @@ class OrderPath(WatchedPath):
         of it has nothing left to change."""
         return self._follower.last_known(order_id)
 
+    def filled_units(self, symbol: str, exchange: str, product: str) -> int:
+        """The session's own units filled on a leg, as far as the order path knows them:
+        each of its orders on the leg by its latest word (`last_known`), bought units
+        positive and sold negative. The GTT parts net these out of a leg's broker units
+        (20-positional-live 3.3: only a GTT's own fill is its move)."""
+        filled = 0
+        for order_id in self._follower.order_ids():
+            intent = self._follower.intent_of(order_id)
+            word = self._follower.last_known(order_id)
+            if intent is None or word is None:
+                continue
+            if (intent.symbol, intent.exchange, intent.product) == (symbol, exchange, product):
+                filled += word.filled_quantity if intent.action == "BUY" else -word.filled_quantity
+        return filled
+
     def check_order(self, order_id: str) -> OrderCheck:
         """Read one order of this session with one `orderstatus` call, through the guard
         and the server watch (an answer in OpenAlgo's own JSON lifts the hold of a silent

@@ -20,13 +20,16 @@ from gtt_samples import (
     LIMIT,
     NEXT_DAY,
     PRICE,
+    TRIGGER,
     UNITS,
+    UNREADABLE_ROW,
     GttRig,
     bought,
     broker_with_sbin,
     calls,
     gtt_news,
     outcomes,
+    with_rows,
 )
 from worker_samples import STRATEGY
 
@@ -35,6 +38,7 @@ from openalgo.backtest._live._gtt_types import (
     PRICE_UNVERIFIED,
     BindGttChild,
     Direction,
+    GttAction,
     GttEvent,
     ReadGtts,
 )
@@ -138,22 +142,6 @@ def test_an_unknown_status_is_taken_as_resting_with_one_alert(make_fake_openalgo
     rig.worker.close()
 
 
-#: A row of the user's own GTT the engine cannot read: a broker wrote it with no leg.
-UNREADABLE_ROW = {"trigger_id": "990001", "status": "active", "symbol": "TCS", "legs": []}
-
-
-def with_rows(rig, monkeypatch, change):
-    """The GTT book's answers to the session, each changed by `change(rows)`."""
-    client = rig.orders._client
-    original = client.gttorderbook
-
-    def changed(**fields):
-        answer = original(**fields)
-        return {**answer, "data": change(list(answer["data"]))}
-
-    monkeypatch.setattr(client, "gttorderbook", changed)
-
-
 def test_a_row_the_engine_cannot_read_does_not_hide_the_rows_it_can(
     make_fake_openalgo, tmp_path, monkeypatch
 ):
@@ -179,6 +167,65 @@ def test_a_gtt_whose_own_row_cannot_be_read_is_not_judged_by_that_read(
     assert outcomes(news) == []
     with rig.journal() as journal:
         assert journal.gtt(seq).state is GttState.ACTIVE
+    rig.worker.close()
+
+
+def modified_by_hand(fake, trigger, units):
+    """The user changes the stop GTT in OpenAlgo to `trigger` (rupees) and `units`."""
+    fake.client().modifygttorder(
+        trigger_id=FIRST_TRIGGER,
+        strategy="manual",
+        symbol="SBIN",
+        exchange="NSE",
+        action="SELL",
+        product="CNC",
+        quantity=units,
+        price=LIMIT,
+        triggerprice_sl=trigger,
+    )
+
+
+@SHAPES
+def test_a_resting_gtt_that_shows_other_terms_than_the_journals_is_reported_once(
+    make_fake_openalgo, tmp_path, history
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
+    modified_by_hand(fake, 795.0, 6)
+
+    news = rig.send(ReadGtts()) + rig.send(ReadGtts())
+
+    (found,) = outcomes(news)
+    assert (found.seq, found.event) == (seq, GttEvent.OTHER_TERMS)
+    assert found.message == (
+        "the broker holds a trigger of 795.00 for 6 units, the journal 790.00 for 10 units"
+    )
+    with rig.journal() as journal:
+        assert journal.gtt(seq).state is GttState.ACTIVE
+    rig.worker.close()
+
+
+def test_a_gtt_reported_with_other_terms_is_still_followed(make_fake_openalgo, tmp_path):
+    fake, rig, _ = world(make_fake_openalgo, tmp_path)
+    modified_by_hand(fake, 795.0, UNITS)
+    rig.send(ReadGtts())
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+
+    news = rig.send(ReadGtts())
+
+    assert events(news) == [GttEvent.ENDED_OUTSIDE]
+    rig.worker.close()
+
+
+def test_a_gtt_that_shows_the_journals_terms_again_is_reported_when_they_differ_again(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, _ = world(make_fake_openalgo, tmp_path)
+    news = []
+    for trigger in (795.0, TRIGGER, 795.0):
+        modified_by_hand(fake, trigger, UNITS)
+        news += rig.send(ReadGtts())
+
+    assert events(news) == [GttEvent.OTHER_TERMS, GttEvent.OTHER_TERMS]
     rig.worker.close()
 
 
@@ -457,6 +504,65 @@ def test_a_gone_gtt_is_read_once_more_before_its_units_decide(
     with rig.journal() as journal:
         assert journal.gtt(seq).state is GttState.ACTIVE
     rig.worker.close()
+
+
+def partly_exited(rig, seq, left):
+    """The session's partial exit (20-positional-live 2): the stop GTT modified to the
+    `left` units, then the session's own exit sells the rest at the market."""
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=left))
+    rig.run(rig.own_exit(UNITS - left))
+
+
+@SHAPES
+def test_a_gtt_cancelled_by_hand_after_a_partial_exit_ended_outside_the_session(
+    make_fake_openalgo, tmp_path, history
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
+    partly_exited(rig, seq, 5)
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+
+    news = rig.send(ReadGtts()) + until_settled(rig)
+
+    # The position fell from 10 to 5 by the session's own exit, not by the GTT: its
+    # baseline moves with the session's own fills.
+    assert fake.position("SBIN", "NSE") == 5
+    expected = [GttEvent.ENDED_OUTSIDE] if history else [GttEvent.IN_FLIGHT, GttEvent.ENDED_OUTSIDE]
+    assert events(news) == expected
+    rig.worker.close()
+
+
+def test_a_gtt_that_fired_after_a_partial_exit_fired_with_its_child_missed(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    partly_exited(rig, seq, 5)
+    # The broker shows it gone and no child of it; the 5 left were sold in two lots.
+    sell_by_hand(fake, (2, 795.0), (3, 793.0))
+    fake.set_gtt_status(FIRST_TRIGGER, "triggered")
+
+    news = rig.send(ReadGtts()) + until_settled(rig)
+
+    missed = outcomes(news)[-1]
+    # (2 * 795.00 + 3 * 793.00) / 5 = 793.80, the session's own exit at 800.00 left out.
+    assert (missed.event, missed.units, missed.price) == (GttEvent.CHILD_MISSED, 5, 793.8)
+    rig.worker.close()
+
+
+def test_the_baseline_a_partial_exit_moved_is_kept_for_a_restart(make_fake_openalgo, tmp_path):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    partly_exited(rig, seq, 5)
+    # The worker takes the exit's fill at its next step, with no read of the GTT book.
+    rig.worker.step()
+    rig.worker.close()
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    restarted = GttRig(fake, tmp_path)
+
+    news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
+
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.ENDED_OUTSIDE]
+    with restarted.journal() as journal:
+        assert journal.gtt(seq).baseline_units == 5
+    restarted.worker.close()
 
 
 def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(

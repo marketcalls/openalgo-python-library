@@ -12,8 +12,10 @@ trades at 800.00. Nothing here contacts a server.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import itertools
+from collections.abc import Callable
 from typing import Any
 
 from fake_openalgo import BROKER, FakeOpenAlgo
@@ -27,7 +29,7 @@ from openalgo.backtest._live._gtt_types import (
     GttRequest,
 )
 from openalgo.backtest._live._types import Purpose
-from openalgo.backtest._live._venue_requests import Priority
+from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
 from openalgo.backtest._live.inbox import GttNews
 from openalgo.backtest._live.worker import JournalTarget, OrderWorker
 
@@ -39,6 +41,8 @@ UNITS = 10
 FIRST_TRIGGER, SECOND_TRIGGER = "261116000001", "261116000002"
 #: The trading day after `DAY`.
 NEXT_DAY = dt.date(2026, 11, 17)
+#: A row of the user's own GTT the engine cannot read: a broker wrote it with no leg.
+UNREADABLE_ROW = {"trigger_id": "990001", "status": "active", "symbol": "TCS", "legs": []}
 
 
 def broker_with_sbin(fake: FakeOpenAlgo, price: float = PRICE) -> FakeOpenAlgo:
@@ -61,6 +65,18 @@ def bought(fake: FakeOpenAlgo, units: int = UNITS, product: str = "CNC") -> str:
         quantity=units,
     )
     return answer["orderid"]
+
+
+def with_rows(rig: Any, monkeypatch: Any, change: Callable[[list[Any]], list[Any]]) -> None:
+    """The GTT book's answers to `rig`'s worker, each changed by `change(rows)`."""
+    client = rig.orders._client
+    original = client.gttorderbook
+
+    def changed(**fields: Any) -> Any:
+        answer = original(**fields)
+        return {**answer, "data": change(list(answer["data"]))}
+
+    monkeypatch.setattr(client, "gttorderbook", changed)
 
 
 class GttRig(WorkerRig):
@@ -139,6 +155,13 @@ class GttRig(WorkerRig):
             seq=seq,
         )
 
+    def own_exit(self, units: int, product: str = "CNC") -> PlaceRequest:
+        """The session's own exit of the leg, as the venue map sends a strategy's exit:
+        sell `units` SBIN at the market in `product`."""
+        request = self.place(Purpose.EXIT, action="SELL", quantity=units)
+        intent = dataclasses.replace(request.intent, product=product)
+        return dataclasses.replace(request, intent=intent)
+
     def send(self, request: Any) -> list[Any]:
         """Hand the worker `request`, step once, and return the GTT news it posted."""
         return gtt_news(self.run(request))
@@ -181,6 +204,7 @@ __all__ = [
     "SECOND_TRIGGER",
     "TRIGGER",
     "UNITS",
+    "UNREADABLE_ROW",
     "GttRig",
     "answers",
     "bought",
@@ -188,4 +212,5 @@ __all__ = [
     "calls",
     "gtt_news",
     "outcomes",
+    "with_rows",
 ]

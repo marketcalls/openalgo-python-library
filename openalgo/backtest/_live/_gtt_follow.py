@@ -1,8 +1,8 @@
 """The GTT follower of the order worker (20-positional-live 3.1 to 3.3; the lead's ruling
 N3a-2): every GTT of the journal the broker holds, judged at each read of the GTT book,
 and the child order of one that fired found in the order book. Each finding is a typed
-outcome posted to the loop (`_gtt_types.GttOutcome`, as `inbox.GttNews`), and the journal
-notes each state.
+outcome posted to the loop (`_gtt_types.GttOutcome`, as `inbox.GttNews`, by
+`_gtt_outcomes`), and the journal notes each state.
 
 **When it reads** (3.1): after every GTT call (the calls' confirmations, `_gtt_send`, whose
 reads it judges too: `observe`); every `GTT_BOOK_EVERY_S` while the market is open and a
@@ -13,9 +13,12 @@ is decided. Nothing is read while OpenAlgo is silent (`busy`): a read could hold
 worker for the client's whole timeout. A read that fails changes nothing.
 
 **What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT's leg's units
-read just before it become its baseline (`_gtt_reads`), kept in the journal whenever they
-change so a later day judges it too; an unknown status is taken as resting, with an ERROR
-alert once per GTT (3.1 asks for a WARN; the alerts have no such kind); ended without
+read just before it become its baseline (`_gtt_reads`), moved by each fill of the session's
+own orders on the leg since (`_gtt_followed`), kept in the journal whenever it changes so a
+later day judges it too; a resting row that shows another trigger or other units than the
+journal's is posted once as OTHER_TERMS and stays followed; an unknown status is taken as
+resting, with an ERROR alert once per GTT (3.1 asks for a WARN; the alerts have no such
+kind); ended without
 firing (cancelled, deleted, disabled), expired or rejected after placement, the GTT ends
 in the journal and its outcome is posted (the session places it again, 3.4); fired or
 gone, its leg is in flight (IN_FLIGHT posted) while its child is looked for. A GTT taken
@@ -46,13 +49,14 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ._gtt_book import GttRow, Seen
-from ._gtt_child import Move, child_candidates, missed_price, move_of
-from ._gtt_followed import ENDINGS, Followed, outcome_of
+from ._gtt_child import Move, child_candidates, move_of
+from ._gtt_followed import ENDINGS, Followed, other_terms, unknown_status
+from ._gtt_outcomes import GttOutcomes
 from ._gtt_reads import BookRead, GttReader, LegKey
-from ._gtt_types import PRICE_UNVERIFIED, GttEvent
+from ._gtt_types import GttEvent
 from ._journal_gtt_rows import GttBinding, GttState
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, Now, OrderUpdate
-from .inbox import GttNews, Message
+from .inbox import Message
 from .journal import Journal
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -88,14 +92,13 @@ class GttFollower:
     ) -> None:
         self._reader = reader
         self._journal = journal
-        self._post = post
         self._alerts = alerts
         self._now = now
         self._market_open = market_open
         self._busy = busy
         self._followed: dict[int, Followed] = {}
+        self._outcomes = GttOutcomes(journal, post, self._followed)
         self._held: set[int] = set()
-        self._children: set[str] = set()
         self._asked = False
         self._next_read_ns = 0
 
@@ -126,7 +129,10 @@ class GttFollower:
     def follow(self, gtt: GttBinding, read: BookRead) -> None:
         """Follow `gtt`, which `read` showed resting (a place or modify confirmed): its
         leg's units in `read` are its baseline."""
+        known = self._followed.get(gtt.seq)
         followed = Followed(gtt, gtt.baseline_units, active_ns=read.read_ns)
+        if known is not None:
+            followed.units_before, followed.own_before = known.units_before, known.own_before
         self._followed[gtt.seq] = followed
         self._held.discard(gtt.seq)
         self._keep_baseline(followed, read)
@@ -159,14 +165,17 @@ class GttFollower:
         return None if followed is None else followed.active_ns
 
     def fired_by_units(self, gtt: GttBinding, read: BookRead) -> bool:
-        """Whether the units of `gtt`'s leg in `read` moved from its baseline by the GTT's
-        units on its side: it fired (3.3). False when either is not known."""
+        """Whether the units of `gtt`'s leg in `read` moved from its baseline (moved by the
+        session's own fills) by the GTT's units on its side: it fired (3.3). False when
+        either is not known."""
         followed = self._followed.get(gtt.seq)
-        before = None if followed is None else followed.units_before
-        units = read.units.get((gtt.symbol, gtt.exchange, gtt.product))
+        if followed is None:
+            return False
+        self._shift(followed, read.own.get(followed.leg))
+        units, before = read.units.get(followed.leg), followed.units_before
         if before is None or units is None:
             return False
-        return move_of(gtt, before, units) is Move.FIRED
+        return move_of(gtt.terms, before, units) is Move.FIRED
 
     def legs(self) -> set[LegKey]:
         """The legs of the GTTs followed, whose units a GTT book read reads first."""
@@ -199,7 +208,10 @@ class GttFollower:
     # ----- the reads --------------------------------------------------------------------
 
     def due(self) -> None:
-        """Read what is due (module docstring) and judge it."""
+        """Move each baseline by the session's own fills since, then read what is due
+        (module docstring) and judge it."""
+        for followed in self._followed.values():
+            self._shift(followed, self._reader.own(followed.leg))
         if self._busy() or not self._followed:
             return
         now = self._now()
@@ -241,7 +253,7 @@ class GttFollower:
                 self._fired_or_gone(followed, row, seen, read.read_ns)
             else:
                 event, note = ENDINGS[seen]
-                self._end(followed, event, note.format(status=row.status if row else ""))
+                self._outcomes.end(followed, event, note.format(status=row.status if row else ""))
 
     def _resting(self, followed: Followed, row: GttRow | None, read: BookRead) -> None:
         followed.active_ns = read.read_ns
@@ -249,32 +261,39 @@ class GttFollower:
         if followed.gtt.state is GttState.PLACED:
             self._journal.set_gtt_state(followed.gtt.seq, GttState.ACTIVE)
             followed.gtt = dataclasses.replace(followed.gtt, state=GttState.ACTIVE)
-        if row is not None and row.seen is Seen.UNKNOWN and not followed.warned:
-            followed.warned = True
-            text = (
-                f"GTT {row.trigger_id} of {followed.gtt.strategy} on {followed.gtt.exchange}:"
-                f"{followed.gtt.symbol} shows status {row.status!r}, which the engine does not "
-                "know: it is taken as resting. Check it in OpenAlgo"
-            )
+        words = "" if row is None else other_terms(followed, row)
+        if words:
+            gtt = followed.gtt
+            logger.warning("GTT %s of %s: %s", gtt.trigger_id, gtt.strategy, words)
+            self._outcomes.post(followed, GttEvent.OTHER_TERMS, message=words)
+        text = "" if row is None else unknown_status(followed, row)
+        if text:
             logger.error(text)
             self._alerts.send(AlertKind.ERROR, text)
 
     def _keep_baseline(self, followed: Followed, read: BookRead) -> None:
-        """The leg's units in `read`, which showed the GTT resting, are its baseline; the
-        journal keeps it whenever it changes (a later day judges the GTT by it)."""
-        units = read.units.get(followed.leg)
-        if units is None or units == followed.units_before:
-            return
-        followed.units_before = units
-        self._journal.set_gtt_baseline(followed.gtt.seq, units)
+        """The leg's units in `read`, which showed the GTT resting, are its baseline (or,
+        not read, the baseline is moved by the session's own fills); the journal keeps it
+        whenever it changes (a later day judges the GTT by it)."""
+        units, own = read.units.get(followed.leg), read.own.get(followed.leg)
+        if units is None or own is None:
+            self._shift(followed, own)
+        elif followed.rebase(units, own):
+            self._journal.set_gtt_baseline(followed.gtt.seq, units)
+
+    def _shift(self, followed: Followed, own: int | None) -> None:
+        """Move `followed`'s baseline by the session's own fills on its leg up to `own`,
+        what they have filled by now (None: not known), kept in the journal when it moved."""
+        if own is not None and followed.shift(own) and followed.units_before is not None:
+            self._journal.set_gtt_baseline(followed.gtt.seq, followed.units_before)
 
     def _rests_again(self, followed: Followed, row: GttRow | None, read: BookRead) -> None:
         """A GTT taken as gone that `read` shows resting: nothing fired (module docstring)."""
         followed.since_ns, followed.next_ns = None, 0
         self._journal.set_gtt_state(followed.gtt.seq, GttState.ACTIVE, note=RESTING_AGAIN_NOTE)
         followed.gtt = dataclasses.replace(followed.gtt, state=GttState.ACTIVE)
+        self._outcomes.post(followed, GttEvent.RESTING, message=RESTING_AGAIN_NOTE)
         self._resting(followed, row, read)
-        self._outcome(followed, GttEvent.RESTING, message=RESTING_AGAIN_NOTE)
 
     def _fired_or_gone(
         self, followed: Followed, row: GttRow | None, seen: Seen, at_ns: int
@@ -285,9 +304,9 @@ class GttFollower:
             followed.gtt = dataclasses.replace(followed.gtt, state=GttState.TRIGGERED)
         followed.since_ns, followed.next_ns = at_ns, at_ns
         followed.child = None if row is None else row.child_order_id
-        self._outcome(followed, GttEvent.IN_FLIGHT, message=note)
+        self._outcomes.post(followed, GttEvent.IN_FLIGHT, message=note)
         if followed.child is not None:
-            self._triggered(followed, followed.child)
+            self._outcomes.triggered(followed, followed.child)
 
     # ----- the child --------------------------------------------------------------------
 
@@ -297,10 +316,10 @@ class GttFollower:
             return
         found = child_candidates(followed.gtt, rows, since_ns=followed.active_ns, taken=self.taken)
         if found.child is not None:
-            self._triggered(followed, found.child)
+            self._outcomes.triggered(followed, found.child)
         elif found.every:
             words = f"orders {', '.join(found.every)} could each be its child"
-            self._unresolved(followed, words, found.every)
+            self._outcomes.unresolved(followed, words, found.every)
         elif followed.since_ns is not None and now - followed.since_ns >= CHILD_SEARCH_S * _NS:
             self._settle_gone(followed)
 
@@ -314,60 +333,27 @@ class GttFollower:
         if row is not None and row.seen.rests:
             self._rests_again(followed, row, read)
             return
+        self._shift(followed, read.own.get(followed.leg))
         units = read.units.get(followed.leg)
         if units is None or (row is not None and row.seen is Seen.UNREADABLE):
             return
         before = followed.units_before
         if before is None:
             words = "no read showed it resting with its position, so whether it fired is unknown"
-            self._unresolved(followed, words)
+            self._outcomes.unresolved(followed, words)
             return
-        move = move_of(followed.gtt, before, units)
+        move = move_of(followed.gtt.terms, before, units)
         if move is Move.FIRED:
-            self._missed(followed)
+            self._outcomes.missed(followed, self._reader.trade_book())
         elif move is Move.UNCHANGED:
             note = "gone with no child found and the position unchanged: ended outside the session"
-            self._end(followed, GttEvent.ENDED_OUTSIDE, note)
+            self._outcomes.end(followed, GttEvent.ENDED_OUTSIDE, note)
         else:
-            self._unresolved(followed, f"the position went from {before} to {units} units")
-
-    def _missed(self, followed: Followed) -> None:
-        gtt = followed.gtt
-        price = missed_price(gtt, self._reader.trade_book(), self.taken)
-        flags = () if price is not None else (PRICE_UNVERIFIED,)
-        price = gtt.terms.limit_price if price is None else price
-        note = f"fired, its child missed: {gtt.terms.quantity} units at {price:.2f}"
-        self._journal.set_gtt_state(gtt.seq, GttState.FIRED, note=note)
-        self._followed.pop(gtt.seq, None)
-        units = gtt.terms.quantity
-        self._outcome(followed, GttEvent.CHILD_MISSED, units=units, price=price, flags=flags)
-
-    def _triggered(self, followed: Followed, child: str) -> None:
-        self._children.add(child)
-        self._followed.pop(followed.gtt.seq, None)
-        self._outcome(followed, GttEvent.TRIGGERED, order_id=child)
-
-    def _unresolved(self, followed: Followed, words: str, candidates: tuple[str, ...] = ()) -> None:
-        """A GTT whose fate the engine cannot tell: a MISMATCH posted, never a guess; the
-        journal keeps it TRIGGERED for the user to settle."""
-        self._followed.pop(followed.gtt.seq, None)
-        self._outcome(followed, GttEvent.MISMATCH, candidates=candidates, message=words)
-
-    def _end(self, followed: Followed, event: GttEvent, note: str) -> None:
-        self._journal.set_gtt_state(followed.gtt.seq, GttState.ENDED, note=note)
-        self._followed.pop(followed.gtt.seq, None)
-        self._outcome(followed, event, message=note)
+            self._outcomes.unresolved(followed, f"the position went from {before} to {units} units")
 
     def taken(self, order_id: str) -> bool:
         """Whether an order is the session's own or another GTT's child (3.2 rule 2)."""
-        if order_id in self._children or self._journal.intent_of(order_id) is not None:
-            return True
-        return self._journal.gtt_of_child(order_id) is not None
-
-    def _outcome(self, followed: Followed, event: GttEvent, **fields: Any) -> None:
-        gtt = followed.gtt
-        logger.info("GTT %s of %s: %s", gtt.trigger_id, gtt.strategy, event.value)
-        self._post(GttNews(outcome_of(followed, event, **fields)))
+        return self._outcomes.taken(order_id)
 
 
 __all__ = [

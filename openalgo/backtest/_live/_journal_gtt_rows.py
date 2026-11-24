@@ -18,20 +18,21 @@ from .._products import OVERNIGHT_PRODUCTS
 from ..errors import JournalError
 from ._journal_file import check_name
 from ._journal_rows import finite_number, unreadable, whole_number
+from ._types import Purpose
 
 #: The sides of a GTT's child order, as OpenAlgo's actions.
 GTT_SIDES = ("BUY", "SELL")
-#: How a GTT's state note records the broker's refusal of its placement, after what the
-#: GTT was for ("stop" or "entry", a `Purpose` value) and before the broker's words: a
-#: stop's refusal of an earlier day is found by it (20-positional-live 3.5,
+#: What a GTT is for: a leg's stop, or a strategy's own order resting as a GTT.
+GTT_PURPOSES = frozenset({Purpose.STOP, Purpose.ENTRY})
+#: How a GTT's state note records the broker's refusal of its placement, before the
+#: broker's words: a refusal of an earlier day is found by it (20-positional-live 3.5,
 #: `JournalGtts.refused_days`).
-REFUSED_BY_BROKER = " refused by the broker: "
+REFUSED_BY_BROKER = "refused by the broker: "
 
 
-def refusal_note(purpose: str, message: str) -> str:
-    """The state note of a GTT whose placement the broker refused with `message`, placed
-    for `purpose` ("stop" or "entry")."""
-    return f"{purpose}{REFUSED_BY_BROKER}{message}"
+def refusal_note(message: str) -> str:
+    """The state note of a GTT whose placement the broker refused with `message`."""
+    return f"{REFUSED_BY_BROKER}{message}"
 
 
 class GttState(enum.Enum):
@@ -103,10 +104,11 @@ class GttBinding:
     request that made it (its row, written before the place call); the trading `day` it
     was recorded on; the `strategy` and the kernel's `gtt_id` of that day's session; the
     order worker's `request_id` of the place request; the broker's `trigger_id` (None until
-    the place answered with one); its instrument and product; its `terms` as the broker
-    holds them; its `state`; when it was recorded and last changed; and its leg's signed
-    units at the broker when a read last showed it resting (`baseline_units`, None before
-    any: 20-positional-live 3.3, what a GTT gone later is judged by, across days too)."""
+    the place answered with one); its instrument and product; what it is for (`purpose`,
+    one of `GTT_PURPOSES`); its `terms` as the broker holds them; its `state`; when it was
+    recorded and last changed; and its leg's signed units at the broker when a read last
+    showed it resting (`baseline_units`, None before any: 20-positional-live 3.3, what a
+    GTT gone later is judged by, across days too)."""
 
     seq: int
     day: date
@@ -117,6 +119,7 @@ class GttBinding:
     symbol: str
     exchange: str
     product: str
+    purpose: Purpose
     terms: GttTerms
     state: GttState
     recorded_ns: int
@@ -162,6 +165,7 @@ def binding_from(row: sqlite3.Row) -> GttBinding:
             symbol=row["symbol"],
             exchange=row["exchange"],
             product=row["product"],
+            purpose=Purpose(row["purpose"]),
             terms=terms,
             state=GttState(row["state"]),
             recorded_ns=row["recorded_ns"],
@@ -182,6 +186,7 @@ def child_from(row: sqlite3.Row) -> GttChild:
 
 
 __all__ = [
+    "GTT_PURPOSES",
     "GTT_SIDES",
     "REFUSED_BY_BROKER",
     "GttBinding",

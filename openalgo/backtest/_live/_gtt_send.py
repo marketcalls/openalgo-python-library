@@ -14,10 +14,12 @@ the GTT book (`_gtt_confirm`), and answered to the loop as one `GttAnswer` (post
 - **The answer first**: a call's answer is posted before the follower takes the GTT on,
   so the loop learns a GTT was placed before it learns it fired or ended (`GttNews`).
 - **Refusals** (3.5): the answer carries the broker's message. A leg's stop GTT refused
-  when the journal already holds a refusal of a stop GTT of the same strategy, symbol and
-  product from an earlier trading day is kept (`keep_refusal`): the strategy is refused at
-  every later start until the user changes its product or `positional_stops`. A first
-  day's refusal is the day's alone.
+  when the journal already holds a refusal of a stop GTT of the same leg (strategy,
+  symbol, exchange and product, as `kept_refusals` and its preflight check key it) from an
+  earlier trading day is kept (`keep_refusal`): the strategy is refused at every later
+  start until the user changes its product or `positional_stops`. A first day's refusal
+  is the day's alone, and so is a strategy's GTT entry's: only a stop's refusal exits a
+  leg every day, and `positional_stops` is no remedy for an entry.
 - **Held back**: while OpenAlgo is silent (a timeout or a dropped connection) a request is
   put back and noticed as `NotSent(silent)` at most every `HELD_NOTICE_EVERY_S`, as an
   order's; after a mode guard lock it is `NotSent(locked)`.
@@ -31,7 +33,6 @@ import logging
 from collections.abc import Callable
 
 from .._layout import NANOS_PER_SECOND
-from ._gtt_book import Seen
 from ._gtt_calls import CallKind, CallResult, GttCalls
 from ._gtt_child import child_candidates
 from ._gtt_confirm import (
@@ -40,6 +41,7 @@ from ._gtt_confirm import (
     Stage,
     Step,
     Verdict,
+    again_verdict,
     child_verdict,
     judge,
     misses_from_ns,
@@ -141,6 +143,7 @@ class GttSender:
             request.exchange,
             request.product,
             request.terms,
+            purpose=request.purpose,
         )
         result = self._calls.place(request)
         if result.kind is CallKind.ACCEPTED:
@@ -149,8 +152,7 @@ class GttSender:
         elif result.kind is CallKind.UNANSWERED:
             self._start(Pending(stage, request, seq, answered=False, again=again), result)
         elif result.kind is CallKind.REFUSED:
-            note = refusal_note(request.purpose.value, result.message)
-            self._journal.set_gtt_state(seq, GttState.NOT_PLACED, note=note)
+            self._journal.set_gtt_state(seq, GttState.NOT_PLACED, note=refusal_note(result.message))
             kept = self._keep(request, result.message)
             self._answer(request, GttAnswerKind.REFUSED, message=result.message, kept=kept)
             self._follower.ask()
@@ -227,7 +229,7 @@ class GttSender:
         if request.purpose is not Purpose.STOP:
             return False
         leg = (request.strategy, request.symbol, request.exchange, request.product)
-        if not self._journal.refused_days(*leg, Purpose.STOP.value):
+        if not self._journal.refused_days(*leg, Purpose.STOP):
             return False
         self._journal.keep_refusal(*leg, message)
         logger.error("the stop GTT of %s was refused again on a later day: kept", request.leg)
@@ -237,7 +239,7 @@ class GttSender:
 
     def _start(self, pending: Pending, result: CallResult) -> None:
         """Wait for `pending`'s confirmation, its call answered by `result` just now."""
-        pending.finished = result.finished
+        pending.finished, pending.sent_ns = result.finished, result.sent_ns
         pending.misses_from_ns = misses_from_ns(
             pending.stage, finished=result.finished, sent_ns=result.sent_ns, answered_ns=self._now()
         )
@@ -251,7 +253,7 @@ class GttSender:
         legs = self._follower.legs() | {(request.symbol, request.exchange, request.product)}
         read = self._reader.gtt_book(legs)
         self._follower.observe(read)
-        self._act(pending, judge(pending, read.rows, self._bound, read.read_ns), read)
+        self._act(pending, judge(pending, read, self._bound), read)
 
     def _act(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         step = verdict.step
@@ -260,7 +262,7 @@ class GttSender:
         elif step is Step.BIND:
             self._journal.bind_gtt(pending.seq, verdict.trigger_id)
             pending.trigger_id, pending.misses = verdict.trigger_id, 0
-            self._act(pending, judge(pending, read.rows, self._bound, read.read_ns), read)
+            self._act(pending, judge(pending, read, self._bound), read)
         elif step is Step.PLACE_AGAIN:
             self._drop(pending)
             self._journal.set_gtt_state(pending.seq, GttState.NOT_PLACED, note=NOT_FOUND_NOTE)
@@ -278,27 +280,31 @@ class GttSender:
             if gtt is not None:
                 self._journal.set_gtt_state(gtt.seq, GttState.CANCELLING, note=verdict.message)
                 self._send_cancel(Stage.REPLACE_CANCEL, pending.request, gtt)
-        elif step is Step.CHILD_CHECK:
-            self._child_check(pending, verdict.seen, read)
+        elif step in (Step.CHILD_CHECK, Step.FIRED_CHECK):
+            self._book_check(pending, verdict, read)
         else:
             self._finish(pending, verdict, read)
 
-    def _child_check(self, pending: Pending, seen: Seen | None, read: BookRead) -> None:
-        """A cancelled GTT absent or ended (`seen`): confirmed only when no child order of
-        it is in the order book (3.1), nor its leg's units moved by its units
-        (`_gtt_confirm.child_verdict`); otherwise it fired."""
+    def _book_check(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
+        """Read the order book before deciding (an order book not read is read again): a
+        cancelled GTT absent or ended (CHILD_CHECK) is confirmed only when no child of it is
+        in the book (3.1), nor its leg's units moved by its units (`child_verdict`); an
+        unanswered place (FIRED_CHECK) is placed again only when no order of its child's
+        shape was placed since it was sent (`again_verdict`)."""
         rows = self._reader.order_rows()
         gtt = self._journal.gtt(pending.seq)
         if rows is None or gtt is None:
             pending.next_ns = self._now() + round(READ_AGAIN_AFTER_S * _NS)
             return
+        taken = self._follower.taken
+        if verdict.step is Step.FIRED_CHECK:
+            found = child_candidates(gtt, rows, since_ns=pending.sent_ns, taken=taken)
+            self._act(pending, again_verdict(pending, found), read)
+            return
         since = self._follower.last_active(pending.seq)
-        found = child_candidates(gtt, rows, since_ns=since, taken=self._follower.taken)
-        verdict = child_verdict(pending, seen, found, self._follower.fired_by_units(gtt, read))
-        if verdict.step is Step.WAIT:
-            pending.next_ns = self._now() + round(READ_AGAIN_AFTER_S * _NS)
-        else:
-            self._finish(pending, verdict, read)
+        found = child_candidates(gtt, rows, since_ns=since, taken=taken)
+        fired = self._follower.fired_by_units(gtt, read)
+        self._act(pending, child_verdict(pending, verdict.seen, found, fired), read)
 
     def _finish(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         """Answer `pending` as `verdict` says: noted in the journal, answered, then the GTT

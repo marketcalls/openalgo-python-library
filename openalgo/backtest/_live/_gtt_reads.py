@@ -6,7 +6,10 @@ missed child's price is read from.
 **Positions first.** A GTT book read is preceded by a position-book read (and the
 holdings, when a leg trades CNC: `_broker_units`): a GTT the book shows resting had not
 fired when the positions were read, so those units are what its leg held before it
-could fire, the baseline a GTT that is later gone is judged against (3.3).
+could fire, the baseline a GTT that is later gone is judged against (3.3). With them goes
+what the session's own orders had filled on each leg by then, as the order path knows it
+(`OrderPath.filled_units`): a later move of the leg's units is the GTT's only net of the
+session's own fills since (an exit sold part of the leg while its stop rested).
 
 Every answer goes through the mode guard (the analyzer switch routes the books too) and
 is told to the order path's server watch (`note`: OpenAlgo's own answer lifts the hold of
@@ -44,17 +47,21 @@ ALL_GTTS = "all"
 class BookRead:
     """A read of the GTT book: its rows by trigger ID (None when it could not be read),
     the broker's units of each leg asked for as read just before it (None for a leg whose
-    books could not be read), and when the GTT book's read began."""
+    books could not be read), when the GTT book's read began, and the units the session's
+    own orders had filled on each of those legs when the broker's were read."""
 
     rows: Mapping[str, GttRow] | None
     read_ns: int
     units: Mapping[LegKey, int | None] = field(default_factory=dict)
+    own: Mapping[LegKey, int] = field(default_factory=dict)
 
 
 class GttReader:
     """The reads (module docstring) through `client` (the orders client), each answer
-    checked by `guard` and told to `note` (`OrderPath.note_answer`); `calling` marks the
-    worker busy for a call, `now` gives UTC nanoseconds."""
+    checked by `guard` and told to `note` (`OrderPath.note_answer`); `own(leg)` gives the
+    units the session's own orders have filled on a leg now (`OrderPath.filled_units`),
+    kept as the public `own` for the GTT parts; `calling` marks the worker busy for a
+    call, `now` gives UTC nanoseconds."""
 
     def __init__(
         self,
@@ -62,21 +69,26 @@ class GttReader:
         *,
         guard: GuardLike,
         note: Callable[[Mapping[str, Any]], None],
+        own: Callable[[LegKey], int],
         now: Now,
         calling: Callable[[], AbstractContextManager[None]],
     ) -> None:
         self._client = client
         self._guard = guard
         self._note = note
+        self.own = own
         self._now = now
         self._calling = calling
 
     def gtt_book(self, legs: Iterable[LegKey]) -> BookRead:
-        """The GTT book, with the units of `legs` read just before it (module docstring)."""
-        units = self.units(legs)
+        """The GTT book, with the units of `legs` read just before it and the session's
+        own on them then (module docstring)."""
+        wanted = set(legs)
+        own = {leg: self.own(leg) for leg in wanted}
+        units = self.units(wanted)
         read_ns = self._now()
         answer = self._read("gttorderbook", status=ALL_GTTS)
-        return BookRead(None if answer is None else gtt_rows(answer), read_ns, units)
+        return BookRead(None if answer is None else gtt_rows(answer), read_ns, units, own)
 
     def units(self, legs: Iterable[LegKey]) -> dict[LegKey, int | None]:
         """The broker's units of each of `legs` now (`_broker_units`), None for a leg

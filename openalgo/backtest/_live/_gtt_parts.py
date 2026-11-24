@@ -44,7 +44,14 @@ def gtt_parts(
     """The GTT sender of an order worker and the follower it holds (module docstring),
     through `client` (the orders client). Raises JournalError when the journal's GTTs
     cannot be read."""
-    reader = GttReader(client, guard=guard, note=path.note_answer, now=now, calling=calling)
+    reader = GttReader(
+        client,
+        guard=guard,
+        note=path.note_answer,
+        own=lambda leg: path.filled_units(*leg),
+        now=now,
+        calling=calling,
+    )
     follower = GttFollower(
         reader,
         journal=journal,
