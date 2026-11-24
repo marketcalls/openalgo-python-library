@@ -69,6 +69,7 @@ fn instrument(kind: InstrumentKind) -> InstrumentSpec {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: future.then(|| march(30)),
+        positional_exit_day: None,
     }
 }
 

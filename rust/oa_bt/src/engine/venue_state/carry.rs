@@ -14,6 +14,7 @@
 //! | `stop_gtt_rejections` | for each open CNC or NRML leg, how many of its stop GTTs the broker rejected after their placement (design 3.1, row `rejected`: the second exits the leg, on whichever day it comes) |
 //! | `risk` | the trading state, the daily loss measure's totals (its run baseline), the drawdown peak, and the slices each open position has been held |
 //! | `open_trades` | the round trips still open, with their excursion so far |
+//! | `last_closes` | each instrument's last close of the day (rupees): what a position on a contract that expires that day is recorded exited at by the next day's session (below) |
 //!
 //! A stop GTT that holds no open leg's stop is carried with `to_cancel` true: one whose
 //! position closed, or whose leg opened again, while the venue refused its cancellation up
@@ -45,9 +46,19 @@
 //! session as a backtest's does at a session boundary (a run still open counts from its
 //! first fill, decision 11.9), and so does the trading state (a daily loss lock lifts, a
 //! drawdown halt stays); the sale proceeds withheld are credited, the day after the sale.
-//! Reading, checking and applying it is `carry_restore`.
+//! A carried leg whose stop is a rearm_daily DAY stop (`rearm`) gets it placed again once
+//! the session has reached its open.
+//!
+//! A carried position on a contract whose last trading day is before the session's day
+//! (an index future or a cash-settled MCX contract left to the exchange at its last
+//! close, `expiry`) is not traded by the session: its exit is recorded at the contract's
+//! carried last close (the position's mark when the state has none), reason `expiry`,
+//! flagged `filled_at_last_close`, with no charges, once the rest is in place, and its
+//! stop GTTs are not restored (the broker ends them with the contract). Its instrument is
+//! reported in `CarriedIds::expired`. Reading, checking and applying it is
+//! `carry_restore`.
 
-use crate::exec::{Gtt, GttId, GttPurpose, OrderId};
+use crate::exec::{Gtt, GttId, GttPurpose, InstrumentId, OrderId};
 use crate::portfolio::PositionKey;
 use crate::rms::TradingStateCause;
 
@@ -80,6 +91,9 @@ pub struct CarriedIds {
     pub gtts: Vec<(GttId, GttId)>,
     /// The strategy's GTT orders.
     pub orders: Vec<(OrderId, OrderId)>,
+    /// The instruments whose contracts had expired before the session's day: their
+    /// positions were recorded exited at their last close (module docs).
+    pub expired: Vec<InstrumentId>,
 }
 
 impl Engine {
@@ -144,7 +158,22 @@ impl Engine {
                 "open_trades",
                 list(trades, |trade| write_open_trade(book, &trade)),
             ),
+            ("last_closes", self.write_last_closes()),
         ]))
+    }
+
+    /// Each instrument's last close (module docs), by registration index; an instrument
+    /// with none is left out.
+    fn write_last_closes(&self) -> StateValue {
+        let closes = self
+            .last_close
+            .iter()
+            .enumerate()
+            .filter_map(|(index, close)| close.map(|close| (index, close)));
+        list(closes, |(index, close)| {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            map([("instrument", index.into()), ("close_rupees", close.into())])
+        })
     }
 
     /// The session's instruments by symbol and exchange, in registration order: the next

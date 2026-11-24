@@ -20,7 +20,7 @@ use crate::exec::InstrumentId;
 use crate::market::calendar::format_ist;
 
 use super::clock::Timeline;
-use super::config::RunSetup;
+use super::config::{RunSetup, StrategyInterval};
 use super::error::KernelError;
 use super::kernel::{Engine, Phase};
 use super::market_data::BaseBar;
@@ -49,14 +49,24 @@ impl Engine {
     /// Build a live session: the grid of `setup`'s range from the calendar, the bars of
     /// the slices already closed (empty at the open), an engine that holds before its
     /// first slice. It ends at the end of its range. Its venue is external: a broker
-    /// fills its orders (`venue`).
+    /// fills its orders (`venue`). A weekly or longer strategy runs on daily strategy bars
+    /// of its own, none decided in the session: it decides before the open on its
+    /// period's bar (`pre_open`), which keeps the period.
     ///
     /// Errors: those of `Engine::new`, `InvalidConfig` naming `start` when the range
     /// holds no slice and naming `quantity_mode` for fractional quantities.
-    pub fn new_session(setup: RunSetup) -> Result<Engine, KernelError> {
+    pub fn new_session(mut setup: RunSetup) -> Result<Engine, KernelError> {
         check_session_config(&setup.config)?;
+        let period = match setup.config.strategy_interval {
+            StrategyInterval::Period(unit) => Some(unit),
+            _ => None,
+        };
+        if period.is_some() {
+            setup.config.strategy_interval = StrategyInterval::Daily;
+        }
         let mut engine = Engine::assemble(setup, Ending::AtRangeEnd)?;
         engine.venue = VenueDesk::external();
+        engine.venue.pre_open.period = period;
         engine.hold();
         Ok(engine)
     }
@@ -123,7 +133,7 @@ impl Engine {
     fn next_slice(&self) -> usize {
         match self.phase {
             Phase::Ready(index) => index,
-            Phase::Ahead(slice) => slice.index,
+            Phase::Ahead(slice) | Phase::PreOpen(slice, _) => slice.index,
             Phase::Opened(slice)
             | Phase::Paused(slice)
             | Phase::Timers(slice)

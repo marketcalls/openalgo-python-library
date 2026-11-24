@@ -187,6 +187,39 @@ pub enum AfterRiskExit {
     AllowReentry,
 }
 
+/// How a CNC or NRML leg's stop is held (design 20-positional-live section 6, decisions P2,
+/// P5 and 11.4): the same rule in a backtest and in a live session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PositionalStops {
+    /// One SINGLE GTT at the broker, resting overnight (P6; the default).
+    #[default]
+    Gtt,
+    /// A DAY stop order in the shape of an MIS leg's broker-held stop, placed again at each
+    /// session's open for the units open at the leg's stop, or the leg exited at the open
+    /// when the open is already at or beyond its stop; nothing protects the position from
+    /// the close to the next open (`positional_stops="rearm_daily"`).
+    RearmDaily,
+}
+
+impl PositionalStops {
+    /// The setting named by `code`: "gtt" or "rearm_daily"; `None` for any other.
+    pub fn from_code(code: &str) -> Option<PositionalStops> {
+        match code {
+            "gtt" => Some(PositionalStops::Gtt),
+            "rearm_daily" => Some(PositionalStops::RearmDaily),
+            _ => None,
+        }
+    }
+
+    /// The code `bt.backtest` and the bindings use.
+    pub fn code(self) -> &'static str {
+        match self {
+            PositionalStops::Gtt => "gtt",
+            PositionalStops::RearmDaily => "rearm_daily",
+        }
+    }
+}
+
 /// Limits checked before every add (12-position-sizing 2). No limit unless set
 /// (SPEC-15); averaging down is judged at the decision price. The gate is
 /// `scale_in::scale_in_gate`.
@@ -251,6 +284,9 @@ pub struct StrategyRiskConfig {
     /// units times the price it is judged at times the instrument's multiplier; above it
     /// the order is rejected `order_value_limit`. Exits are never refused by it.
     pub max_order_value_rupees: Option<f64>,
+    /// How a CNC or NRML leg's stop is held (`positional_stops`): a SINGLE GTT (the
+    /// default) or a DAY stop order placed again at each session's open.
+    pub positional_stops: PositionalStops,
 }
 
 impl Default for StrategyRiskConfig {
@@ -270,6 +306,7 @@ impl Default for StrategyRiskConfig {
             max_trades_per_day: None,
             daily_profit_target_rupees: None,
             max_order_value_rupees: None,
+            positional_stops: PositionalStops::Gtt,
         }
     }
 }

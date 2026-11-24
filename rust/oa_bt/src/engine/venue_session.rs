@@ -356,6 +356,7 @@ impl Engine {
             | Phase::Paused(slice)
             | Phase::Timers(slice)
             | Phase::Ahead(slice)
+            | Phase::PreOpen(slice, _)
             | Phase::Closing(slice) => Some(slice),
             Phase::Finished => None,
         }

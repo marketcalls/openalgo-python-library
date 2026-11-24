@@ -168,6 +168,7 @@ impl Engine {
     ///
     /// Errors: those of the order book, of `fills::end_order` and of the leg stops.
     pub(super) fn progress_exits(&mut self, at: SendAt) -> Result<(), KernelError> {
+        self.send_orders_at_open(at)?;
         self.tidy_venue();
         let waiting: Vec<PositionExit> = self
             .venue

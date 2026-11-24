@@ -46,8 +46,10 @@
 //! (`Engine::request_exit`: `unprotected`, `stop_rejected`, `stop_unfilled`,
 //! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`), and `stop_crossed`,
 //! the kernel's exit of a CNC or NRML leg whose stop the price had crossed with no stop
-//! GTT at the broker (`venue_gtt_protect`). The trade an engine exit closes records the
-//! backtest's exit reason:
+//! GTT at the broker (`venue_gtt_protect`) or a rearm_daily stop to place at the open
+//! (`rearm`), and `expiry_exit`, the kernel's exit of a derivatives position on its
+//! positional exit day (`expiry`). The trade an engine exit closes records the backtest's
+//! exit reason:
 //!
 //! | Engine exit | Exit reason of the trade |
 //! |---|---|
@@ -57,6 +59,7 @@
 //! | `account_loss` | `account_loss_limit`, as a portfolio backtest's account breach (`account_breach`; 18-multi-strategy 1.3) |
 //! | `daily_profit` | `daily_profit_target`, as the backtest's daily profit target (`daily_caps`; 18-multi-strategy 2.5a) |
 //! | `account_profit` | `account_profit_target`, as a portfolio backtest's account profit target (`account_breach`) |
+//! | `expiry_exit` | `expiry_exit`, as the backtest's exit on the positional exit day (`expiry`) |
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
 use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
@@ -99,13 +102,16 @@ pub enum RiskExitReason {
     /// The account's daily profit target, across the session's strategies.
     AccountProfit,
     /// The price had crossed the leg's stop with no stop at the broker
-    /// (`venue_gtt_protect`).
+    /// (`venue_gtt_protect`, `rearm`).
     StopCrossed,
+    /// The contract's positional exit day reached its square-off time: the position is
+    /// exited before the exchange settles the contract by delivery (`expiry`).
+    ExpiryExit,
 }
 
 impl RiskExitReason {
     /// Every reason, in the order of the module docs.
-    pub const ALL: [RiskExitReason; 12] = [
+    pub const ALL: [RiskExitReason; 13] = [
         RiskExitReason::DailyLoss,
         RiskExitReason::Drawdown,
         RiskExitReason::TimeExit,
@@ -118,6 +124,7 @@ impl RiskExitReason {
         RiskExitReason::DailyProfit,
         RiskExitReason::AccountProfit,
         RiskExitReason::StopCrossed,
+        RiskExitReason::ExpiryExit,
     ];
 
     /// The code the bindings use.
@@ -135,6 +142,7 @@ impl RiskExitReason {
             RiskExitReason::DailyProfit => "daily_profit",
             RiskExitReason::AccountProfit => "account_profit",
             RiskExitReason::StopCrossed => "stop_crossed",
+            RiskExitReason::ExpiryExit => "expiry_exit",
         }
     }
 }
@@ -175,6 +183,7 @@ impl EngineExit {
                 RiskExitReason::AccountLoss => ExitReason::AccountLossLimit,
                 RiskExitReason::DailyProfit => ExitReason::DailyProfitTarget,
                 RiskExitReason::AccountProfit => ExitReason::AccountProfitTarget,
+                RiskExitReason::ExpiryExit => ExitReason::ExpiryExit,
                 RiskExitReason::Unprotected
                 | RiskExitReason::StopRejected
                 | RiskExitReason::KillSwitch
@@ -422,6 +431,7 @@ mod tests {
                 "stop_crossed",
                 EngineExit::Risk(RiskExitReason::StopCrossed),
             ),
+            ("expiry_exit", EngineExit::Risk(RiskExitReason::ExpiryExit)),
         ];
         for (code, exit) in table {
             assert_eq!(EngineExit::from_code(code), Some(exit), "{code}");
@@ -482,6 +492,10 @@ mod tests {
             (
                 EngineExit::Risk(RiskExitReason::StopCrossed),
                 ExitReason::LegSl,
+            ),
+            (
+                EngineExit::Risk(RiskExitReason::ExpiryExit),
+                ExitReason::ExpiryExit,
             ),
         ];
         for (exit, reason) in table {

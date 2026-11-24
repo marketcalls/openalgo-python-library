@@ -60,6 +60,7 @@ impl Engine {
         match self.phase {
             Phase::Ahead(slice) => (slice.index, Stage::Ahead),
             Phase::Ready(index) => (index, Stage::Ready),
+            Phase::PreOpen(slice, _) => (slice.index, Stage::Ready),
             Phase::Timers(slice) => (slice.index, Stage::Timers),
             Phase::Opened(slice) => (slice.index, Stage::Opened),
             Phase::Paused(slice) => (slice.index, Stage::Paused),

@@ -76,6 +76,7 @@ impl Symbol {
             freeze_quantity_units: None,
             cost_segment: None,
             last_trading_day: (kind == InstrumentKind::Future).then(|| july(18)),
+            positional_exit_day: None,
         }
     }
 

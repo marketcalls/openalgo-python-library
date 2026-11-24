@@ -49,6 +49,15 @@ pub struct InstrumentSpec {
     pub cost_segment: Option<Segment>,
     /// IST date the contract stops trading (derivatives), when it has one.
     pub last_trading_day: Option<Day>,
+    /// IST date on which every position still open on the contract is exited at the
+    /// exchange's square-off time, before the exchange settles it by delivery (design
+    /// 20-positional-live 9): the last trading day of a stock future, of a stock option and
+    /// of every option, the trading day before an MCX delivery contract's tender period.
+    /// `None` for a contract the exchange settles in cash (index futures, MCX cash
+    /// contracts), which settles at expiry (`engine::settlement`), and for cash equity.
+    /// The Python package works it out from the reference tables; the kernel holds no
+    /// market facts.
+    pub positional_exit_day: Option<Day>,
 }
 
 impl InstrumentSpec {
@@ -106,6 +115,7 @@ mod tests {
             freeze_quantity_units: None,
             cost_segment: None,
             last_trading_day: None,
+            positional_exit_day: None,
         }
     }
 

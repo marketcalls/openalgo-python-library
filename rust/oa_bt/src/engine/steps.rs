@@ -39,6 +39,7 @@ impl Engine {
         self.risk_session_open(slice);
         self.account_breach_at_open(slice)?;
         self.renew_old_gtts(slice)?;
+        self.venue_at_session_open(slice)?;
         self.apply_held_changes(slice)?;
         if !self.timers_fired_ahead(slice) {
             if let Some(pause) = self.timers_pause(slice) {
@@ -93,6 +94,7 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
+            self.rearm_stops_at_open(slice, instrument, bar.open)?;
             let queued = self
                 .fill_model()
                 .is_none()
@@ -102,6 +104,7 @@ impl Engine {
             }
             self.time_exit_at_open(slice, instrument, bar.open)?;
             self.square_off_at_open(slice, instrument, bar.open)?;
+            self.expiry_exit_at_open(slice, instrument, bar.open)?;
         }
         if self.fill_model().is_none() {
             self.fill_rebalance_buys(slice)?;
@@ -169,7 +172,13 @@ impl Engine {
 
     /// Step 7: pause when a strategy bar closes, or when events wait for callbacks.
     pub(super) fn callbacks_pause(&mut self, slice: &SliceInfo) -> Option<Pause> {
-        let closing = self.timeline.strategy_bar_closing(slice);
+        // A daily or longer strategy decides in a live session before the open only
+        // (`pre_open`), on the broker's bar of the session that closed.
+        let pre_open_only = self.is_external() && !self.config.strategy_interval.is_intraday();
+        let closing = match pre_open_only {
+            true => None,
+            false => self.timeline.strategy_bar_closing(slice),
+        };
         let waiting = self.config.deliver_events && !self.undelivered.is_empty();
         if closing.is_none() && !waiting {
             return None;
@@ -211,6 +220,7 @@ impl Engine {
             self.risk_exits_at_session_close(slice)?;
             if !self.is_external() {
                 self.close_intraday_positions(slice)?;
+                self.close_expiring_positions(slice)?;
             }
             self.settle_futures(slice)?;
             self.settle_contract_notes(slice);

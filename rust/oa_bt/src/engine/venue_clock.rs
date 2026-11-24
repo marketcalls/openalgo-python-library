@@ -130,7 +130,7 @@ impl Engine {
         for id in self.ending_at_close(slice) {
             self.withdraw_order(stamp, id)?;
         }
-        Ok(())
+        self.cancel_expiring_stop_gtts(slice)
     }
 
     /// True when an external session's close waits for the venue to end its orders.

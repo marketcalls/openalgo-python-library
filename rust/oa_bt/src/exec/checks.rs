@@ -317,6 +317,7 @@ mod tests {
             freeze_quantity_units: Some(1_800),
             cost_segment: None,
             last_trading_day: None,
+            positional_exit_day: None,
         }
     }
 

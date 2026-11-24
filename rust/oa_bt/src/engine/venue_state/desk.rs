@@ -45,6 +45,8 @@ pub(super) struct SavedDesk {
     pub(super) gtts: VenueGtts,
     /// The saved cap on the engine default's sizing equity, rupees.
     pub(super) sizing_cap_rupees: Option<f64>,
+    /// A pre-open decision's orders waiting for the session's open (`pre_open`).
+    pub(super) orders_at_open: Vec<OrderId>,
 }
 
 /// The names of `flags` (`FillFlags::names`).
@@ -260,6 +262,12 @@ pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
             list(&desk.controls.entry_locks, |reason| reason.as_str().into()),
         ),
         ("sizing_cap_rupees", desk.controls.sizing_cap_rupees.into()),
+        (
+            "orders_at_open",
+            list(desk.pre_open.at_open.iter().filter(|id| works(id)), |id| {
+                order(*id)
+            }),
+        ),
     ])
 }
 
@@ -316,5 +324,13 @@ pub(super) fn read_desk(
             .collect::<Result<_, _>>()?,
         gtts: read_venue_gtts(&read.field("gtts")?, ids, instruments)?,
         sizing_cap_rupees: read.opt_f64_of("sizing_cap_rupees")?,
+        orders_at_open: match read.added("orders_at_open")? {
+            Some(orders) => orders
+                .items()?
+                .iter()
+                .map(|order| ids.working(order))
+                .collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        },
     })
 }

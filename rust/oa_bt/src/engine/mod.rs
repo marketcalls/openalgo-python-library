@@ -64,7 +64,9 @@
 //! | `Engine::live_state()` | any time | a live session's state as plain data that survives a JSON round trip (`venue_state`): positions with tranches, legs, working orders with roles and terms, pending modifies and cancels, exits and leg stops, the daily loss totals, the trading state, counters, cash |
 //! | `Engine::restore_live_state(&StateValue)` | once, in a session built for a restart, after its catch-up and before any order | the saved state put back as it stood (`venue_state`), but for the entry locks (the session keeps its own) and a sizing cap the session has set; returns (saved id, new id) of each restored working order; refused whole (`LiveStateError`), also for parts that do not hold together and for a state saved while the session closed |
 //! | `Engine::carried_state()` | once the day's session has closed (after its close, or `stop_session`) | `live_state` at the close without its DAY parts, for the next trading day's session (`venue_state::carry`): positions with tranches, legs, the GTTs at the venue and the GTT orders, cash, the trading state, the daily loss measure's totals, the slices held |
-//! | `Engine::restore_carried_state(&StateValue)` | once, in a session of a later trading day, after its catch-up and before any order | the carried state put back, the GTTs and GTT orders under new ids (`CarriedIds`); the daily loss measure and the trading state start the session as a backtest's do at a session boundary; refused whole (`LiveStateError`) |
+//! | `Engine::restore_carried_state(&StateValue)` | once, in a session of a later trading day, after its catch-up and before any order | the carried state put back, the GTTs and GTT orders under new ids (`CarriedIds`); the daily loss measure and the trading state start the session as a backtest's do at a session boundary; a position on a contract that expired before the session's day recorded exited at its carried last close (`CarriedIds::expired`, `expiry`); refused whole (`LiveStateError`) |
+//! | `Engine::pre_open_decision(&[StrategyBar], last_decided, now)` | once, in a daily or longer strategy's session, after its catch-up and before it runs live | the latest completed bar of the strategy's interval decided before the open (`PreOpen`): a `Pause::BarClose` at which the strategy submits; its orders go as the session reaches its open, or at once flagged `late_decision` after it (`pre_open`) |
+//! | `Engine::order_flags(OrderId)` | any time | the flags a working order's fills carry: `late_decision`, `gtt_child_unfilled`, `stop_crossed` (`pre_open`) |
 //! | `Engine::market_fill_price(InstrumentId, Side, bar_open, open)` | any time | the price a backtest fills a MARKET order at, at the open of a bar the caller names, by the run's slippage rule; records nothing (`market_fill`): what a live session's day summary sets its MARKET fills against |
 //! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the slice in progress is closed for the records as step 8 closes a session (the day's contract notes settled, then its position-history and equity rows), the undelivered events are returned (`venue_session`) |
 //! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
@@ -111,13 +113,13 @@
 //! | Step | Code | Built |
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_phase` (resumed by `steps::resume_open_phase` after a timer pause); intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2); futures switches are planned before the run (`futures`); then, under a delay, the cancellations and modifications whose delay has ended (`held_changes::apply_held_changes`, stamped in step 2) | times, GTTs and rolls yes; lot-size change events no |
-//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35, or the end of the order's delay, `delay`; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar; under a fill model they fill in step 3 instead, `fill_model`), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
+//! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), the rearm_daily stops an instrument's first bar of a session opens beyond (`rearm::rearm_stops_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35, or the end of the order's delay, `delay`; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar; under a fill model they fill in step 3 instead, `fill_model`), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05), then the exit on a contract's positional exit day (`expiry::expiry_exit_at_open`); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
 //! | 3 resting orders, leg levels | first a portfolio run's account breach found while the slice was open cancels the working entries and adds (`account_breach`); then `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12; a CNC or NRML leg's targets alike, its stop fired as its GTT, `gtt_levels`), `gtt_fire::test_gtts` (strategy GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale; the open trades see the slice's bar (`excursion`) | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, daily profit target (`daily_caps`), drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`); a portfolio run's account breach after them, or in step 1 when it was found between slices (`account_breach`) | yes (combined rules: Phase 3) |
 //! | 7 callbacks and `on_bar` | `steps::callbacks_pause` -> `Pause::BarClose`; `submit::submit` | yes |
-//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`), credit the day's withheld sale proceeds (`sale_credit::credit_withheld_sales`) | yes (options expiry: Phase 3) |
+//! | 8 session close | `steps::close_slice`: expire DAY orders, close open MIS positions at the last close (reason `eod`, flagged) and the positions on a contract whose positional exit day it is (reason `expiry_exit`, flagged, `expiry`), settle expiring futures and post the futures mark to market (`settlement::settle_futures`), settle the day's contract notes (`accounting::settle_contract_notes`), credit the day's withheld sale proceeds (`sale_credit::credit_withheld_sales`) | yes (options expiry: Phase 3) |
 //!
 //! Every fill takes one path, `fills::execute_fill`: slippage (`market::slippage`, the
 //! run's or the dated default table's), position and tranches (`portfolio`), the ledger,
@@ -176,6 +178,9 @@
 //! | `venue_gtt_answers` | The venue's answers about a GTT: placed, refused, modified or not, cancelled or not, ended (`GttEnd`) |
 //! | `venue_gtt_child` | A fired GTT's child followed as an order; a child not filled through a base bar cancelled, then the engine's exit |
 //! | `venue_gtt_protect` | A CNC or NRML leg protected again: a new stop GTT, or an exit when the price has crossed the stop |
+//! | `rearm` | `positional_stops="rearm_daily"`: a CNC or NRML leg's stop held as an MIS leg's DAY stop, placed again at each session's open, or the leg exited there when the open is beyond it |
+//! | `expiry` | A derivatives position exited on its positional exit day at the square-off time, before the exchange settles it by delivery; an index future's stop GTT cancelled at the close of its last day |
+//! | `pre_open` | A daily or longer strategy's decision before a live session's open, on the latest completed bar of its interval; its orders sent at the open, or at once flagged `late_decision` |
 //! | `queries` | `AccountView` and the queries of positions, legs, orders and the account |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
@@ -264,6 +269,7 @@ pub mod event;
 mod excursion;
 mod excursion_hold;
 mod exit_scale;
+mod expiry;
 mod fill_bar;
 mod fill_model;
 mod fills;
@@ -287,7 +293,9 @@ mod modify;
 mod order_fill;
 pub mod output;
 pub mod pause;
+mod pre_open;
 mod queries;
+mod rearm;
 mod rebalance;
 mod resting;
 mod reverse;
@@ -357,6 +365,7 @@ pub use output::{
     EquityColumns, FillRecord, FinalPosition, GrossPnl, LevelRow, RunOutput, StaleMark, TradeRecord,
 };
 pub use pause::{run, Driver, Pause, TimerId};
+pub use pre_open::PreOpen;
 pub use queries::AccountView;
 pub use run_end::{RunEnd, RunEndCause};
 pub use signals::{run_signals, AtrInput, AtrSlot, EntrySignal, SignalArrays, SkippedEntry};

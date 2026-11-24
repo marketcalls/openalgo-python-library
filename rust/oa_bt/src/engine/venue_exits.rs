@@ -8,6 +8,7 @@
 //! | Daily loss limit, drawdown halt | in step 6, when the rule fires | at the next open (step 2) |
 //! | Square-off | when the session reaches the first open at or after `square_off` | at that open |
 //! | Time exit (`max_hold`) | when the session reaches the open at which it is due | at that open |
+//! | Expiry exit, on a contract's positional exit day (`expiry`) | when the session reaches the first open at or after `square_off` that day | at that open |
 //!
 //! Each is a reduce-only MARKET DAY order with the backtest's exit reason for the whole
 //! position, made as the position's exit (`venue_owner`): it takes over from the
@@ -21,7 +22,7 @@
 //! Sent again: at every open the session reaches, a position that is still open and that
 //! no exit of the engine holds gets the exit that applies, in this order: the risk lock
 //! (REDUCING after a daily loss breach, HALTED after the drawdown halt), the time exit,
-//! the square-off. So an exit the venue rejected, or a position a cancel race reopened, is
+//! the square-off, the expiry exit. So an exit the venue rejected, or a position a cancel race reopened, is
 //! exited again at the next open; how often to retry and when to stop are the live
 //! layer's to decide. A position a margin rejection holds gets none (`venue_group`) until
 //! the session asks for an exit of it or protects it, or a new leg opens there.
@@ -110,6 +111,9 @@ impl Engine {
         }
         if key.product == Product::Mis && next.open >= self.session_times(next.day)?.square_off {
             return Ok(Some(EngineExit::SquareOff));
+        }
+        if self.expiry_exit_due(next, key.instrument)? {
+            return Ok(Some(EngineExit::Risk(RiskExitReason::ExpiryExit)));
         }
         Ok(None)
     }

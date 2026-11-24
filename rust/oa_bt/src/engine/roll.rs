@@ -41,7 +41,6 @@ use super::error::KernelError;
 use super::event::{EventStamp, OrderEventKind, Step};
 use super::fills::FillRequest;
 use super::futures::{FillOrigin, Switch};
-use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 
 /// Units of the next contract for a position of `held_units` units: the same units when
@@ -113,7 +112,7 @@ impl Engine {
             low: bar.open,
             close: bar.open,
         };
-        if held_as_gtt(key.product) {
+        if self.stop_is_gtt(key.product) {
             return self.test_positional_leg(slice, key, (&at_open, bar), Step::OpenFills);
         }
         let hits = match self.legs.iter().find(|(k, _)| *k == key) {

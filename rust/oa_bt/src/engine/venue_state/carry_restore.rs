@@ -5,7 +5,7 @@
 //! GTT to cancel asked to be cancelled at once), and the risk bookkeeping started as a
 //! backtest's next session starts it.
 
-use crate::exec::{GttId, GttPurpose, GttStatus};
+use crate::exec::{GttId, GttPurpose, GttStatus, InstrumentId};
 use crate::model::Day;
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::{
@@ -20,6 +20,7 @@ use super::super::venue_gtts::{GttFollow, GttLegStop};
 use super::book::{read_account, read_open_trade, read_position};
 use super::carry::{CarriedIds, CARRIED, NO_CARRIED_GTT};
 use super::carry_checks::{check_carried_gtts, CarriedGtt, ReadGtt};
+use super::carry_expired::read_last_closes;
 use super::checks::{check_parts, Parts};
 use super::error::LiveStateError;
 use super::gtts::read_gtt;
@@ -39,6 +40,8 @@ pub(super) struct Carried {
     rejections: Vec<(PositionKey, u8)>,
     risk: CarriedRisk,
     open_trades: Vec<OpenTrade>,
+    /// Each instrument's last close of the carried day (`carry`, part `last_closes`).
+    last_closes: Vec<(InstrumentId, f64)>,
     ids: Ids,
 }
 
@@ -110,6 +113,7 @@ impl Engine {
                 .iter()
                 .map(|trade| read_open_trade(trade, count, &ids))
                 .collect::<Result<_, _>>()?,
+            last_closes: read_last_closes(read, count)?,
             ids,
         })
     }
@@ -210,17 +214,49 @@ impl Engine {
         }
         self.portfolio.account.credit_sale_proceeds();
         self.legs = carried.legs;
+        let expired = self.expired_instruments();
         let mut ids = CarriedIds {
             gtts: Vec::new(),
             orders: carried.ids.pairs,
+            expired: expired.clone(),
         };
+        let to_cancel = self.restore_carried_gtts(carried.gtts, &expired, &mut ids)?;
+        self.carry_leg_gtts(&to_cancel, &carried.rejections);
+        let slice = u32::try_from(self.standing().0).unwrap_or(u32::MAX);
+        for id in to_cancel {
+            self.ask_cancel_gtt(slice, id)?;
+        }
+        self.resume_carried_risk(carried.risk);
+        for trade in &carried.open_trades {
+            self.charges.resume_trade(trade.key);
+        }
+        self.record.trades.open = carried.open_trades;
+        self.record_expired_exits(&expired, &carried.last_closes)?;
+        self.venue.restored = true;
+        Ok(ids)
+    }
+
+    /// Put the carried GTTs at the venue under new ids, each resting and followed, but a
+    /// stop GTT of an `expired` instrument (`carry`); their (saved id, new id) go in
+    /// `ids`. Returns the new ids of the stop GTTs to cancel at once.
+    ///
+    /// Errors: `Exec` from the GTT book, a kernel defect.
+    fn restore_carried_gtts(
+        &mut self,
+        gtts: Vec<CarriedGtt>,
+        expired: &[InstrumentId],
+        ids: &mut CarriedIds,
+    ) -> Result<Vec<GttId>, KernelError> {
         let mut to_cancel = Vec::new();
         for CarriedGtt {
             saved_id,
             gtt,
             to_cancel: cancel,
-        } in carried.gtts
+        } in gtts
         {
+            if gtt.purpose == GttPurpose::Protect && expired.contains(&gtt.instrument) {
+                continue;
+            }
             let id = self.gtts.book.next_id();
             self.gtts.book.insert(crate::exec::Gtt {
                 id,
@@ -235,28 +271,27 @@ impl Engine {
                 to_cancel.push(id);
             }
         }
-        self.carry_leg_gtts(&to_cancel, &carried.rejections);
-        let slice = u32::try_from(self.standing().0).unwrap_or(u32::MAX);
-        for id in to_cancel {
-            self.ask_cancel_gtt(slice, id)?;
-        }
-        self.resume_carried_risk(carried.risk);
-        for trade in &carried.open_trades {
-            self.charges.resume_trade(trade.key);
-        }
-        self.record.trades.open = carried.open_trades;
-        self.venue.restored = true;
-        Ok(ids)
+        Ok(to_cancel)
     }
 
-    /// Every carried CNC or NRML leg's stop GTT record: its carried stop GTT (none of
-    /// `to_cancel`), or `NO_CARRIED_GTT`, and its stop GTTs' `rejections`.
+    /// Every carried CNC or NRML leg's stop record. A stop held as a GTT: its carried stop
+    /// GTT (none of `to_cancel`), or `NO_CARRIED_GTT`, and its stop GTTs' `rejections`. A
+    /// rearm_daily stop: a stop not placed yet, which goes out once the session has
+    /// reached its open (`rearm`); a stop GTT carried for such a leg is held by no leg and
+    /// is cancelled (`loose_stop_gtts`).
     fn carry_leg_gtts(&mut self, to_cancel: &[GttId], rejections: &[(PositionKey, u8)]) {
-        let keys: Vec<PositionKey> = self
-            .legs
+        let carried: Vec<PositionKey> = self.legs.iter().map(|(key, _)| *key).collect();
+        let rearmed: Vec<PositionKey> = carried
             .iter()
-            .map(|(key, _)| *key)
-            .filter(|key| held_as_gtt(key.product))
+            .copied()
+            .filter(|key| self.rearms_daily(*key))
+            .collect();
+        for key in rearmed {
+            self.renew_leg_stop(key, false);
+        }
+        let keys: Vec<PositionKey> = carried
+            .into_iter()
+            .filter(|key| self.stop_is_gtt(key.product))
             .collect();
         for key in keys {
             let stop = self.gtts.book.gtts().iter().find(|gtt| {

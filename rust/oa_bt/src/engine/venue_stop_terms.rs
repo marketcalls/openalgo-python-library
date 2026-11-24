@@ -106,6 +106,10 @@ impl Engine {
         let wanted = self.stop_cover_units(key)?;
         let Some(id) = stop.order else {
             if wanted > 0.0 && !self.venue.group.holds(key) && !self.exit_closes_leg(key)? {
+                if self.rearm_waits_or_crosses(at, key, trigger)? {
+                    // A rearm_daily stop waits for the open, or its leg exits (`rearm`).
+                    return Ok(());
+                }
                 let units = self.take_room_for_stop(at, key, None, wanted)?;
                 self.place_leg_stop(at, key, units, stop.replaced)?;
             }
