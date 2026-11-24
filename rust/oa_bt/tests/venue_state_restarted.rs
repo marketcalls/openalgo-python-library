@@ -122,7 +122,9 @@ fn a_restored_order_that_ends_before_its_place_is_taken_is_never_sent() {
         learn(&mut kernel, order);
         let commands = kernel.take_commands();
         assert!(
-            commands.iter().all(|command| command.order() != order),
+            commands
+                .iter()
+                .all(|command| command.order() != Some(order)),
             "{what}: nothing is sent for the ended {order}: {commands:?}"
         );
         assert_eq!(placed_roles(&commands), placed, "{what}");

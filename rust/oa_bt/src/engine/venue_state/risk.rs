@@ -23,14 +23,17 @@ fn write_totals(totals: AccountTotals) -> StateValue {
     ])
 }
 
-fn read_totals(read: &Read<'_>) -> Result<AccountTotals, LiveStateError> {
+pub(super) fn read_totals(read: &Read<'_>) -> Result<AccountTotals, LiveStateError> {
     Ok(AccountTotals {
         realized_rupees: read.f64_of("realized_rupees")?,
         costs_rupees: read.f64_of("costs_rupees")?,
     })
 }
 
-fn read_opt_totals(read: &Read<'_>, key: &str) -> Result<Option<AccountTotals>, LiveStateError> {
+pub(super) fn read_opt_totals(
+    read: &Read<'_>,
+    key: &str,
+) -> Result<Option<AccountTotals>, LiveStateError> {
     read.maybe(key)?
         .map(|totals| read_totals(&totals))
         .transpose()
@@ -107,6 +110,13 @@ pub(super) fn write_risk(risk: &StrategyRisk, works: impl Fn(OrderId) -> bool) -
         ),
         ("roll_carry_slice", risk.roll_carry.into()),
         (
+            "carried_slices",
+            list(&risk.carried_slices, |(key, slices)| {
+                let [instrument, product] = key_fields(*key);
+                map([instrument, product, ("slices", (*slices).into())])
+            }),
+        ),
+        (
             "pending_exits",
             list(&risk.pending_exits, |pending| {
                 let [instrument, product] = key_fields(pending.key);
@@ -123,7 +133,7 @@ pub(super) fn write_risk(risk: &StrategyRisk, works: impl Fn(OrderId) -> bool) -
 
 /// The trading lock saved as its state and cause: the one change from ACTIVE the cause
 /// makes, which every state a lock can be in is.
-fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
+pub(super) fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
     let state = read.field("trading_state")?;
     let mut lock = TradingLock::default();
     if let Some(cause) = read.maybe("trading_state_cause")? {
@@ -159,24 +169,6 @@ pub(super) fn read_risk(
         live_run_from: read_opt_totals(&daily, "live_run_from")?,
         counted_from: read_opt_totals(&daily, "counted_from")?,
     };
-    let peak = read.field("drawdown_peak_rupees")?;
-    let drawdown = match (
-        drawdown_limit_percent,
-        read.opt_f64_of("drawdown_peak_rupees")?,
-    ) {
-        (Some(limit), Some(peak)) => Some(DrawdownWatch::new(limit, peak)),
-        (None, None) => None,
-        _ => return Err(peak.malformed("does not match the session's drawdown halt setting")),
-    };
-    let exits = read.field("last_exit_slices")?;
-    let last_exit_slice = exits
-        .items()?
-        .iter()
-        .map(|slice| (!slice.is_null()).then(|| slice.whole()).transpose())
-        .collect::<Result<Vec<_>, LiveStateError>>()?;
-    if last_exit_slice.len() != instruments {
-        return Err(exits.malformed(format!("has not one slice per instrument ({instruments})")));
-    }
     let entered_at = read
         .items_of("entered_at")?
         .iter()
@@ -192,15 +184,62 @@ pub(super) fn read_risk(
             })
         })
         .collect::<Result<_, LiveStateError>>()?;
+    let carried_slices = read
+        .items_of("carried_slices")?
+        .iter()
+        .map(|held| Ok((read_key(held, instruments)?, held.whole_of("slices")?)))
+        .collect::<Result<_, LiveStateError>>()?;
     Ok(StrategyRisk {
         lock: read_lock(read)?,
+        carried_slices,
         daily_loss: DailyLossMeasure::resume(totals),
-        drawdown,
-        last_exit_slice,
+        drawdown: read_drawdown(read, drawdown_limit_percent)?,
+        last_exit_slice: read_last_exit_slices(read, instruments)?,
         entered_at,
         roll_carry: read.opt_whole_of("roll_carry_slice")?,
         pending_exits,
         trades: read_trades(&read.field("trades")?, ids)?,
         ..base.clone()
     })
+}
+
+/// The drawdown halt as `write_risk` saved its peak, with the session's
+/// `drawdown_limit_percent`.
+///
+/// Errors: `Malformed` for a peak missing or unusable, and a peak saved without a drawdown
+/// halt set or the reverse.
+fn read_drawdown(
+    read: &Read<'_>,
+    drawdown_limit_percent: Option<f64>,
+) -> Result<Option<DrawdownWatch>, LiveStateError> {
+    let peak = read.field("drawdown_peak_rupees")?;
+    match (
+        drawdown_limit_percent,
+        read.opt_f64_of("drawdown_peak_rupees")?,
+    ) {
+        (Some(limit), Some(peak)) => Ok(Some(DrawdownWatch::new(limit, peak))),
+        (None, None) => Ok(None),
+        _ => Err(peak.malformed("does not match the session's drawdown halt setting")),
+    }
+}
+
+/// The slice of each instrument's last exit, one per instrument of the session, as
+/// `write_risk` saved them.
+///
+/// Errors: `Malformed` for a slice that cannot be read, and a list that is not one per
+/// instrument.
+fn read_last_exit_slices(
+    read: &Read<'_>,
+    instruments: usize,
+) -> Result<Vec<Option<usize>>, LiveStateError> {
+    let exits = read.field("last_exit_slices")?;
+    let last_exit_slice = exits
+        .items()?
+        .iter()
+        .map(|slice| (!slice.is_null()).then(|| slice.whole()).transpose())
+        .collect::<Result<Vec<_>, LiveStateError>>()?;
+    if last_exit_slice.len() != instruments {
+        return Err(exits.malformed(format!("has not one slice per instrument ({instruments})")));
+    }
+    Ok(last_exit_slice)
 }

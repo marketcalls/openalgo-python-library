@@ -198,7 +198,7 @@ impl Engine {
     }
 
     /// Move the trading state by a cause and write the event when it changed.
-    fn change_trading_state(&mut self, stamp: EventStamp, cause: TradingStateCause) {
+    pub(super) fn change_trading_state(&mut self, stamp: EventStamp, cause: TradingStateCause) {
         if let Some(change) = self.risk.lock.apply(cause) {
             self.emit(Event::TradingState {
                 stamp,

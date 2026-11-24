@@ -12,8 +12,9 @@
 //! closing fill nor an expiry settlement (a position still open at the end is reported
 //! open). The parts:
 //!
-//! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
-//!   `VenueCommand::Place`, except an exit (below). The engine's own withdrawals send
+//! - **Commands out** (`venue_orders`, the commands in `venue_command`). An order that
+//!   passes the checks is sent at once as `VenueCommand::Place`, except an exit (below).
+//!   The engine's own withdrawals send
 //!   `Cancel` at most once in a slice; `cancel` sends it at once, again after the venue
 //!   refused it, but never twice while one waits for the venue's answer. The order works
 //!   on until the venue's result, since a fill may come first. `modify` sends `Modify`
@@ -72,11 +73,19 @@
 //!   kernel holds the targets, the trail and the breakeven on the session's prices
 //!   (`venue_ticks`, tick mode): a target exits through the position's exit owner, a trail
 //!   or a breakeven moves the broker's stop. The session's own calls for a leg (`protect`,
-//!   `reprice_exit`, an exit at a limit) are in `venue_protect`. Leg rules are MIS only in
-//!   a session: a CNC or NRML leg's stop is held as a GTT, which a session does not carry
-//!   yet.
-//! - **Not built yet** (`KernelError::NotBuilt`, `venue_requests`): leg rules on CNC and NRML, GTT orders,
-//!   futures series and rebalancing.
+//!   `reprice_exit`, an exit at a limit) are in `venue_protect`.
+//! - **GTTs** (design 20-positional-live, unit N1). A CNC or NRML leg's stop is one SINGLE
+//!   GTT the broker holds (`venue_gtts`): `VenueCommand::PlaceGtt`, `ModifyGtt` and
+//!   `CancelGtt` where a backtest places, modifies or cancels its GTT, kept on the leg
+//!   (`venue_gtt_sync`), cancelled before an exit of the whole position and cut before a
+//!   partial one (`venue_owner`). Its targets are held on ticks as an MIS leg's
+//!   (`venue_ticks`). A strategy's GTT entry or add (`validity="gtt"`) rests as a GTT too.
+//!   The kernel never fires a GTT in a session: the venue's answers come back through
+//!   `venue_gtt_answers`, a fired GTT's child is followed as an order (`venue_gtt_child`),
+//!   and `protect` places a stop GTT again (`venue_gtt_protect`).
+//! - **Not built yet** (`KernelError::NotBuilt`, `venue_requests`): a strategy's GTT order
+//!   that only reduces or goes against the position held, modifying a GTT order, futures
+//!   series and rebalancing.
 //!
 //! The contract for the live layer: every fill of an order is delivered (`apply_fill`)
 //! before its terminal result (`apply_cancel`, `apply_reject`); after it the order takes
@@ -84,8 +93,8 @@
 //! it changes nothing, but for `WouldReverse`, which records the fill up to the position.
 
 use crate::charges::OrderCharges;
-use crate::exec::{InstrumentId, OrderId, OrderRequest, OrderType};
-use crate::model::{Product, Side, TsNanos};
+use crate::exec::{FillFlags, OrderId, OrderRequest, OrderType};
+use crate::model::TsNanos;
 use crate::portfolio::PositionKey;
 
 use super::clock::SliceInfo;
@@ -94,6 +103,7 @@ use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
 use super::venue_group::GroupDesk;
+use super::venue_gtts::VenueGtts;
 use super::venue_legs::LegStop;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::SessionControls;
@@ -118,52 +128,7 @@ impl Venue {
     }
 }
 
-/// What an external session asks of its venue. Quantities are units, prices rupees.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum VenueCommand {
-    /// Place a DAY order.
-    Place {
-        /// The kernel order the venue's results name.
-        order: OrderId,
-        /// The instrument, by registration index.
-        instrument: InstrumentId,
-        /// CNC, MIS or NRML.
-        product: Product,
-        /// Buy or sell.
-        side: Side,
-        /// Units to trade, never lots.
-        units: f64,
-        /// MARKET, LIMIT, SL or SL-M, with its limit and trigger prices.
-        order_type: OrderType,
-        /// What the order is for (`venue_roles`).
-        role: OrderRole,
-    },
-    /// Replace a working order's units, type, limit and trigger (a full replacement).
-    Modify {
-        /// The kernel order to replace.
-        order: OrderId,
-        /// The replacement's units.
-        units: f64,
-        /// The replacement's type, with its limit and trigger prices.
-        order_type: OrderType,
-    },
-    /// Cancel a working order.
-    Cancel {
-        /// The kernel order to cancel.
-        order: OrderId,
-    },
-}
-
-impl VenueCommand {
-    /// The kernel order the command is for.
-    pub fn order(&self) -> OrderId {
-        match *self {
-            VenueCommand::Place { order, .. }
-            | VenueCommand::Modify { order, .. }
-            | VenueCommand::Cancel { order } => order,
-        }
-    }
-}
+pub use super::venue_command::VenueCommand;
 
 /// Who asked for an exit (`venue_owner`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -185,6 +150,9 @@ pub(super) struct PositionExit {
     /// The limit, rupees, of an engine exit the session asked for at a price
     /// (`venue_protect`); `None` for a MARKET exit.
     pub(super) limit_rupees: Option<f64>,
+    /// What the fills of an engine exit's orders are flagged (`gtt_child_unfilled`,
+    /// `stop_crossed`: `venue_gtt_child`, `venue_gtt_protect`); `NONE` for the others.
+    pub(super) flags: FillFlags,
 }
 
 /// A modification sent to the venue and not yet confirmed.
@@ -254,6 +222,12 @@ pub(super) struct VenueDesk {
     /// fill's time, or the open of a slice it reached. The throttle of a stop's
     /// modifications reads it (`venue_legs`).
     pub(super) clock_ns: TsNanos,
+    /// The legs' stop GTTs, the strategy's GTT orders and the children of fired GTTs
+    /// (`venue_gtts`).
+    pub(super) gtts: VenueGtts,
+    /// The flags of the engine's exit orders whose fills are flagged, by order
+    /// (`PositionExit::flags`).
+    pub(super) exit_flags: Vec<(OrderId, FillFlags)>,
     /// The session took a saved state (`venue_state`): it takes one once.
     pub(super) restored: bool,
 }
@@ -313,11 +287,13 @@ impl Engine {
     pub fn take_commands(&mut self) -> Vec<VenueCommand> {
         let commands = std::mem::take(&mut self.venue.commands);
         let book = &self.book;
+        let gtts = &self.gtts.book;
         commands
             .into_iter()
-            .filter(|command| {
-                let order = book.get(command.order());
-                order.is_some_and(|order| order.status.is_working())
+            .filter(|command| match (command.order(), command.gtt()) {
+                (Some(order), _) => book.get(order).is_some_and(|o| o.status.is_working()),
+                (None, Some(gtt)) => gtts.get(gtt).is_some_and(|g| g.status.at_venue()),
+                (None, None) => false,
             })
             .collect()
     }
@@ -361,6 +337,7 @@ impl Engine {
         self.venue.modifying.retain(|(id, _)| works(id));
         self.venue.target_exits.retain(|(id, _)| works(id));
         self.venue.reprices.retain(|(id, _)| works(id));
+        self.venue.exit_flags.retain(|(id, _)| works(id));
         self.venue
             .exits
             .retain(|exit| match (exit.by, exit.sent.is_empty()) {

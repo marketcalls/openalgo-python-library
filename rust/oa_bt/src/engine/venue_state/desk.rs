@@ -1,8 +1,9 @@
 //! What a live session has asked its venue and not heard back, and what it keeps on its
 //! positions, in its saved state (`venue_state`): the cancellations and modifications
 //! that wait for an answer (a modification with its replacement terms), the exits of the
-//! positions with the orders sent for them, the legs' broker-held stops, the targets
-//! fired and the exits made for them, the reprices waiting, and the session's controls
+//! positions with the orders sent for them (and the flags of an engine exit's fills), the
+//! legs' broker-held stops, the targets fired and the exits made for them, the reprices
+//! waiting, what the session follows of its GTTs (`gtts`), and the session's controls
 //! (entry locks, the sizing cap).
 //!
 //! Of the controls, a restore takes only the sizing cap, and only into a session that has
@@ -14,12 +15,15 @@
 //! order: `orders::write_ref`), and dropped where nothing looks it up any more, as the
 //! session itself forgets it (`Engine::tidy_venue`).
 
-use crate::exec::{OrderBook, OrderId};
+use crate::exec::{FillFlags, OrderBook, OrderId};
+use crate::portfolio::PositionKey;
 
 use super::super::venue::{ExitBy, PositionExit, Replacement, VenueDesk};
+use super::super::venue_gtts::VenueGtts;
 use super::super::venue_legs::LegStop;
 use super::super::venue_roles::{EngineExit, OrderRole};
 use super::error::LiveStateError;
+use super::gtts::{read_venue_gtts, write_venue_gtts};
 use super::orders::{write_ref, Ids};
 use super::requests::{key_fields, read_key, read_request, write_request};
 use super::value::{list, map, Read, StateValue};
@@ -33,10 +37,30 @@ pub(super) struct SavedDesk {
     pub(super) exits: Vec<PositionExit>,
     pub(super) leg_stops: Vec<LegStop>,
     pub(super) target_exits: Vec<(OrderId, u16)>,
-    pub(super) fired_targets: Vec<(crate::portfolio::PositionKey, u16)>,
+    pub(super) fired_targets: Vec<(PositionKey, u16)>,
     pub(super) reprices: Vec<(OrderId, f64)>,
+    /// The flags of the engine's exit orders whose fills are flagged.
+    pub(super) exit_flags: Vec<(OrderId, FillFlags)>,
+    /// What the session follows of its GTTs.
+    pub(super) gtts: VenueGtts,
     /// The saved cap on the engine default's sizing equity, rupees.
     pub(super) sizing_cap_rupees: Option<f64>,
+}
+
+/// The names of `flags` (`FillFlags::names`).
+fn write_flags(flags: FillFlags) -> StateValue {
+    list(flags.names(), StateValue::from)
+}
+
+/// The flags `write_flags` wrote.
+///
+/// Errors: `Malformed` for a name that is no flag's.
+fn read_flags(read: &Read<'_>) -> Result<FillFlags, LiveStateError> {
+    let mut flags = FillFlags::NONE;
+    for name in read.items()? {
+        flags = flags.with(name.parsed(FillFlags::from_name)?);
+    }
+    Ok(flags)
 }
 
 fn engine_exit_code(exit: EngineExit) -> &'static str {
@@ -59,6 +83,7 @@ fn write_exit(book: &OrderBook, exit: &PositionExit) -> StateValue {
         ("engine_exit", engine),
         ("sent", list(&exit.sent, |id| write_ref(book, *id))),
         ("limit_rupees", exit.limit_rupees.into()),
+        ("flags", write_flags(exit.flags)),
     ])
 }
 
@@ -85,6 +110,7 @@ fn read_exit(
             .map(|order| ids.reference(order))
             .collect::<Result<_, _>>()?,
         limit_rupees: read.opt_f64_of("limit_rupees")?,
+        flags: read_flags(&read.field("flags")?)?,
     })
 }
 
@@ -119,6 +145,60 @@ fn read_leg_stop(
     })
 }
 
+/// The modification of working order `id` that waits for the venue's answer.
+fn write_replacement(id: OrderId, wanted: &Replacement) -> StateValue {
+    map([
+        ("order", id.0.into()),
+        ("request", write_request(&wanted.request)),
+        ("decided_at_ns", wanted.decided_at.into()),
+        ("good_until_ns", wanted.good_until.into()),
+        ("units", wanted.units.into()),
+    ])
+}
+
+/// The modification `write_replacement` wrote, for the restored orders `ids`.
+///
+/// Errors: `Malformed` for a field missing or unusable.
+fn read_replacement(
+    read: &Read<'_>,
+    ids: &Ids,
+    instruments: usize,
+) -> Result<(OrderId, Replacement), LiveStateError> {
+    let replacement = Replacement {
+        request: read_request(&read.field("request")?, instruments)?,
+        decided_at: read.whole_of("decided_at_ns")?,
+        good_until: read.whole_of("good_until_ns")?,
+        units: read.f64_of("units")?,
+    };
+    Ok((ids.working(&read.field("order")?)?, replacement))
+}
+
+/// An engine exit order's fill flags as the desk wrote them, for the restored orders
+/// `ids`.
+///
+/// Errors: `Malformed` for a field missing or unusable.
+fn read_exit_flags(read: &Read<'_>, ids: &Ids) -> Result<(OrderId, FillFlags), LiveStateError> {
+    read_order_and(read, ids, |read| read_flags(&read.field("flags")?))
+}
+
+/// A working order the desk names under "order", re-keyed by `ids`, with what `field`
+/// reads beside it.
+///
+/// Errors: `Malformed` for a field missing or unusable.
+fn read_order_and<T>(
+    read: &Read<'_>,
+    ids: &Ids,
+    field: impl Fn(&Read<'_>) -> Result<T, LiveStateError>,
+) -> Result<(OrderId, T), LiveStateError> {
+    Ok((ids.working(&read.field("order")?)?, field(read)?))
+}
+
+/// A target of an open leg whose exit has been made, by position.
+fn write_fired_target((key, target): &(PositionKey, u16)) -> StateValue {
+    let [instrument, product] = key_fields(*key);
+    map([instrument, product, ("target", (*target).into())])
+}
+
 /// The desk (module docs) of a session whose orders are in `book`.
 pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
     let works = |id: &OrderId| book.get(*id).is_some_and(|order| order.status.is_working());
@@ -141,15 +221,7 @@ pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
             "modifying",
             list(
                 desk.modifying.iter().filter(|(id, _)| works(id)),
-                |(id, wanted)| {
-                    map([
-                        ("order", order(*id)),
-                        ("request", write_request(&wanted.request)),
-                        ("decided_at_ns", wanted.decided_at.into()),
-                        ("good_until_ns", wanted.good_until.into()),
-                        ("units", wanted.units.into()),
-                    ])
-                },
+                |(id, wanted)| write_replacement(*id, wanted),
             ),
         ),
         ("exits", list(&desk.exits, |exit| write_exit(book, exit))),
@@ -166,10 +238,7 @@ pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
         ),
         (
             "fired_targets",
-            list(&desk.fired_targets, |(key, target)| {
-                let [instrument, product] = key_fields(*key);
-                map([instrument, product, ("target", (*target).into())])
-            }),
+            list(&desk.fired_targets, write_fired_target),
         ),
         (
             "reprices",
@@ -178,6 +247,14 @@ pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
                 |(id, limit)| map([("order", order(*id)), ("limit_rupees", (*limit).into())]),
             ),
         ),
+        (
+            "exit_flags",
+            list(
+                desk.exit_flags.iter().filter(|(id, _)| works(id)),
+                |(id, flags)| map([("order", order(*id)), ("flags", write_flags(*flags))]),
+            ),
+        ),
+        ("gtts", write_venue_gtts(book, &desk.gtts)),
         (
             "entry_locks",
             list(&desk.controls.entry_locks, |reason| reason.as_str().into()),
@@ -211,16 +288,8 @@ pub(super) fn read_desk(
             .collect::<Result<_, LiveStateError>>()?,
         modifying: each("modifying")?
             .iter()
-            .map(|wanted| {
-                let replacement = Replacement {
-                    request: read_request(&wanted.field("request")?, instruments)?,
-                    decided_at: wanted.whole_of("decided_at_ns")?,
-                    good_until: wanted.whole_of("good_until_ns")?,
-                    units: wanted.f64_of("units")?,
-                };
-                Ok((ids.working(&wanted.field("order")?)?, replacement))
-            })
-            .collect::<Result<_, LiveStateError>>()?,
+            .map(|wanted| read_replacement(wanted, ids, instruments))
+            .collect::<Result<_, _>>()?,
         exits: each("exits")?
             .iter()
             .map(|exit| read_exit(exit, ids, instruments))
@@ -231,26 +300,21 @@ pub(super) fn read_desk(
             .collect::<Result<_, _>>()?,
         target_exits: each("target_exits")?
             .iter()
-            .map(|exit| {
-                Ok((
-                    ids.working(&exit.field("order")?)?,
-                    exit.whole_of("target")?,
-                ))
-            })
-            .collect::<Result<_, LiveStateError>>()?,
+            .map(|exit| read_order_and(exit, ids, |read| read.whole_of("target")))
+            .collect::<Result<_, _>>()?,
         fired_targets: each("fired_targets")?
             .iter()
             .map(|fired| Ok((read_key(fired, instruments)?, fired.whole_of("target")?)))
             .collect::<Result<_, LiveStateError>>()?,
         reprices: each("reprices")?
             .iter()
-            .map(|wanted| {
-                Ok((
-                    ids.working(&wanted.field("order")?)?,
-                    wanted.f64_of("limit_rupees")?,
-                ))
-            })
-            .collect::<Result<_, LiveStateError>>()?,
+            .map(|wanted| read_order_and(wanted, ids, |read| read.f64_of("limit_rupees")))
+            .collect::<Result<_, _>>()?,
+        exit_flags: each("exit_flags")?
+            .iter()
+            .map(|flagged| read_exit_flags(flagged, ids))
+            .collect::<Result<_, _>>()?,
+        gtts: read_venue_gtts(&read.field("gtts")?, ids, instruments)?,
         sizing_cap_rupees: read.opt_f64_of("sizing_cap_rupees")?,
     })
 }

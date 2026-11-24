@@ -13,6 +13,15 @@
 //! (`venue_group`): then nothing is cancelled or sent for a waiting exit until the session
 //! asks for an exit or `protect`, or a new leg opens.
 //!
+//! A CNC or NRML leg's stop is a GTT (`venue_gtts`), which the same rules treat as the
+//! leg's stop: an exit of the whole position asks for its cancellation and is sent once
+//! the venue has confirmed it (or the GTT has ended or fired: its child then holds the
+//! position, `venue_gtt_child`), and a partial exit waits for it to be cut to what stays
+//! open (`venue_gtt_sync`). A stop GTT an earlier leg left on the closing side
+//! (`Engine::loose_closing_stop_gtts`) blocks both the same way until the venue takes its
+//! cancellation. An engine exit flagged `stop_crossed` (`venue_gtt_protect`) made before
+//! the session's open waits for the open.
+//!
 //! A partial exit beside a leg's broker-held stop is the exception (16-session-design
 //! 4.5, requirement R4): a strategy exit that asks for part of the position keeps the
 //! stop, which is modified down to what stays open first (`venue_legs`), and is sent once
@@ -41,7 +50,7 @@
 //! How an exit goes out when nothing blocks it (its units, the freeze quantity, a closed
 //! market) is `venue_exit_orders`.
 
-use crate::exec::{OrderAction, OrderId};
+use crate::exec::{FillFlags, GttId, OrderAction, OrderId};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 
@@ -80,8 +89,23 @@ impl Engine {
             by: ExitBy::Strategy(id),
             sent: Vec::new(),
             limit_rupees: None,
+            flags: FillFlags::NONE,
         });
         Ok(())
+    }
+
+    /// The engine's exit of `key` at market whose fills are flagged `flags`
+    /// (`request_engine_exit`).
+    ///
+    /// Errors: those of `request_engine_exit`.
+    pub(super) fn request_flagged_exit(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+        exit: EngineExit,
+        flags: FillFlags,
+    ) -> Result<(), KernelError> {
+        self.request_exit_flagged(at, key, exit, None, flags)
     }
 
     /// The engine's exit of `key` (`exit`: the square-off or a risk exit), decided as `at`
@@ -96,6 +120,17 @@ impl Engine {
         key: PositionKey,
         exit: EngineExit,
         limit_rupees: Option<f64>,
+    ) -> Result<(), KernelError> {
+        self.request_exit_flagged(at, key, exit, limit_rupees, FillFlags::NONE)
+    }
+
+    fn request_exit_flagged(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+        exit: EngineExit,
+        limit_rupees: Option<f64>,
+        flags: FillFlags,
     ) -> Result<(), KernelError> {
         if self.held_units(key) == 0.0 || self.has_engine_exit(key) {
             return Ok(());
@@ -120,6 +155,7 @@ impl Engine {
             by: ExitBy::Engine(exit),
             sent: Vec::new(),
             limit_rupees,
+            flags,
         });
         self.progress_exits(at)
     }
@@ -147,7 +183,8 @@ impl Engine {
             }
         }
         self.tidy_venue();
-        self.sync_leg_stops(at)
+        self.sync_leg_stops(at)?;
+        self.sync_stop_gtts(at)
     }
 
     /// Move one waiting exit on; true when it still waits.
@@ -174,7 +211,8 @@ impl Engine {
             .into_iter()
             .filter(|id| Some(*id) != kept_stop)
             .collect();
-        if !blocking.is_empty() {
+        let gtt_blocks = self.stop_gtt_blocks_exit(at, exit.key, keeps_stop)?;
+        if !blocking.is_empty() || gtt_blocks {
             for id in blocking {
                 self.withdraw_order(at.stamp(), id)?;
             }
@@ -187,11 +225,46 @@ impl Engine {
                 return Ok(true);
             }
         }
+        if let (Some(units), true) = (partial, keeps_stop) {
+            if self.stop_gtt_units(exit.key) > open - units {
+                // The stop GTT is cut down to what stays open first (`venue_gtt_sync`).
+                return Ok(true);
+            }
+        }
+        if exit.flags.contains(FillFlags::STOP_CROSSED) && self.before_session_open(&at) {
+            return Ok(true);
+        }
         match exit.by {
             ExitBy::Strategy(id) => self.send_strategy_exit(at, exit, id, held)?,
             ExitBy::Engine(by) => self.send_engine_exit(at, exit, by, held)?,
         }
         Ok(false)
+    }
+
+    /// True while a stop GTT of `key` blocks an exit of it that does not keep the stop (an
+    /// exit of the whole position, module docs): the leg's, or one an earlier leg left on
+    /// the closing side (`loose_closing_stop_gtts`). Their cancellation is asked for now,
+    /// and the exit waits while one is at the venue.
+    ///
+    /// Errors: those of `ask_cancel_gtt`.
+    fn stop_gtt_blocks_exit(
+        &mut self,
+        at: SendAt,
+        key: PositionKey,
+        keeps_stop: bool,
+    ) -> Result<bool, KernelError> {
+        if keeps_stop {
+            return Ok(false);
+        }
+        let own = self.stop_gtt_at_venue(key).map(|gtt| gtt.id);
+        let blocking: Vec<GttId> = own
+            .into_iter()
+            .chain(self.loose_closing_stop_gtts(key))
+            .collect();
+        for id in &blocking {
+            self.ask_cancel_gtt(at.stamp().slice, *id)?;
+        }
+        Ok(!blocking.is_empty())
     }
 
     /// The working orders of `exit`'s position on `side` that it cancels first: all but

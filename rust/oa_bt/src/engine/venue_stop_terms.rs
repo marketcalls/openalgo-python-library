@@ -167,7 +167,7 @@ impl Engine {
     /// stamped as `at` says, so the stop covers the rest once they have ended.
     ///
     /// Errors: those of `withdraw_order`.
-    fn take_room_for_stop(
+    pub(super) fn take_room_for_stop(
         &mut self,
         at: SendAt,
         key: PositionKey,

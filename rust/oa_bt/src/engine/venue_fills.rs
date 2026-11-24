@@ -38,14 +38,16 @@
 //! (`venue_cover`), the waiting exits move on (`venue_owner`): an exit waiting for this
 //! order is sent once nothing blocks it, and the legs' stops follow their legs
 //! (`venue_legs`): a fill that opens a leg with a stop level places its stop, one that adds
-//! to it modifies the stop's units, and the fill of a target exit marks its target.
+//! to it modifies the stop's units, and the fill of a target exit marks its target. A CNC
+//! or NRML leg's stop is a GTT instead (`venue_gtt_sync`). A fill of a fired GTT's child
+//! carries the GTT's id, and its first resolves the GTT (`GttChildFilled`); the fills of
+//! an engine exit flagged `gtt_child_unfilled` or `stop_crossed` carry the flag
+//! (`venue_gtt_child`, `venue_gtt_protect`).
 //!
 //! The contract for the live layer: every fill of an order is delivered before its
 //! terminal result (`apply_cancel`, `apply_reject`); after it the order takes no more.
 
-use crate::exec::{
-    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType,
-};
+use crate::exec::{FillAt, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType};
 use crate::model::{Side, TsNanos};
 use crate::portfolio::{FillKind, PositionKey};
 use crate::rms::{ExitReason, LegRules};
@@ -186,6 +188,7 @@ impl Engine {
             .is_some_and(|order| order.status == OrderStatus::Filled);
         if filled {
             self.after_stop_end(self.waiting_at(slice), placed.id, StopEnd::Filled)?;
+            self.after_gtt_child_end(self.waiting_at(slice), placed.id, StopEnd::Filled)?;
         }
         self.after_result(slice)
     }
@@ -282,12 +285,12 @@ impl Engine {
             at: fill.at,
             order: Some(order.id),
             exit_reason: request.exit_reason.unwrap_or(ExitReason::Signal),
-            flags: FillFlags::NONE,
+            flags: self.exit_flags_of(order.id),
             margin_rupees: 0.0,
             leg_rules: LegRules::default(),
             target_index: self.target_of(order.id),
             pricing: FillPricing::Resting,
-            gtt: None,
+            gtt: self.child_gtt_of(order.id),
             origin: FillOrigin::Trade,
         };
         if closing > 0.0 {

@@ -14,12 +14,13 @@
 //! that has ended is not saved: the order has nothing left to send.
 
 use crate::charges::OrderCharges;
-use crate::exec::{Order, OrderBook, OrderId, OrderStatus};
+use crate::exec::{GttBook, Order, OrderBook, OrderId, OrderStatus};
 use crate::market::costs::CostBreakdown;
 
 use super::super::venue::{ChargePart, VenueCommand};
 use super::super::venue_roles::{OrderRole, RiskExitReason};
 use super::error::LiveStateError;
+use super::gtts::{read_gtt_command, write_gtt_command};
 use super::requests::{read_instrument, read_order_type, read_request, read_side, write_request};
 use super::value::{list, map, Read, StateValue};
 use crate::model::Product;
@@ -173,6 +174,32 @@ pub(super) struct SavedOrder {
     pub(super) charged: Vec<(ChargePart, OrderCharges)>,
 }
 
+/// The saved working orders of `orders` (a state's "orders" list) and their new ids, from
+/// `first` in the order of their saved ids (module docs).
+///
+/// Errors: `Malformed` for an order that cannot be read, or is not in id order after the
+/// one before it.
+pub(super) fn read_orders(
+    orders: &[Read<'_>],
+    first: OrderId,
+    instruments: usize,
+) -> Result<(Vec<SavedOrder>, Ids), LiveStateError> {
+    let mut ids = Ids { pairs: Vec::new() };
+    for (offset, order) in (0u64..).zip(orders) {
+        let saved = OrderId(order.whole_of("order")?);
+        if ids.pairs.last().is_some_and(|(last, _)| *last >= saved) {
+            return Err(order.malformed("is not in id order after the order before it"));
+        }
+        ids.pairs.push((saved, OrderId(first.0 + offset)));
+    }
+    let read = orders
+        .iter()
+        .zip(&ids.pairs)
+        .map(|(order, (_, id))| read_order(order, *id, instruments))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((read, ids))
+}
+
 /// A working order as `write_order` wrote it, under its new id `id`.
 ///
 /// Errors: `Malformed` for a field missing or unusable, a status that does not work, or
@@ -232,23 +259,36 @@ pub(super) fn read_order(
     })
 }
 
-/// A command the adapter has not taken, `None` for one naming an order that has ended
-/// (module docs).
-pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<StateValue> {
-    let works = book
-        .get(command.order())
-        .is_some_and(|o| o.status.is_working());
-    if !works {
+/// True while `command`'s order works in `book`, or its GTT is at the venue in `gtts`:
+/// a command that outlives its order or GTT is not saved (module docs).
+fn command_alive(book: &OrderBook, gtts: &GttBook, command: &VenueCommand) -> bool {
+    match (command.order(), command.gtt()) {
+        (Some(order), _) => book.get(order).is_some_and(|o| o.status.is_working()),
+        (None, Some(gtt)) => gtts.get(gtt).is_some_and(|g| g.status.at_venue()),
+        (None, None) => false,
+    }
+}
+
+/// An order command's units, type, limit and trigger, as `write_command` writes them.
+fn order_terms(units: f64, order_type: crate::exec::OrderType) -> [(&'static str, StateValue); 4] {
+    [
+        ("units", StateValue::from(units)),
+        ("order_type", order_type.code().into()),
+        ("limit_rupees", order_type.limit_rupees().into()),
+        ("trigger_rupees", order_type.trigger_rupees().into()),
+    ]
+}
+
+/// A command the adapter has not taken, `None` for one naming an order that has ended or
+/// a GTT no longer at the venue (module docs).
+pub(super) fn write_command(
+    book: &OrderBook,
+    gtts: &GttBook,
+    command: &VenueCommand,
+) -> Option<StateValue> {
+    if !command_alive(book, gtts, command) {
         return None;
     }
-    let terms = |units: f64, order_type: crate::exec::OrderType| {
-        [
-            ("units", StateValue::from(units)),
-            ("order_type", order_type.code().into()),
-            ("limit_rupees", order_type.limit_rupees().into()),
-            ("trigger_rupees", order_type.trigger_rupees().into()),
-        ]
-    };
     Some(match *command {
         VenueCommand::Place {
             order,
@@ -259,7 +299,7 @@ pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<
             order_type,
             role,
         } => {
-            let [units, kind, limit, trigger] = terms(units, order_type);
+            let [units, kind, limit, trigger] = order_terms(units, order_type);
             map([
                 ("command", "place".into()),
                 ("order", order.0.into()),
@@ -279,7 +319,7 @@ pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<
             units,
             order_type,
         } => {
-            let [units, kind, limit, trigger] = terms(units, order_type);
+            let [units, kind, limit, trigger] = order_terms(units, order_type);
             map([
                 ("command", "modify".into()),
                 ("order", order.0.into()),
@@ -292,6 +332,9 @@ pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<
         VenueCommand::Cancel { order } => {
             map([("command", "cancel".into()), ("order", order.0.into())])
         }
+        VenueCommand::PlaceGtt { .. }
+        | VenueCommand::ModifyGtt { .. }
+        | VenueCommand::CancelGtt { .. } => return write_gtt_command(book, command),
     })
 }
 
@@ -303,8 +346,11 @@ pub(super) fn read_command(
     ids: &Ids,
     instruments: usize,
 ) -> Result<VenueCommand, LiveStateError> {
-    let order = ids.working(&read.field("order")?)?;
+    if let Some(command) = read_gtt_command(read, ids, instruments)? {
+        return Ok(command);
+    }
     let kind = read.field("command")?;
+    let order = ids.working(&read.field("order")?)?;
     Ok(match kind.text()? {
         "place" => VenueCommand::Place {
             order,

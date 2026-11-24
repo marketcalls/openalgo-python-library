@@ -15,7 +15,10 @@
 //!   unless the session asks again with `cancel`, which sends it at once
 //!   (`venue_session`). So the session cannot finish
 //!   while an order works, and a fill the venue reports before the cancellation is
-//!   recorded in the closing slice.
+//!   recorded in the closing slice. A strategy's GTT order that rests as a GTT is not a
+//!   DAY order and stays (`venue_gtts`); the close also waits while a GTT's place,
+//!   modification or cancellation waits for the venue's answer, so the GTTs a session
+//!   carries to the next day are all confirmed (design 20-positional-live section 2).
 //! - **The next open is reached at the close of the slice before it.** A live session runs
 //!   a slice once it has closed, which is the moment the next one opens. So what a
 //!   backtest does at that open happens then: the timers due at it fire (`Pause::Timers`,
@@ -109,6 +112,7 @@ impl Engine {
         self.book
             .working()
             .filter(|order| last || order.good_until <= slice.close)
+            .filter(|order| self.resting_gtt_of(order.id).is_none())
             .map(|order| order.id)
             .collect()
     }
@@ -131,6 +135,7 @@ impl Engine {
 
     /// True when an external session's close waits for the venue to end its orders.
     pub(super) fn session_close_waits(&self, slice: &SliceInfo) -> bool {
-        self.is_external() && slice.closes_session && !self.ending_at_close(slice).is_empty()
+        let waits = !self.ending_at_close(slice).is_empty() || self.gtt_request_waits();
+        self.is_external() && slice.closes_session && waits
     }
 }

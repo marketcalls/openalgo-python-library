@@ -9,7 +9,8 @@
 //!   or what a modification waiting for the venue's answer would give it, the larger),
 //!   reduce-only or not, and for nothing while an exit of the position waits for its
 //!   cancels (that exit closes the whole position, and cancels what is placed meanwhile):
-//!   `closing_room`. A reduce-only order beyond the room is rejected `exit_cover`. One
+//!   `closing_room`. A reduce-only order beyond the room is rejected `exit_cover`, and so
+//!   is a CNC sale of a long, which only closes whatever its flag says (`venue_roles`). One
 //!   stop for the whole position rests; a stop and a target for it both do not, and
 //!   neither do a stop and a plain sale of the long. An exit (`exit()`, `reduce()`) is
 //!   sized to fit when it is sent (`venue_owner`) and is checked here only when it is
@@ -30,13 +31,19 @@
 //!   cancellation waits counts at what it may still fill.
 //! - **A fill beyond the position**, from a race at the broker, is recorded up to the
 //!   position and the rest refused (`venue_fills`, `VenueError::WouldReverse`).
+//! - **A CNC or NRML leg's stop GTT** (`venue_gtts`) is not an order, but the broker
+//!   fills its child as one: its units take their room on the closing side as the leg's
+//!   resting stop does, first, and the GTT itself is cut to the position by
+//!   `venue_gtt_sync`. So do the units of a stop GTT an earlier leg left on that side
+//!   until the venue takes its cancellation (`Engine::stop_gtt_units`), up to the
+//!   position.
 
 use crate::exec::{Order, OrderId, OrderRequest, QuantitySpec, RejectCode};
 use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::kernel::Engine;
-use super::venue::{is_exit, Replacement, SendAt};
+use super::venue::{Replacement, SendAt};
 use super::venue_owner::closing_side;
 
 fn key_of(request: &OrderRequest) -> PositionKey {
@@ -82,12 +89,14 @@ impl Engine {
             })
             .map(|order| self.units_to_fill(order))
             .sum();
-        (held.abs() - working).max(0.0)
+        (held.abs() - working - self.stop_gtt_units(key)).max(0.0)
     }
 
-    /// In an external session, the cover rule of a reduce-only order of `units` (above 0)
-    /// at submission, or as the replacement of `replacing` (module docs); a backtest and
-    /// an exit at submission pass.
+    /// In an external session, the cover rule of an order that only closes (reduce-only,
+    /// or a CNC sale of a long: `Engine::delivery_sale`) of `units` (above 0) at
+    /// submission, or as the replacement of `replacing` (module docs); a backtest and an
+    /// order the exit owner sizes when it sends it (`Engine::owner_sends`) at submission
+    /// pass.
     ///
     /// Errors: `RejectCode::ExitCover` when the order does not fit.
     pub(super) fn check_exit_cover(
@@ -96,8 +105,12 @@ impl Engine {
         units: f64,
         replacing: Option<OrderId>,
     ) -> Result<(), RejectCode> {
-        let sized_when_sent = is_exit(request) && replacing.is_none();
-        if !self.is_external() || !request.reduce_only || sized_when_sent {
+        if !self.is_external() {
+            return Ok(());
+        }
+        let only_closes = request.reduce_only || self.delivery_sale(request);
+        let sized_when_sent = replacing.is_none() && self.owner_sends(request);
+        if !only_closes || sized_when_sent {
             return Ok(());
         }
         if units > self.closing_room(key_of(request), replacing) {
@@ -145,7 +158,7 @@ impl Engine {
         // other. The sort is stable: the others stay in the order they were placed.
         let stop = self.resting_leg_stop(key);
         orders.sort_by_key(|order| Some(order.id) != stop);
-        let mut room = held.abs();
+        let mut room = (held.abs() - self.stop_gtt_units(key)).max(0.0);
         for order in orders {
             if Some(order.request.side) != closing {
                 self.withdraw_order(at.stamp(), order.id)?;

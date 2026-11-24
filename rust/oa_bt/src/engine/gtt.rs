@@ -8,13 +8,20 @@
 //! |---|---|---|
 //! | A fill opens a CNC or NRML position with a stop | its stop GTT is placed for all the open units (`GttPlaced`), in force from step 3 of a step-2 fill (SPEC-02), from the next slice otherwise | the fill's |
 //! | The leg's stop or units change (trail, breakeven, an add, a partial exit, a target that leaves units) | the stop GTT follows by `gtt_plan`: modified (`GttModified`, GTT-3), placed or cancelled; in force from the next slice | 4 |
-//! | A target's exit that leaves units | the stop GTT stays and is cut to the units left in step 4 | the exit's |
-//! | Any other exit that is not the GTT's own (a signal, a target's exit of the whole position, the daily loss limit, the drawdown halt, the time exit) | the stop GTT is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9); a stop that remains gets a new GTT in step 4, and until it is in force no level of the leg is tested | the exit's |
+//! | An exit that leaves units (the strategy's partial exit, a target's) | the stop GTT stays in force and is cut to the units left in step 4; if it fires before, its child sells at most the units left | the exit's |
+//! | Any other exit that is not the GTT's own and closes the position (a signal or a target for all of it, the daily loss limit, the drawdown halt, the time exit, the close of a reversal) | the stop GTT is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9) | the exit's |
 //! | A strategy GTT order ends (cancelled, rejected) | its GTT is cancelled | the order's |
 //! | A session opens | every GTT older than 360 days is cancelled and placed again (GTT-2); a backtest assumes the engine runs at every session open (GTT-4) | 1 |
 //!
 //! Firing in step 3 and the engine's exit after an unfilled child are in `gtt_fire`;
-//! strategy GTT orders (`validity="gtt"`) in `gtt_orders`.
+//! strategy GTT orders (`validity="gtt"`) in `gtt_orders`. A live session sends a command
+//! at each of these moments instead, and its venue holds and fires the GTT
+//! (`venue_gtts`): none of the rules of this table acts in a session. Its renewal at a
+//! session open cancels a leg's old stop GTT and places the new one once the venue has
+//! taken the cancellation (`venue_gtt_sync`); a strategy GTT order is not renewed in a
+//! session (not built): the broker's expiry ends it `Expired` (`venue_gtt_answers`), which
+//! the strategy sees, where a backtest renews it, a difference only for an order resting
+//! more than 360 days.
 
 use crate::exec::{
     Gtt, GttAction, GttBook, GttEvent, GttEventName, GttId, GttPolicy, GttPurpose, GttStatus,
@@ -93,7 +100,7 @@ impl Engine {
     }
 
     /// How the child of `key`'s stop GTT is priced.
-    fn child_terms(&self, key: PositionKey) -> Result<ChildTerms, KernelError> {
+    pub(super) fn child_terms(&self, key: PositionKey) -> Result<ChildTerms, KernelError> {
         let spec = self.spec(key.instrument)?;
         let held = self.held_units(key);
         Ok(ChildTerms {
@@ -113,7 +120,7 @@ impl Engine {
         key: PositionKey,
         effect: &FillEffect,
     ) -> Result<(), KernelError> {
-        if effect.kind != FillKind::Entry || !held_as_gtt(key.product) {
+        if effect.kind != FillKind::Entry || !held_as_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let Some(planned) = self
@@ -162,15 +169,16 @@ impl Engine {
         Ok(())
     }
 
-    /// Cancel-then-exit, decision GTT-9 reading A: before any fill that reduces a CNC or
-    /// NRML position and is not its stop GTT's own exit (a signal, a strategy GTT, a
-    /// target that closes the position, the daily loss limit, the drawdown halt, the time
-    /// exit, the close of a reversal), the GTT holding the position's stop is cancelled in
-    /// the same step, so the position never has two exit owners (08-live-trading 6.2). A
-    /// stop that remains after a partial exit gets a new GTT in step 4, in force from the
-    /// next base bar; until then no level of the leg is tested (`gtt_levels`). A target's
-    /// exit that leaves units keeps the GTT instead, which step 4 cuts to the units left
-    /// (design 20-positional-live section 2).
+    /// Cancel-then-exit, decision GTT-9 reading A: before any fill that closes a CNC or
+    /// NRML position and is not its stop GTT's own exit (a signal or a target for all of
+    /// it, a strategy GTT, the daily loss limit, the drawdown halt, the time exit, the
+    /// close of a reversal), the GTT holding the position's stop is cancelled in the same
+    /// step, so the position never has two exit owners (08-live-trading 6.2). An exit that
+    /// leaves units (the strategy's partial exit, a target's) keeps the GTT in force
+    /// instead, which step 4 cuts to the units left, in backtest and live alike (design
+    /// 20-positional-live section 2; the lead's ruling on unit N0's verification, option
+    /// B). A live session cancels its GTTs at the venue before it sends the exit
+    /// (`venue_owner`), so nothing is cancelled here.
     pub(super) fn cancel_gtts_before_exit(
         &mut self,
         stamp: EventStamp,
@@ -181,13 +189,13 @@ impl Engine {
             let purpose = self.gtts.book.get(id).map(|gtt| gtt.purpose);
             purpose == Some(GttPurpose::Protect)
         });
-        if own_exit || !held_as_gtt(key.product) {
+        if own_exit || !held_as_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let held = self.held_units(key);
         let reduces = held != 0.0 && (held > 0.0) != (request.side == Side::Buy);
-        let target_leaves_units = request.target_index.is_some() && request.units < held.abs();
-        if !reduces || target_leaves_units {
+        let leaves_units = request.units < held.abs();
+        if !reduces || leaves_units {
             return Ok(());
         }
         for id in self.gtts.book.protecting(key.instrument, key.product) {
@@ -197,12 +205,16 @@ impl Engine {
     }
 
     /// When a strategy order ends (cancelled, rejected, expired), the GTT it rests as
-    /// is cancelled first.
+    /// is cancelled first. A live session's GTT order ends with its GTT's answer instead
+    /// (`venue_gtt_answers`).
     pub(super) fn cancel_order_gtt(
         &mut self,
         stamp: EventStamp,
         order: OrderId,
     ) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         match self.gtts.book.of_order(order) {
             Some(id) => self.cancel_gtt(stamp, id),
             None => Ok(()),
@@ -298,12 +310,16 @@ impl Engine {
     /// Step 1: at a session open every active GTT older than the policy allows is
     /// cancelled and placed again with the same trigger and quantity (decision GTT-2), so a
     /// position held past a broker's GTT expiry stays protected. The re-created GTT is
-    /// in force from step 3 of this slice.
+    /// in force from step 3 of this slice. A live session renews its legs' stop GTTs
+    /// through the venue (`venue_gtt_sync::renew_old_stop_gtts`).
     ///
     /// Errors: `Exec` for a GTT the book cannot move (a kernel defect).
     pub(super) fn renew_old_gtts(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if !slice.opens_session {
             return Ok(());
+        }
+        if self.is_external() {
+            return self.renew_old_stop_gtts(slice);
         }
         let stamp = Self::stamp(slice, Step::SessionOpen);
         let policy = self.gtts.policy;

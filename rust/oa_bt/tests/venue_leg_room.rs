@@ -248,6 +248,7 @@ fn a_plain_market_order_against_the_position_goes_out_after_the_stop_is_cut_or_c
             VenueCommand::Cancel { order } => kernel.apply_cancel(order),
             VenueCommand::Modify { order, .. } => kernel.apply_modify(order),
             VenueCommand::Place { order, .. } => panic!("{what}: {order} placed first"),
+            other => panic!("{what}: an MIS leg sends no GTT command: {other:?}"),
         };
         assert!(answered.is_ok(), "{what}");
         assert_eq!(

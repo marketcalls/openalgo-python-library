@@ -8,13 +8,27 @@
 //! | `Entry` | `entry` | opens a position from flat, reverses one (`reverse=True` beyond it: the rest opens the other side), or goes against it beyond the room its closing side has (`venue_cover::closing_room`): the other orders working on that side could leave the position flat, and this one would then open the other side |
 //! | `Add` | `add` | adds to an open position on its side |
 //! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31, `venue_legs`) |
-//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, and the further orders of such an exit above the freeze quantity |
+//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, every CNC sale of a long (below), and the further orders of such an exit above the freeze quantity |
 //! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
 //! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
 //!
-//! A MARKET order against a position whose leg's stop rests is judged in the room the stop
-//! makes for it: the position's exit owner sends it once the stop is cut down to what stays
-//! open, or cancelled for a sale of the whole position or a reversal (`venue_owner`), so
+//! A CNC sale of a long only closes, whatever its reduce-only flag says: delivery cannot
+//! be shorted (04-execution 2), and the strategy only ever sells its own units (design
+//! 20-positional-live 7.2, decision 11.3). So it is never an entry that could open the
+//! other side: beyond the room its closing side has (beside the leg's stop GTT for the
+//! whole position, or another sale) it is rejected `exit_cover` as a reduce-only order is
+//! (`venue_cover`), its fills are never recorded beyond the position, and it is fitted to
+//! the position, or cancelled, when that shrinks. A backtest takes such a resting sale
+//! beside the stop GTT: when the stop fires first it rejects the sale `product_rule` at
+//! its fill once the long is gone, and the trades are the same; when the sale's price
+//! comes first the backtest fills it, where a live session refused it at submission. This
+//! difference is recorded in the CHANGELOG; a strategy uses `target=` for such an exit.
+//!
+//! A MARKET order against a position whose leg's stop rests (its stop order, its stop GTT,
+//! or a stop GTT an earlier leg left at the venue: `Engine::stop_gtt_units`) is judged in
+//! the room the stop makes for it: the position's exit owner sends it once the stop is cut
+//! down to what stays open, or cancelled for a sale of the whole position or a reversal
+//! (`venue_owner`), so
 //! the order and the stop never both fill at the broker (16-session-design 4.5). A reversal
 //! whose stop fills before its cancellation ends canceled and opens nothing; the strategy
 //! decides again at its next bar. A resting order against it (LIMIT, SL, SL-M) is judged
@@ -30,21 +44,23 @@
 //! The risk reasons are the kernel's own rules (`daily_loss`, `daily_profit`, `drawdown`,
 //! `time_exit`) and those the live layer names when it asks for an exit
 //! (`Engine::request_exit`: `unprotected`, `stop_rejected`, `stop_unfilled`,
-//! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`). The trade an engine
-//! exit closes records the backtest's exit reason:
+//! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`), and `stop_crossed`,
+//! the kernel's exit of a CNC or NRML leg whose stop the price had crossed with no stop
+//! GTT at the broker (`venue_gtt_protect`). The trade an engine exit closes records the
+//! backtest's exit reason:
 //!
 //! | Engine exit | Exit reason of the trade |
 //! |---|---|
 //! | `square_off` | `scheduler`, as the backtest's square-off |
 //! | `daily_loss`, `drawdown`, `time_exit` | `daily_loss_limit`, `drawdown_halt`, `time_exit`, as the backtest's rules |
-//! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
+//! | `stop_unfilled`, `stop_crossed` | `leg_sl`: the leg's stop level was reached |
 //! | `account_loss` | `account_loss_limit`, as a portfolio backtest's account breach (`account_breach`; 18-multi-strategy 1.3) |
 //! | `daily_profit` | `daily_profit_target`, as the backtest's daily profit target (`daily_caps`; 18-multi-strategy 2.5a) |
 //! | `account_profit` | `account_profit_target`, as a portfolio backtest's account profit target (`account_breach`) |
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
 use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
-use crate::model::Side;
+use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 
@@ -53,7 +69,7 @@ use super::kernel::Engine;
 use super::venue::is_exit;
 
 /// True when an order on `side` goes against a position of `held` signed units.
-fn goes_against(held: f64, side: Side) -> bool {
+pub(super) fn goes_against(held: f64, side: Side) -> bool {
     held != 0.0 && (held > 0.0) != (side == Side::Buy)
 }
 
@@ -82,11 +98,14 @@ pub enum RiskExitReason {
     DailyProfit,
     /// The account's daily profit target, across the session's strategies.
     AccountProfit,
+    /// The price had crossed the leg's stop with no stop at the broker
+    /// (`venue_gtt_protect`).
+    StopCrossed,
 }
 
 impl RiskExitReason {
     /// Every reason, in the order of the module docs.
-    pub const ALL: [RiskExitReason; 11] = [
+    pub const ALL: [RiskExitReason; 12] = [
         RiskExitReason::DailyLoss,
         RiskExitReason::Drawdown,
         RiskExitReason::TimeExit,
@@ -98,6 +117,7 @@ impl RiskExitReason {
         RiskExitReason::OperatorStop,
         RiskExitReason::DailyProfit,
         RiskExitReason::AccountProfit,
+        RiskExitReason::StopCrossed,
     ];
 
     /// The code the bindings use.
@@ -114,6 +134,7 @@ impl RiskExitReason {
             RiskExitReason::OperatorStop => "operator_stop",
             RiskExitReason::DailyProfit => "daily_profit",
             RiskExitReason::AccountProfit => "account_profit",
+            RiskExitReason::StopCrossed => "stop_crossed",
         }
     }
 }
@@ -150,7 +171,7 @@ impl EngineExit {
                 RiskExitReason::DailyLoss => ExitReason::DailyLossLimit,
                 RiskExitReason::Drawdown => ExitReason::DrawdownHalt,
                 RiskExitReason::TimeExit => ExitReason::TimeExit,
-                RiskExitReason::StopUnfilled => ExitReason::LegSl,
+                RiskExitReason::StopUnfilled | RiskExitReason::StopCrossed => ExitReason::LegSl,
                 RiskExitReason::AccountLoss => ExitReason::AccountLossLimit,
                 RiskExitReason::DailyProfit => ExitReason::DailyProfitTarget,
                 RiskExitReason::AccountProfit => ExitReason::AccountProfitTarget,
@@ -253,7 +274,8 @@ impl Engine {
         let held = self.held_units(key);
         let against = goes_against(held, request.side);
         let room = || self.closing_room(key, except) + self.room_the_stop_makes(request, except);
-        match (request.reduce_only, against) {
+        let only_closes = request.reduce_only || self.delivery_sale(request);
+        match (only_closes, against) {
             (true, _) => OrderRole::Exit,
             (false, true) if units <= room() => OrderRole::Exit,
             (false, true) => OrderRole::Entry,
@@ -262,9 +284,22 @@ impl Engine {
         }
     }
 
-    /// The units of the leg's resting stop of `request`'s position when `request` is a
-    /// MARKET order against the position that the exit owner sends (module docs); 0 for
-    /// any other order, and for the stop itself (`except`).
+    /// True for a CNC sale of a long (module docs): delivery cannot be shorted
+    /// (04-execution 2), and the strategy only ever sells its own units (design
+    /// 20-positional-live 7.2, decision 11.3), so it only closes, whatever its reduce-only
+    /// flag says.
+    pub(super) fn delivery_sale(&self, request: &OrderRequest) -> bool {
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        request.product == Product::Cnc && request.side == Side::Sell && self.held_units(key) > 0.0
+    }
+
+    /// The units of the leg's resting stop of `request`'s position, or of its stop GTTs
+    /// (`venue_gtts`), when `request` is a MARKET order against the position that the exit
+    /// owner sends (module docs); 0 for any other order, and for the stop itself
+    /// (`except`).
     fn room_the_stop_makes(&self, request: &OrderRequest, except: Option<OrderId>) -> f64 {
         if request.order_type != OrderType::Market {
             return 0.0;
@@ -277,7 +312,7 @@ impl Engine {
             Some(stop) if Some(stop) != except => {
                 self.book.get(stop).map_or(0.0, |o| self.units_to_fill(o))
             }
-            _ => 0.0,
+            _ => self.stop_gtt_units(key),
         }
     }
 
@@ -292,9 +327,10 @@ impl Engine {
             instrument: request.instrument,
             product: request.product,
         };
+        let stop_rests = self.resting_leg_stop(key).is_some() || self.stop_gtt_units(key) > 0.0;
         request.order_type == OrderType::Market
             && goes_against(self.held_units(key), request.side)
-            && self.resting_leg_stop(key).is_some()
+            && stop_rests
     }
 
     /// Refuse, in an external session, a replacement `request` of `units` for order `id`
@@ -382,6 +418,10 @@ mod tests {
                 "account_profit",
                 EngineExit::Risk(RiskExitReason::AccountProfit),
             ),
+            (
+                "stop_crossed",
+                EngineExit::Risk(RiskExitReason::StopCrossed),
+            ),
         ];
         for (code, exit) in table {
             assert_eq!(EngineExit::from_code(code), Some(exit), "{code}");
@@ -438,6 +478,10 @@ mod tests {
             (
                 EngineExit::Risk(RiskExitReason::AccountProfit),
                 ExitReason::AccountProfitTarget,
+            ),
+            (
+                EngineExit::Risk(RiskExitReason::StopCrossed),
+                ExitReason::LegSl,
             ),
         ];
         for (exit, reason) in table {

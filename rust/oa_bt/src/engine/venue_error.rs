@@ -4,11 +4,13 @@
 //! is recorded up to it before the rest is refused. Each refusal has a kind
 //! (`VenueError::kind`, all of them in `VENUE_REFUSAL_KINDS`), so the live layer tells a
 //! race it expects (a result for an order that has just ended) from a defect without
-//! reading the message.
+//! reading the message. A GTT's answers (`venue_gtt_answers`) are refused the same way:
+//! an unknown GTT, or one whose state takes no such answer (none of that request waits:
+//! a second answer to it, or a GTT that has fired or ended).
 
 use std::fmt;
 
-use crate::exec::{OrderId, OrderStatus};
+use crate::exec::{GttId, GttStatus, OrderId, OrderStatus};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 
@@ -106,6 +108,30 @@ pub enum VenueError {
     AtBarClose,
     /// The session has finished: no result can be recorded any more.
     SessionOver,
+    /// No GTT of the session has this id.
+    UnknownGtt {
+        /// The GTT the answer named.
+        gtt: GttId,
+    },
+    /// The GTT's state takes no such answer: no request of that kind waits for one (a
+    /// second answer to the same request), or the GTT has fired or ended.
+    GttState {
+        /// The GTT the answer named.
+        gtt: GttId,
+        /// Its state.
+        status: GttStatus,
+        /// What the answer was: "placed", "refused", "modified", "modify_refused",
+        /// "cancelled", "cancel_refused", "ended" or "triggered".
+        answer: &'static str,
+    },
+    /// The order rests as a GTT the venue has not fired: nothing of it is at the venue
+    /// until `apply_gtt_triggered` says it fired.
+    GttResting {
+        /// The kernel order the result was for.
+        order: OrderId,
+        /// The GTT it rests as.
+        gtt: GttId,
+    },
 }
 
 /// The kind of an unknown order's refusal (`KernelError::UnknownOrder`), as the bindings
@@ -114,7 +140,7 @@ pub const UNKNOWN_ORDER_KIND: &str = "unknown_order";
 
 /// Every kind of refusal a venue result can meet: the kinds of `VenueError` and
 /// `UNKNOWN_ORDER_KIND`. The bindings export it, so the Python list cannot drift from it.
-pub const VENUE_REFUSAL_KINDS: [&str; 12] = [
+pub const VENUE_REFUSAL_KINDS: [&str; 15] = [
     "not_external",
     UNKNOWN_ORDER_KIND,
     "order_ended",
@@ -127,6 +153,9 @@ pub const VENUE_REFUSAL_KINDS: [&str; 12] = [
     "beyond_position",
     "at_bar_close",
     "session_over",
+    "unknown_gtt",
+    "gtt_state",
+    "gtt_resting",
 ];
 
 impl VenueError {
@@ -144,6 +173,9 @@ impl VenueError {
             VenueError::BeyondPosition { .. } => "beyond_position",
             VenueError::AtBarClose => "at_bar_close",
             VenueError::SessionOver => "session_over",
+            VenueError::UnknownGtt { .. } => "unknown_gtt",
+            VenueError::GttState { .. } => "gtt_state",
+            VenueError::GttResting { .. } => "gtt_resting",
         }
     }
 }
@@ -151,12 +183,54 @@ impl VenueError {
 impl fmt::Display for VenueError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            VenueError::NotExternal | VenueError::AtBarClose | VenueError::SessionOver => {
+                self.fmt_session_refusal(f)
+            }
+            VenueError::OrderEnded { .. }
+            | VenueError::NotSent { .. }
+            | VenueError::TooManyUnits { .. }
+            | VenueError::InvalidFill { .. }
+            | VenueError::NotPending { .. }
+            | VenueError::ModifyBelowFilled { .. } => self.fmt_order_refusal(f),
+            VenueError::WouldReverse { .. } | VenueError::BeyondPosition { .. } => {
+                self.fmt_position_refusal(f)
+            }
+            VenueError::UnknownGtt { .. }
+            | VenueError::GttState { .. }
+            | VenueError::GttResting { .. } => self.fmt_gtt_refusal(f),
+        }
+    }
+}
+
+// Each helper writes one group of `Display`'s dispatch; a variant of another group, which
+// the dispatch never hands it, is written as its kind.
+impl VenueError {
+    /// A result the session cannot take now: a backtest, a bar close, a finished session.
+    fn fmt_session_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::NotExternal => write!(
                 f,
                 "this run fills its own orders (a backtest): a venue's fills, rejections \
                  and cancellations, and a session's controls, go to a live session \
                  (Engine::new_session)"
             ),
+            VenueError::AtBarClose => write!(
+                f,
+                "the engine is paused at a bar close: call advance first, then pass the \
+                 venue's results while it waits"
+            ),
+            VenueError::SessionOver => write!(
+                f,
+                "the session has finished: a result from the venue can no longer be \
+                 recorded"
+            ),
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// A result its order cannot take: ended, not sent, too many units, nothing pending.
+    fn fmt_order_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::OrderEnded { order, status } => write!(
                 f,
                 "order {order} is {} and takes no more results from the venue",
@@ -192,6 +266,13 @@ impl fmt::Display for VenueError {
                  {filled_units} units it has filled: the venue refuses it \
                  (apply_modify_refused)"
             ),
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// A fill beyond the position the session holds.
+    fn fmt_position_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::WouldReverse {
                 order,
                 excess_units,
@@ -216,16 +297,34 @@ impl fmt::Display for VenueError {
                 key.instrument.0,
                 key.product.code()
             ),
-            VenueError::AtBarClose => write!(
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// An answer about a GTT the session does not have or that takes no such answer.
+    fn fmt_gtt_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VenueError::UnknownGtt { gtt } => write!(
                 f,
-                "the engine is paused at a bar close: call advance first, then pass the \
-                 venue's results while it waits"
+                "the session has no GTT {gtt}: pass the GTT id of a place_gtt command"
             ),
-            VenueError::SessionOver => write!(
+            VenueError::GttState {
+                gtt,
+                status,
+                answer,
+            } => write!(
                 f,
-                "the session has finished: a result from the venue can no longer be \
-                 recorded"
+                "GTT {gtt} is {} and takes no answer \"{answer}\": no such request of it \
+                 waits for the venue (a second answer to one, or a GTT that has fired or \
+                 ended)",
+                status.code()
             ),
+            VenueError::GttResting { order, gtt } => write!(
+                f,
+                "order {order} rests as GTT {gtt}, which the venue has not fired: pass \
+                 apply_gtt_triggered first, then the results of its child order"
+            ),
+            other => write!(f, "{}", other.kind()),
         }
     }
 }
@@ -290,6 +389,16 @@ mod tests {
             },
             VenueError::AtBarClose,
             VenueError::SessionOver,
+            VenueError::UnknownGtt { gtt: GttId(1) },
+            VenueError::GttState {
+                gtt: GttId(1),
+                status: GttStatus::Canceled,
+                answer: "placed",
+            },
+            VenueError::GttResting {
+                order,
+                gtt: GttId(1),
+            },
         ];
         let mut kinds: Vec<&str> = all.iter().map(VenueError::kind).collect();
         kinds.push(UNKNOWN_ORDER_KIND);

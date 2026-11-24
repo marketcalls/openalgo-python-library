@@ -7,7 +7,7 @@
 //! | Gate | Rejects the entry or add | Code |
 //! |---|---|---|
 //! | Entry locks | while any reason locks entries (`Engine::lock_entries`) | `live_lock` |
-//! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two | `live_in_flight` |
+//! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two; a CNC or NRML leg's stop GTT (`venue_gtts`) keeps it out the same way while its place, a modification or its cancellation waits for the venue, while its cancellation is wanted (the venue refused it), and while it rests on a flat position, and so does a stop GTT an earlier leg left resting (`Engine::loose_stop_gtts`) | `live_in_flight` |
 //! | Freeze cap | when it would take the position above the instrument's freeze quantity | `freeze_qty` |
 //!
 //! The gates of an instrument several strategies of the session trade come before them
@@ -21,7 +21,7 @@
 //! it. Exits and stops pass every gate. A backtest has none of them: its freeze rule judges
 //! each order alone (`exec::checks::freeze_rule`).
 
-use crate::exec::{Order, OrderId, OrderRequest, RejectCode};
+use crate::exec::{Gtt, GttStatus, Order, OrderId, OrderRequest, RejectCode};
 use crate::portfolio::PositionKey;
 
 use super::clock::SliceInfo;
@@ -91,7 +91,7 @@ impl Engine {
                 && Some(order.id) != replacing
                 && holds_entries(legs_stop == Some(order.id), self.stop_busy(key, order.id))
         };
-        if self.book.working().any(in_flight) {
+        if self.book.working().any(in_flight) || self.stop_gtt_busy(key) {
             return Err(RejectCode::LiveInFlight);
         }
         let freeze = self
@@ -111,6 +111,24 @@ impl Engine {
         self.venue.cancelling.contains(&id)
             || self.venue.modifying.iter().any(|(m, _)| *m == id)
             || self.repriced_leg_stop(key) == Some(id)
+    }
+
+    /// True while a stop GTT of `key` keeps its entries out (module docs): the leg's own
+    /// while it is not resting with nothing asked of it, its cancellation is wanted, or
+    /// the position is flat; or one an earlier leg left resting.
+    fn stop_gtt_busy(&self, key: PositionKey) -> bool {
+        let flat = self.held_units(key) == 0.0;
+        let busy = |gtt: &Gtt| {
+            let cancel_wanted = self.gtt_follow(gtt.id).is_some_and(|f| f.cancel_wanted);
+            gtt.status != GttStatus::Active || cancel_wanted || flat
+        };
+        let loose = self.loose_stop_gtts().into_iter().any(|id| {
+            self.gtts
+                .book
+                .get(id)
+                .is_some_and(|gtt| gtt.instrument == key.instrument && gtt.product == key.product)
+        });
+        loose || self.stop_gtt_at_venue(key).is_some_and(busy)
     }
 }
 

@@ -4,7 +4,9 @@
 //! A rejection or a cancellation ends the order with its event; a partly filled order
 //! keeps its fills. When the order is a leg's broker-held stop, the leg is protected again
 //! (`venue_legs`): whether the kernel had asked for a cancellation is read before the
-//! order ends.
+//! order ends. When it is a fired GTT's child, the GTT is resolved and the leg exited
+//! (`venue_gtt_child`). A strategy order that rests as a GTT the venue has not fired takes
+//! no result (`VenueError::GttResting`): nothing of it is at the venue.
 
 use crate::exec::{Order, OrderAction, OrderId, RejectCode};
 
@@ -60,6 +62,7 @@ impl Engine {
         let stamp = Self::stamp(&slice, result_step(self.live_order(order)?));
         self.end_order(stamp, order, action, kind)?;
         self.after_stop_end(self.waiting_at(&slice), order, how)?;
+        self.after_gtt_child_end(self.waiting_at(&slice), order, how)?;
         self.after_result(&slice)?;
         Ok(stamp)
     }
@@ -114,7 +117,7 @@ impl Engine {
 
     /// The order a result is for: it works and was sent.
     ///
-    /// Errors: `UnknownOrder`, `Venue(OrderEnded)`, `Venue(NotSent)`.
+    /// Errors: `UnknownOrder`, `Venue(OrderEnded)`, `Venue(NotSent)`, `Venue(GttResting)`.
     pub(super) fn live_order(&self, id: OrderId) -> Result<&Order, KernelError> {
         let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
         if !order.status.is_working() {
@@ -123,6 +126,9 @@ impl Engine {
         }
         if self.is_unsent(id) {
             return Err(VenueError::NotSent { order: id }.into());
+        }
+        if let Some(gtt) = self.resting_gtt_of(id) {
+            return Err(VenueError::GttResting { order: id, gtt }.into());
         }
         Ok(order)
     }

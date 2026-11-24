@@ -386,6 +386,7 @@ def test_the_role_and_reason_vocabularies_are_the_kernels():
         "operator_stop",
         "daily_profit",
         "account_profit",
+        "stop_crossed",
     )
     assert native_attr("EXIT_REQUESTS") == (
         "sent",

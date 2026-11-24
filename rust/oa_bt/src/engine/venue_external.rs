@@ -10,7 +10,8 @@
 //! is recorded in the slice in progress, at the open when it is stamped at the slice's
 //! open instant and at a level otherwise, in step 3. Then, as after any venue result, the
 //! orders working to close the position are fitted to what is left (`venue_cover`: a leg's
-//! stop is cut down, or cancelled once the position is flat) and the waiting exits move on.
+//! stop is cut down, or cancelled once the position is flat; a CNC or NRML leg's stop GTT
+//! likewise, `venue_gtt_sync`) and the waiting exits move on.
 //!
 //! Such a fill only closes or reduces: one on the position's own side, of a flat position,
 //! or of more units than the position has (through zero) is refused whole and records

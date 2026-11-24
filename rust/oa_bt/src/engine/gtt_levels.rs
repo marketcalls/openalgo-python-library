@@ -9,16 +9,18 @@
 //! child fills by the GTT rules (`gtt_fire::test_gtt`); a target hit is the engine's exit
 //! at the target or at the open, as an MIS leg's (`legs::exit_at_level`), which cancels
 //! the GTT first when it closes the position and leaves it to be cut to the units left
-//! in step 4 otherwise (`gtt::cancel_gtts_before_exit`).
+//! in step 4 otherwise (`gtt::cancel_gtts_before_exit`). A partial exit at the open (the
+//! strategy's) keeps the GTT in force too, so that bar's levels are tested as an MIS
+//! leg's, the stop's child selling at most the units left (`gtt_fire`).
 //!
 //! The GTT's trigger, not the leg's stop, is the stop tested: the GTT follows the leg's
 //! stop from the next base bar (a trail, a breakeven or an add moves it in step 4) and is
 //! on the tick grid even with `round_levels` off, and it is what fires. A leg with a stop
-//! whose GTT is not in force in the bar (cancelled before a partial exit at the open, its
-//! replacement in force from the next base bar) has no level tested in that bar: its
-//! targets tested alone would exit at a target in a bar that also reaches the stop, where
-//! the stop comes first. A leg without a stop has no GTT, and its targets are tested in
-//! every bar, as an MIS leg's.
+//! whose GTT is not in force in the bar (placed by a fill inside the bar, a resting entry
+//! that filled in step 3, in force from the next base bar) has no level tested in that
+//! bar: its targets tested alone would exit at a target in a bar that also reaches the
+//! stop, where the stop comes first. A leg without a stop has no GTT, and its targets are
+//! tested in every bar, as an MIS leg's.
 
 use crate::exec::{GttId, GttLegRole};
 use crate::portfolio::PositionKey;

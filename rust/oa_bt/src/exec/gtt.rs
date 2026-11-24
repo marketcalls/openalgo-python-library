@@ -14,6 +14,14 @@
 //! spent. A modification is a full replacement of the trigger and quantity under the
 //! same id (`Modify`).
 //!
+//! A live session's GTT is held by the broker, so it has the states of a request too
+//! (design 20-positional-live 3.1, unit N1): `Requested` until the venue confirms the
+//! place (`Active`) or refuses it (`Rejected`), `ModifyPending` and `CancelPending` while
+//! a modification or cancellation waits for the venue's answer (the old terms rest until
+//! then), and `VenueEnded` for a GTT that ended at the venue without the session asking
+//! (expired, rejected after placement, cancelled outside the session). A backtest never
+//! takes those states. `GTT_TRANSITIONS` lists every legal move (`gtt_state`).
+//!
 //! The four decisions on GTTs (all reading A) are the defaults of `GttPolicy`: GTT-1 the
 //! child's limit buffer, GTT-2 re-creation after 360 days, GTT-3 at most one
 //! modification per base bar and only for a move of at least one tick, GTT-4 the engine
@@ -28,6 +36,7 @@ use std::fmt;
 use crate::model::{Day, InstrumentKind, Product, Side, TsNanos};
 
 use super::error::ExecError;
+pub use super::gtt_state::{next_gtt_status, GttAction, GttStatus, GTT_TRANSITIONS};
 use super::instrument::InstrumentId;
 use super::matching::TriggerDirection;
 use super::order::OrderId;
@@ -83,119 +92,6 @@ pub enum GttPurpose {
     Protect,
     /// Placed by the strategy with `validity="gtt"`; the order in the book it belongs to.
     Order(OrderId),
-}
-
-/// Where a GTT stands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum GttStatus {
-    /// Resting: its triggers are tested on every base bar.
-    Active = 0,
-    /// A trigger fired and the child order was placed.
-    Triggered = 1,
-    /// The child order filled. Terminal.
-    ChildFilled = 2,
-    /// The child order did not fill through its bar and was cancelled; the GTT is
-    /// spent. Terminal.
-    ChildCanceled = 3,
-    /// Cancelled by the strategy or the engine (an engine exit, a flat position).
-    /// Terminal.
-    Canceled = 4,
-    /// Older than `GttPolicy::max_age_days`: replaced by a new GTT (GTT-2). Terminal.
-    Expired = 5,
-}
-
-impl GttStatus {
-    /// Every state, in code order.
-    pub const ALL: [GttStatus; 6] = [
-        GttStatus::Active,
-        GttStatus::Triggered,
-        GttStatus::ChildFilled,
-        GttStatus::ChildCanceled,
-        GttStatus::Canceled,
-        GttStatus::Expired,
-    ];
-
-    /// The state name used in results.
-    pub fn code(self) -> &'static str {
-        match self {
-            GttStatus::Active => "Active",
-            GttStatus::Triggered => "Triggered",
-            GttStatus::ChildFilled => "ChildFilled",
-            GttStatus::ChildCanceled => "ChildCanceled",
-            GttStatus::Canceled => "Canceled",
-            GttStatus::Expired => "Expired",
-        }
-    }
-
-    /// True when no action can move the GTT any more.
-    pub fn is_terminal(self) -> bool {
-        !matches!(self, GttStatus::Active | GttStatus::Triggered)
-    }
-}
-
-/// What happens to a GTT.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum GttAction {
-    /// Replace the triggers and the quantity (a trail, a breakeven, an add).
-    Modify = 0,
-    /// A base bar reached a trigger: place the child order.
-    Fire = 1,
-    /// The child order filled.
-    FillChild = 2,
-    /// The child order did not fill through its bar and was cancelled.
-    CancelChild = 3,
-    /// Cancel the GTT.
-    Cancel = 4,
-    /// The GTT is too old: it is replaced by a new one (GTT-2).
-    Expire = 5,
-}
-
-impl GttAction {
-    /// Every action, in code order.
-    pub const ALL: [GttAction; 6] = [
-        GttAction::Modify,
-        GttAction::Fire,
-        GttAction::FillChild,
-        GttAction::CancelChild,
-        GttAction::Cancel,
-        GttAction::Expire,
-    ];
-
-    /// The action name used in messages.
-    pub fn code(self) -> &'static str {
-        match self {
-            GttAction::Modify => "Modify",
-            GttAction::Fire => "Fire",
-            GttAction::FillChild => "FillChild",
-            GttAction::CancelChild => "CancelChild",
-            GttAction::Cancel => "Cancel",
-            GttAction::Expire => "Expire",
-        }
-    }
-}
-
-use GttAction as A;
-use GttStatus as S;
-
-/// Every legal GTT transition as (from, action, to). Anything not listed is illegal.
-pub const GTT_TRANSITIONS: [(GttStatus, GttAction, GttStatus); 6] = [
-    (S::Active, A::Modify, S::Active),
-    (S::Active, A::Fire, S::Triggered),
-    (S::Active, A::Cancel, S::Canceled),
-    (S::Active, A::Expire, S::Expired),
-    (S::Triggered, A::FillChild, S::ChildFilled),
-    (S::Triggered, A::CancelChild, S::ChildCanceled),
-];
-
-/// The state a GTT moves to. Errors: `IllegalGttTransition`.
-pub fn next_gtt_status(from: GttStatus, action: GttAction) -> Result<GttStatus, ExecError> {
-    GTT_TRANSITIONS
-        .iter()
-        .find(|(state, taken, _)| *state == from && *taken == action)
-        .map(|(_, _, to)| *to)
-        .ok_or(ExecError::IllegalGttTransition { from, action })
 }
 
 /// The decided GTT rules (GTT-1 to GTT-3), as values.
@@ -299,71 +195,16 @@ impl Gtt {
         (self.leg.role == role).then_some(self.leg.trigger_rupees)
     }
 
-    /// True while its triggers are tested.
+    /// True while its trigger rests (`GttStatus::is_active`): a backtest tests it on every
+    /// base bar.
     pub fn is_active(&self) -> bool {
-        self.status == GttStatus::Active
+        self.status.is_active()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The legal transitions, written out from 04-execution 4.4: placed (Active), then
-    /// modified any number of times, then cancelled, expired, or fired with its child
-    /// filled or cancelled.
-    const LEGAL: [(GttStatus, GttAction, GttStatus); 6] = [
-        (S::Active, A::Modify, S::Active),
-        (S::Active, A::Fire, S::Triggered),
-        (S::Active, A::Cancel, S::Canceled),
-        (S::Active, A::Expire, S::Expired),
-        (S::Triggered, A::FillChild, S::ChildFilled),
-        (S::Triggered, A::CancelChild, S::ChildCanceled),
-    ];
-
-    #[test]
-    fn every_legal_transition_moves_the_gtt_as_documented() {
-        for (from, action, to) in LEGAL {
-            assert_eq!(
-                next_gtt_status(from, action),
-                Ok(to),
-                "{} --{}-->",
-                from.code(),
-                action.code()
-            );
-        }
-    }
-
-    #[test]
-    fn every_other_transition_is_illegal() {
-        for from in S::ALL {
-            for action in A::ALL {
-                if LEGAL.iter().any(|(s, a, _)| *s == from && *a == action) {
-                    continue;
-                }
-                assert_eq!(
-                    next_gtt_status(from, action),
-                    Err(ExecError::IllegalGttTransition { from, action }),
-                    "{} --{}-->",
-                    from.code(),
-                    action.code()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn terminal_states_are_those_after_the_child_or_the_cancel() {
-        let terminal: Vec<&str> = S::ALL
-            .into_iter()
-            .filter(|s| s.is_terminal())
-            .map(GttStatus::code)
-            .collect();
-        assert_eq!(
-            terminal,
-            ["ChildFilled", "ChildCanceled", "Canceled", "Expired"]
-        );
-    }
 
     #[test]
     fn the_child_limit_lies_beyond_the_trigger_by_the_buffer() {

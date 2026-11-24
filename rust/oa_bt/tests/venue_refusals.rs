@@ -294,9 +294,11 @@ fn not_built(result: Result<(), KernelError>) -> &'static str {
 }
 
 #[test]
-fn leg_rules_on_mis_are_taken_in_a_session_and_on_carry_products_refused() {
-    // MIS legs are held by the broker and on ticks (`venue_legs`, `venue_ticks`); CNC and
-    // NRML legs would be GTTs, which a session does not carry.
+fn leg_rules_are_taken_in_a_session_on_mis_and_cnc() {
+    // MIS legs are held by the broker and on ticks (`venue_legs`, `venue_ticks`); a CNC
+    // leg's stop is a GTT the broker holds and its targets the kernel's on ticks
+    // (`venue_gtt_sync`; design 20-positional-live, unit N1). NRML is a derivative's
+    // product: its legs are taken alike (`venue_gtt_stops` trades a short future).
     let points = |value| Distance::Points(value);
     let rows = [
         LegRules {
@@ -325,38 +327,35 @@ fn leg_rules_on_mis_are_taken_in_a_session_and_on_carry_products_refused() {
         },
     ];
     for rules in rows {
-        let mis = OrderRequest {
-            leg_rules: rules.clone(),
-            ..market(Side::Buy, 10.0)
-        };
-        assert_eq!(
-            not_built(submitted_in_session(mis)),
-            "accepted",
-            "{rules:?}"
-        );
-        for product in [Product::Cnc, Product::Nrml] {
-            let carry = OrderRequest {
+        for product in [Product::Mis, Product::Cnc] {
+            let request = OrderRequest {
                 leg_rules: rules.clone(),
                 ..order(Side::Buy, 10.0, OrderType::Market, product)
             };
-            let feature = not_built(submitted_in_session(carry));
-            assert!(
-                feature.starts_with("stop=, target=, trailing and breakeven on CNC or NRML"),
-                "{rules:?} on {product:?}: {feature}"
+            assert_eq!(
+                not_built(submitted_in_session(request)),
+                "accepted",
+                "{rules:?} on {product:?}"
             );
         }
     }
 }
 
 #[test]
-fn a_gtt_order_is_refused_in_a_session() {
-    let request = OrderRequest {
+fn a_gtt_entry_is_taken_in_a_session_and_a_gtt_exit_refused() {
+    let entry = OrderRequest {
         validity: Validity::Gtt,
         ..order(Side::Buy, 10.0, limit(490.0), Product::Cnc)
     };
+    assert_eq!(not_built(submitted_in_session(entry)), "accepted");
+    let exit = OrderRequest {
+        validity: Validity::Gtt,
+        reduce_only: true,
+        ..order(Side::Sell, 10.0, limit(520.0), Product::Cnc)
+    };
     assert_eq!(
-        not_built(submitted_in_session(request)),
-        "a GTT order in a live session"
+        not_built(submitted_in_session(exit)),
+        "a GTT order that only reduces, in a live session"
     );
 }
 

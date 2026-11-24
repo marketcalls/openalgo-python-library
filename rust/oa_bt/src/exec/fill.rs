@@ -72,6 +72,18 @@ impl FillFlags {
     /// A fill a live session's broker made with no order of the session: the broker's own
     /// square-off, or a position closed by hand (`engine::venue_external`).
     pub const EXTERNAL: FillFlags = FillFlags(4);
+    /// The engine's exit of a CNC or NRML leg whose stop the price had already crossed
+    /// when the stop was to be placed again: no stop was placed and the leg was exited at
+    /// market (design 20-positional-live 3.4, `engine::venue_gtt_protect`).
+    pub const STOP_CROSSED: FillFlags = FillFlags(8);
+
+    /// Every flag with its name, in bit order.
+    pub const NAMED: [(FillFlags, &'static str); 4] = [
+        (FillFlags::FILLED_AT_LAST_CLOSE, "filled_at_last_close"),
+        (FillFlags::GTT_CHILD_UNFILLED, "gtt_child_unfilled"),
+        (FillFlags::EXTERNAL, "external"),
+        (FillFlags::STOP_CROSSED, "stop_crossed"),
+    ];
 
     /// True when every bit of `other` is set.
     pub fn contains(self, other: FillFlags) -> bool {
@@ -85,17 +97,19 @@ impl FillFlags {
 
     /// The names of the flags that are set, for results.
     pub fn names(self) -> Vec<&'static str> {
-        let mut names = Vec::new();
-        if self.contains(FillFlags::FILLED_AT_LAST_CLOSE) {
-            names.push("filled_at_last_close");
-        }
-        if self.contains(FillFlags::GTT_CHILD_UNFILLED) {
-            names.push("gtt_child_unfilled");
-        }
-        if self.contains(FillFlags::EXTERNAL) {
-            names.push("external");
-        }
-        names
+        FillFlags::NAMED
+            .iter()
+            .filter(|(flag, _)| self.contains(*flag))
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    /// The flag `name` names (`NAMED`), if any.
+    pub fn from_name(name: &str) -> Option<FillFlags> {
+        FillFlags::NAMED
+            .iter()
+            .find(|(_, known)| *known == name)
+            .map(|(flag, _)| *flag)
     }
 }
 
@@ -183,6 +197,17 @@ mod tests {
         assert_eq!(flagged.names(), vec!["filled_at_last_close"]);
         let unfilled = FillFlags::NONE.with(FillFlags::GTT_CHILD_UNFILLED);
         assert_eq!(unfilled.names(), vec!["gtt_child_unfilled"]);
+    }
+
+    #[test]
+    fn a_crossed_stop_is_flagged_by_name_and_read_back_from_it() {
+        let crossed = FillFlags::NONE.with(FillFlags::STOP_CROSSED);
+        assert_eq!(crossed.names(), vec!["stop_crossed"]);
+        assert_eq!(
+            FillFlags::from_name("stop_crossed"),
+            Some(FillFlags::STOP_CROSSED)
+        );
+        assert_eq!(FillFlags::from_name("crossed"), None);
     }
 
     #[test]
