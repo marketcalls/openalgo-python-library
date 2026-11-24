@@ -196,6 +196,7 @@ impl Engine {
             false => (GttAction::VenueEnd, GttEventName::Ended),
         };
         self.gtts.book.apply(gtt, action)?;
+        self.forget_requests(gtt);
         self.emit_gtt(at.stamp(), event, gtt);
         match cancelled.purpose {
             GttPurpose::Order(order) => {
@@ -235,6 +236,7 @@ impl Engine {
         let ended = self.gtt_answered(gtt, "ended", &RESTING)?;
         let asked = ended.status == GttStatus::CancelPending;
         self.gtts.book.apply(gtt, GttAction::VenueEnd)?;
+        self.forget_requests(gtt);
         self.emit_gtt(at.stamp(), GttEventName::Ended, gtt);
         match (ended.purpose, how) {
             (GttPurpose::Order(order), GttEnd::Expired) => {
@@ -253,6 +255,13 @@ impl Engine {
         }
         self.after_result(&slice)?;
         Ok(at.stamp())
+    }
+
+    /// A GTT that has ended: no modification of it waits any more, and none is wanted.
+    fn forget_requests(&mut self, gtt: GttId) {
+        let follow = self.gtt_follow_mut(gtt);
+        follow.pending = None;
+        follow.cancel_wanted = false;
     }
 
     /// A leg's stop GTT rejected after its placement: protected again, or exited at market

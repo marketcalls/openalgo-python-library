@@ -192,6 +192,27 @@ fn a_stop_gtt_cancelled_outside_the_session_is_placed_again() {
 }
 
 #[test]
+fn a_gtt_ending_while_its_modification_waits_is_placed_again_at_the_legs_stop() {
+    // The trail asked for 501.00 and g1 ended outside the session before the answer:
+    // nothing of g1 waits any more, and g2 goes out at the leg's stop, 501.00.
+    let mut kernel = cnc_long_protected(stop_and_trail());
+    assert!(kernel.push_tick(SBIN, 503.0, at(1, 10)).is_ok());
+    kernel.take_commands();
+    assert!(kernel.apply_gtt_cancelled(G1).is_ok());
+    let view = kernel.gtt_view(G1).expect("g1 is the session's");
+    assert_eq!(
+        (view.gtt.status, view.pending),
+        (GttStatus::VenueEnded, None)
+    );
+    let again = VenueCommand::PlaceGtt {
+        gtt: G2,
+        order: None,
+        terms: long_stop(UNITS, 501.0, 495.95),
+    };
+    assert_eq!(kernel.take_commands(), [again]);
+}
+
+#[test]
 fn a_refused_cancellation_works_on_and_goes_again_in_a_later_slice() {
     // The target's exit waits for g1's cancellation; the venue refuses it in minute 1:
     // g1 rests, nothing is sent again in minute 1, and the cancellation goes once the
