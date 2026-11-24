@@ -9,7 +9,7 @@
 //! | A fill opens a CNC or NRML position with a stop | its stop GTT is placed for all the open units (`GttPlaced`), in force from step 3 of a step-2 fill (SPEC-02), from the next slice otherwise | the fill's |
 //! | The leg's stop or units change (trail, breakeven, an add, a partial exit, a target that leaves units) | the stop GTT follows by `gtt_plan`: modified (`GttModified`, GTT-3), placed or cancelled; in force from the next slice | 4 |
 //! | A target's exit that leaves units | the stop GTT stays and is cut to the units left in step 4 | the exit's |
-//! | Any other exit that is not the GTT's own (a signal, a target's exit of the whole position, the daily loss limit, the drawdown halt, the time exit) | the stop GTT is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9) | the exit's |
+//! | Any other exit that is not the GTT's own (a signal, a target's exit of the whole position, the daily loss limit, the drawdown halt, the time exit) | the stop GTT is cancelled first (`GttCanceled`), then the exit fills (cancel-then-exit, GTT-9); a stop that remains gets a new GTT in step 4, and until it is in force no level of the leg is tested | the exit's |
 //! | A strategy GTT order ends (cancelled, rejected) | its GTT is cancelled | the order's |
 //! | A session opens | every GTT older than 360 days is cancelled and placed again (GTT-2); a backtest assumes the engine runs at every session open (GTT-4) | 1 |
 //!
@@ -167,8 +167,9 @@ impl Engine {
     /// target that closes the position, the daily loss limit, the drawdown halt, the time
     /// exit, the close of a reversal), the GTT holding the position's stop is cancelled in
     /// the same step, so the position never has two exit owners (08-live-trading 6.2). A
-    /// stop that remains after a partial exit gets a new GTT in step 4. A target's exit
-    /// that leaves units keeps the GTT instead, which step 4 cuts to the units left
+    /// stop that remains after a partial exit gets a new GTT in step 4, in force from the
+    /// next base bar; until then no level of the leg is tested (`gtt_levels`). A target's
+    /// exit that leaves units keeps the GTT instead, which step 4 cuts to the units left
     /// (design 20-positional-live section 2).
     pub(super) fn cancel_gtts_before_exit(
         &mut self,

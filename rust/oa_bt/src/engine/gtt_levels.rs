@@ -13,8 +13,12 @@
 //!
 //! The GTT's trigger, not the leg's stop, is the stop tested: the GTT follows the leg's
 //! stop from the next base bar (a trail, a breakeven or an add moves it in step 4) and is
-//! on the tick grid even with `round_levels` off, and it is what fires. A leg whose GTT is
-//! not in force in the bar (none placed yet, or spent) has its targets tested alone.
+//! on the tick grid even with `round_levels` off, and it is what fires. A leg with a stop
+//! whose GTT is not in force in the bar (cancelled before a partial exit at the open, its
+//! replacement in force from the next base bar) has no level tested in that bar: its
+//! targets tested alone would exit at a target in a bar that also reaches the stop, where
+//! the stop comes first. A leg without a stop has no GTT, and its targets are tested in
+//! every bar, as an MIS leg's.
 
 use crate::exec::{GttId, GttLegRole};
 use crate::portfolio::PositionKey;
@@ -56,6 +60,8 @@ impl Engine {
     ) -> Result<(), KernelError> {
         let stop_gtt = self.stop_gtt_in_force(key, slice);
         let hits = match self.legs.iter().find(|(k, _)| *k == key) {
+            // A stop not held in this bar: no level is tested (module docs).
+            Some((_, leg)) if leg.stop.is_some() && stop_gtt.is_none() => return Ok(()),
             Some((_, leg)) => leg.test_bar_against(levels_bar, stop_gtt.map(|(_, at)| at)),
             None => return Ok(()),
         };

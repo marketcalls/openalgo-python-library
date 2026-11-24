@@ -3,7 +3,9 @@
 //! targets are held by the engine exactly as an MIS leg's are (design 20-positional-live
 //! P6, 04-execution 4.4 item 2): a target exit fills at the target or at a gapped open, a
 //! full one cancels the stop GTT first, a partial one cuts the GTT to the units left, and
-//! inside one bar a level crossed at the open comes first, else the stop.
+//! inside one bar a level crossed at the open comes first, else the stop. A leg with a
+//! stop has no level tested in a bar where its stop GTT is not in force (the bar of a
+//! partial exit at the open), and breakeven after the first target moves the GTT.
 //!
 //! A daily strategy on daily bars, no charges, no slippage. The position is opened at
 //! the close of 2025-07-01 and fills at the 07-02 open of 1000.00; 07-02 reaches neither
@@ -16,7 +18,7 @@ use oa_bt::engine::{RunOutput, Step};
 use oa_bt::exec::{FillAt, Gtt, GttId, GttLegRole, GttStatus, InstrumentSpec, OrderRequest};
 use oa_bt::exec::{OrderType, TriggerDirection};
 use oa_bt::model::{Day, Product, Side};
-use oa_bt::rms::{Distance, LegRules, TargetSpec};
+use oa_bt::rms::{AfterFirstTarget, Distance, LegRules, TargetSpec};
 use order_support::{
     day_open, equity, events_at, fills, future, july_2025, order, run_daily_on, Act, FillRow, Ohlc,
 };
@@ -67,9 +69,19 @@ fn opening(side: Side, rules: LegRules) -> OrderRequest {
     }
 }
 
-/// The run: the position opened as `side` with `rules`, then `third` on 07-03 and flat
-/// bars on 07-04 and 07-07.
+/// The run: the position opened as `side` with `rules`, then `third` on 07-03, `fourth`
+/// on 07-04 and a flat bar on 07-07.
 fn run(side: Side, rules: LegRules, third: Ohlc, fourth: Ohlc) -> (RunOutput, Vec<Gtt>) {
+    run_with(side, rules, (third, fourth), Vec::new())
+}
+
+/// `run` with the strategy's `later` orders, each decided at its day's close.
+fn run_with(
+    side: Side,
+    rules: LegRules,
+    (third, fourth): (Ohlc, Ohlc),
+    later: Vec<(Day, Act)>,
+) -> (RunOutput, Vec<Gtt>) {
     let instrument: InstrumentSpec = match side {
         Side::Buy => equity(),
         Side::Sell => future(),
@@ -84,7 +96,8 @@ fn run(side: Side, rules: LegRules, third: Ohlc, fourth: Ohlc) -> (RunOutput, Ve
     .iter()
     .map(|&(day, bar)| (july_2025(day), bar))
     .collect();
-    let acts = vec![(july_2025(1), Act::Submit(opening(side, rules)))];
+    let mut acts = vec![(july_2025(1), Act::Submit(opening(side, rules)))];
+    acts.extend(later);
     let (output, gtts, _) = run_daily_on(instrument, &bars, acts, |_| {});
     (output, gtts)
 }
@@ -402,5 +415,163 @@ fn after_a_first_target_the_stop_gtt_sells_the_units_left_in_one_order() {
             (50.0, 1100.0, "leg_target", None),
             (50.0, 950.0, "leg_sl", Some(gtts[0].id)),
         ]
+    );
+}
+
+// ---------------------------------------------------------------- the bar of a partial exit at the open
+
+/// Through both levels of the long from inside: the stop at 950.00 and the target at
+/// 1100.00.
+const BOTH_LEVELS: Ohlc = (1000.0, 1110.0, 940.0, 1000.0);
+
+/// The strategy sells 50 of the 100 shares at the close of 07-02; the sale fills at the
+/// 07-03 open of 1000.00.
+fn sell_half_on_the_second() -> Vec<(Day, Act)> {
+    let reduce = OrderRequest {
+        reduce_only: true,
+        ..order(Side::Sell, 50.0, OrderType::Market, Product::Cnc)
+    };
+    vec![(july_2025(2), Act::Submit(reduce))]
+}
+
+#[test]
+fn a_partial_exit_at_the_open_leaves_no_level_of_a_leg_with_a_stop_tested_in_that_bar() {
+    // The sale cancels g1 first (cancel-then-exit, GTT-9) and g2 holds the stop of the
+    // 50 left from the next base bar, so no stop is held in 07-03. Its targets are not
+    // tested alone there either: a bar through both levels would otherwise exit at the
+    // target, where the stop comes first for an MIS leg.
+    let (output, gtts) = run_with(
+        Side::Buy,
+        stop_and_target(),
+        (BOTH_LEVELS, FLAT),
+        sell_half_on_the_second(),
+    );
+    let sale = (
+        third_day(),
+        Step::OpenFills,
+        Side::Sell,
+        50.0,
+        1000.0,
+        FillAt::Open,
+        "signal",
+    );
+    assert_eq!(fills(&output)[1..], [sale]);
+    assert_eq!(
+        events_at(&output, third_day()),
+        [
+            "GttCanceled g1",
+            "Filled",
+            "PositionChanged",
+            "GttPlaced g2"
+        ]
+    );
+    assert_eq!(
+        (
+            gtts[1].status,
+            gtts[1].quantity_units,
+            gtts[1].trigger(GttLegRole::Stop)
+        ),
+        (GttStatus::Active, 50.0, Some(950.0))
+    );
+}
+
+#[test]
+fn a_leg_without_a_stop_has_its_target_tested_in_the_bar_of_a_partial_exit() {
+    // No stop, so no GTT: the target is the engine's alone, tested in every bar as an MIS
+    // leg's. 07-03 reaches 1110.00 and the target sells the 50 left at 1100.00.
+    let rules = LegRules {
+        target: Some(points(100.0)),
+        ..LegRules::default()
+    };
+    let (output, gtts) = run_with(
+        Side::Buy,
+        rules,
+        (BOTH_LEVELS, FLAT),
+        sell_half_on_the_second(),
+    );
+    assert!(gtts.is_empty(), "{gtts:?}");
+    let target = (
+        third_day(),
+        Step::Levels,
+        Side::Sell,
+        50.0,
+        1100.0,
+        FillAt::Level,
+        "leg_target",
+    );
+    assert_eq!(fills(&output)[2..], [target]);
+}
+
+// ---------------------------------------------------------------- breakeven after the first target
+
+/// `stop_and_two_targets` with `after_first_target="breakeven"`.
+fn two_targets_then_breakeven() -> LegRules {
+    LegRules {
+        after_first_target: AfterFirstTarget::Breakeven,
+        ..stop_and_two_targets()
+    }
+}
+
+/// 07-03 reaches the first target; 07-04 opens at 1080.00 and falls to 990.00.
+fn breakeven_run() -> (RunOutput, Vec<Gtt>) {
+    run(
+        Side::Buy,
+        two_targets_then_breakeven(),
+        (1020.0, 1105.0, 1015.0, 1090.0),
+        (1080.0, 1085.0, 990.0, 995.0),
+    )
+}
+
+#[test]
+fn breakeven_after_the_first_target_moves_the_stop_gtt_to_the_entry_for_the_units_left() {
+    // The first target sells 50 at 1100.00 and moves the stop to the entry price 1000.00;
+    // step 4 modifies g1 once, for both its quantity and its trigger.
+    let (output, gtts) = breakeven_run();
+    assert_eq!(
+        events_at(&output, third_day()),
+        [
+            "leg_target_hit",
+            "PositionChanged",
+            "leg_breakeven_armed",
+            "GttModified g1"
+        ]
+    );
+    assert_eq!(gtts.len(), 1, "{gtts:?}");
+    assert_eq!(
+        (gtts[0].quantity_units, gtts[0].trigger(GttLegRole::Stop)),
+        (50.0, Some(1000.0))
+    );
+    // The child sells 1 percent below the moved trigger: 1000.00 x 0.99 = 990.00.
+    assert_eq!(gtts[0].leg.child_limit_rupees, 990.0);
+}
+
+#[test]
+fn after_breakeven_the_stop_gtt_sells_the_units_left_at_the_entry() {
+    // 07-04 falls through the moved trigger 1000.00: g1 fires inside the bar and sells
+    // the 50 left at 1000.00.
+    let (output, gtts) = breakeven_run();
+    let fourth_day = day_open(july_2025(4));
+    assert_eq!(
+        events_at(&output, fourth_day),
+        [
+            "GttTriggered g1",
+            "leg_sl_hit",
+            "GttChildFilled g1",
+            "PositionClosed"
+        ]
+    );
+    let exit = (
+        fourth_day,
+        Step::Levels,
+        Side::Sell,
+        50.0,
+        1000.0,
+        FillAt::Level,
+        "leg_sl",
+    );
+    assert_eq!(fills(&output)[2..], [exit]);
+    assert_eq!(
+        (output.fills[2].fill.gtt, gtts[0].status),
+        (Some(gtts[0].id), GttStatus::ChildFilled)
     );
 }
