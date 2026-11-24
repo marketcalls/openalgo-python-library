@@ -33,7 +33,8 @@ from gtt_samples import (
 )
 from worker_samples import STRATEGY
 
-from openalgo.backtest._live._gtt_follow import CHILD_SEARCH_S, GTT_BOOK_EVERY_S
+from openalgo.backtest._live._gtt_child import CHILD_SEARCH_S
+from openalgo.backtest._live._gtt_follow import GTT_BOOK_EVERY_S
 from openalgo.backtest._live._gtt_types import (
     PRICE_UNVERIFIED,
     BindGttChild,
@@ -699,6 +700,30 @@ def test_a_gone_gtt_whose_leg_an_own_order_still_works_on_is_a_mismatch_after_th
 
     assert (events(searched), events(waited)) == ([GttEvent.IN_FLIGHT], [GttEvent.MISMATCH])
     assert "not settled" in outcomes(waited)[-1].message
+    rig.worker.close()
+
+
+def test_a_gone_gtt_waits_for_an_own_fill_that_comes_during_the_wait_to_settle(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    rig.run(rig.own_exit(5, price_type="LIMIT", price=900.0))
+    exit_order = fake.orders()[-1].order_id
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    rig.send(ReadGtts())
+    until_settled(rig)
+    rig.step_for(POSITION_BOOK_LAG_S - 10.0, every_s=2.0)
+    # 80 s after the GTT went, the session's exit fills: the leg settles 30 s later.
+    fake.fill(exit_order)
+
+    waited = rig.step_for(POSITION_BOOK_LAG_S - 4.0, every_s=2.0)
+    settled = rig.step_for(8.0, every_s=2.0)
+
+    # 10 units less the exit's 5 against the 5 the books show: unchanged, ended outside
+    # the session, never a MISMATCH 90 s after it went while the fill settles.
+    assert (events(waited), events(settled)) == ([], [GttEvent.ENDED_OUTSIDE])
+    with rig.journal() as journal:
+        assert journal.gtt(seq).baseline_units == 5
     rig.worker.close()
 
 

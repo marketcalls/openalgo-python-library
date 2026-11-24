@@ -155,6 +155,13 @@ class GttRig(WorkerRig):
             seq=seq,
         )
 
+    def own_entry(self, units: int = UNITS, product: str = "CNC") -> PlaceRequest:
+        """The session's own entry of the leg, as the venue map sends a strategy's entry:
+        buy `units` SBIN in `product` at the market."""
+        request = self.place(Purpose.ENTRY, action="BUY", quantity=units)
+        intent = dataclasses.replace(request.intent, product=product)
+        return dataclasses.replace(request, intent=intent)
+
     def own_exit(
         self, units: int, product: str = "CNC", *, price_type: str = "MARKET", price: float = 0.0
     ) -> PlaceRequest:

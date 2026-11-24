@@ -288,7 +288,8 @@ class GttSender:
     def _book_check(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         """Read the order book before deciding (an order book not read is read again): a
         cancelled GTT absent or ended (CHILD_CHECK) is confirmed only when no child of it is
-        in the book (3.1), nor its leg's units moved by its units (`child_verdict`); an
+        in the book (3.1), nor its leg's units moved by its units, units read while the
+        session's own fills on the leg had not settled waited for (`child_verdict`); an
         unanswered place (FIRED_CHECK) is placed again only when no order of its child's
         shape was placed since it was sent (`again_verdict`)."""
         rows = self._reader.order_rows()
@@ -303,8 +304,8 @@ class GttSender:
             return
         since = self._follower.last_active(pending.seq)
         found = child_candidates(gtt, rows, since_ns=since, taken=taken)
-        fired = self._follower.fired_by_units(gtt, read)
-        self._act(pending, child_verdict(pending, verdict.seen, found, fired), read)
+        sign = self._follower.units_sign(gtt, read)
+        self._act(pending, child_verdict(pending, verdict.seen, found, sign, read), read)
 
     def _finish(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         """Answer `pending` as `verdict` says: noted in the journal, answered, then the GTT

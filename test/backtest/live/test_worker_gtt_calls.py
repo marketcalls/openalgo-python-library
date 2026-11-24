@@ -31,7 +31,8 @@ from gtt_samples import (
 )
 from worker_samples import STRATEGY
 
-from openalgo.backtest._live._gtt_follow import CHILD_SEARCH_S
+from openalgo.backtest._live._gtt_child import CHILD_SEARCH_S
+from openalgo.backtest._live._gtt_reads import UNITS_WAIT_S
 from openalgo.backtest._live._gtt_send import NOT_FOUND_NOTE, REPLACED_NOTE
 from openalgo.backtest._live._gtt_types import (
     Direction,
@@ -41,6 +42,7 @@ from openalgo.backtest._live._gtt_types import (
     GttEvent,
     ReadGtts,
 )
+from openalgo.backtest._live._own_fills import POSITION_BOOK_LAG_S
 from openalgo.backtest._live._types import Purpose
 from openalgo.backtest._live.inbox import NotSent, NotSentReason
 from openalgo.backtest._live.journal import GttState, GttTerms
@@ -222,6 +224,10 @@ DECIDED_AFTER_TIMEOUT_S = 32.0
 #: The same when the server has finished with it (a refused connection): misses count from
 #: 5 s after the answer (NOT_PLACED_AFTER_NS), so the reads 6 s and 8 s after it decide.
 DECIDED_AFTER_FINISHED_S = 8.0
+#: Seconds from an unanswered call's send in which the server may still be working on it
+#: (the order path's BROKER_WINDOW_NS): with a client timeout shorter than 150 s, a place
+#: is decided once they pass.
+BROKER_WINDOW_S = 150.0
 UNANSWERED_PLACES = pytest.mark.parametrize(
     ("fault", "decided_after_s"),
     [
@@ -381,7 +387,7 @@ def test_an_unanswered_place_that_landed_late_and_fired_is_not_placed_again(rig,
     assert len(broker.log.calls("placegttorder")) == 1
 
 
-def test_an_unanswered_place_is_placed_again_after_an_exit_its_first_read_did_not_show(rig, broker):
+def test_an_unanswered_place_after_an_exit_its_first_read_did_not_show_is_unresolved(rig, broker):
     bought(broker)
     # The session's partial exit sells 5 while the position book lags it (16-session-design
     # F78); the stop for the 5 left is placed, and its connection is refused.
@@ -391,13 +397,64 @@ def test_an_unanswered_place_is_placed_again_after_an_exit_its_first_read_did_no
     first = answers(rig.send(rig.gtt(units=5)))
     broker.catch_up_positionbook()
 
-    news = answers(rig.step_for(DECIDED_AFTER_FINISHED_S, 2.0))
+    news = answers(rig.step_for(POSITION_BOOK_LAG_S + DECIDED_AFTER_FINISHED_S, 2.0))
 
-    # The leg fell by the place's 5 units since its first read, but by the session's own
-    # exit, which that read's position book did not show yet: nothing says it fired.
+    # The leg fell by the place's 5 units since its first read, the reference, which was
+    # read while the exit had not settled: a fall from such a reference may be the GTT
+    # landed and fired, so it is never placed again (20-positional-live 3.1).
     (answer,) = news
-    assert (first, answer.kind, answer.seq) == ([], GttAnswerKind.PLACED, 2)
-    assert len(broker.log.calls("placegttorder")) == 2
+    assert (first, answer.kind, answer.seq) == ([], GttAnswerKind.UNRESOLVED, None)
+    assert "the position fell by its units since" in answer.message
+    assert len(broker.log.calls("placegttorder")) == 1
+
+
+@SHAPES
+def test_an_unanswered_place_just_after_an_own_entry_that_landed_late_and_fired_is_not_placed_again(
+    rig, broker, history
+):
+    # The session's own entry buys 10 SBIN NRML; its stop is placed a second later with a
+    # client timeout of 10 s. The server places it a second after the client gave up, it
+    # fires at once, and the order book never lists its child: every read but the first
+    # is made after it fired, and the entry's fill had not settled at the first.
+    rig.run(rig.own_entry(UNITS, product="NRML"))
+    rig.step_for(1.0)
+    rig.orders._client.timeout = 10.0
+    broker.faults.late_landing("placegttorder", seconds=1.0)
+    news = rig.send(rig.gtt(product="NRML"))
+    broker.clock.advance(1.0)
+    broker.client().ping()
+    broker.trade("SBIN", "NSE", 789.0)
+    broker.hide_order(broker.orders()[-1].order_id, reads=1000)
+
+    news += rig.step_for(BROKER_WINDOW_S, every_s=2.0)
+
+    (answer,) = answers(news)
+    assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
+    sign = "of its shape has fired" if history else "the position fell by its units since"
+    assert sign in answer.message
+    assert len(broker.log.calls("placegttorder")) == 1
+    assert [gtt.status for gtt in broker.gtts()] == ["triggered"]
+
+
+def test_an_unanswered_place_while_an_own_order_works_on_its_leg_is_unresolved_after_the_wait(
+    rig, broker
+):
+    bought(broker)
+    # The session's exit of 5 rests at a limit of 900.00, far above SBIN's 800.00: a fill
+    # of it could show in the position book before its word, so the leg never settles.
+    rig.run(rig.own_exit(5, price_type="LIMIT", price=900.0))
+    broker.faults.refuse_connection("placegttorder")
+
+    early = answers(rig.send(rig.gtt()))
+    early += answers(rig.step_for(DECIDED_AFTER_FINISHED_S + UNITS_WAIT_S - 2.0, 2.0))
+    later = answers(rig.step_for(2.0, every_s=2.0))
+
+    # Misses decide 8 s after the answer; the leg's units are waited for 90 s more, then
+    # it is never placed again on units that cannot be trusted.
+    kinds = [answer.kind for answer in early], [answer.kind for answer in later]
+    assert kinds == ([], [GttAnswerKind.UNRESOLVED])
+    assert "not settled" in later[0].message
+    assert len(broker.log.calls("placegttorder")) == 1
 
 
 def test_an_unanswered_place_is_placed_again_beside_a_row_of_another_symbol_it_cannot_read(
@@ -682,6 +739,67 @@ def test_a_cancel_after_the_position_book_caught_up_with_the_exit_is_cancelled(r
     (answer,) = answers(news)
     assert (answer.kind, outcomes(news)) == (GttAnswerKind.CANCELLED, [])
     assert broker.position("SBIN", "NSE") == 5
+
+
+@pytest.mark.parametrize(
+    ("hidden_reads", "sign"),
+    [(3, "may be its child"), (1000, "the position moved by its units")],
+    ids=["its child listed late", "its child never listed"],
+)
+@SHAPES
+def test_a_cancel_of_a_stop_that_fired_just_after_an_own_exit_is_refused(
+    rig, broker, history, hidden_reads, sign
+):
+    # Every fill is the session's own: its entry of 10, settled before a read gives the
+    # stop its baseline, then the partial exit (the stop modified to the 5 left, then the
+    # exit sells 5).
+    rig.run(rig.own_entry(UNITS))
+    seq = placed(rig)
+    rig.step_for(POSITION_BOOK_LAG_S, every_s=2.0)
+    rig.send(ReadGtts())
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    rig.run(rig.own_exit(5))
+    # 4 s later the stop fires and its child sells the 5 left; the order book lists the
+    # child late or never. The cancel is answered HTTP 502 and never reaches the broker.
+    rig.step_for(4.0)
+    broker.trade("SBIN", "NSE", 789.0)
+    broker.hide_order(broker.orders()[-1].order_id, reads=hidden_reads)
+    broker.faults.gateway_error("cancelgttorder", status=502)
+
+    news = rig.send(rig.gtt(GttAction.CANCEL, seq=seq))
+    news += rig.step_for(UNITS_WAIT_S, every_s=2.0)
+
+    # The leg fell by the stop's 5 while the exit had not settled: its units are waited
+    # for until the child shows, or the exit settles and they show the stop fired. A
+    # cancel answered CANCELLED would send a second exit beside the child.
+    (answer,) = answers(news)
+    assert answer.kind is GttAnswerKind.CANCEL_REFUSED
+    assert (sign if not history else "it fired") in answer.message
+    assert broker.position("SBIN", "NSE") == 0
+
+
+@pytest.mark.parametrize("history", [False], ids=["active only"])
+def test_a_cancel_of_a_fired_stop_while_an_own_order_works_on_its_leg_is_refused_after_the_wait(
+    rig, broker
+):
+    bought(broker)
+    seq = placed(rig)
+    # The session's exit of 5 rests at a limit of 900.00, far above SBIN's 800.00: the leg
+    # never settles. The stop fires and sells the 10; the order book never lists its child.
+    rig.run(rig.own_exit(5, price_type="LIMIT", price=900.0))
+    broker.trade("SBIN", "NSE", 789.0)
+    broker.hide_order(broker.orders()[-1].order_id, reads=1000)
+    broker.faults.gateway_error("cancelgttorder", status=502)
+
+    early = answers(rig.send(rig.gtt(GttAction.CANCEL, seq=seq)))
+    early += answers(rig.step_for(UNITS_WAIT_S - 2.0, every_s=2.0))
+    later = answers(rig.step_for(2.0, every_s=2.0))
+
+    # On a book of active GTTs only the stop is simply gone: the units are waited for
+    # 90 s, then the answer that sends no second exit.
+    kinds = [answer.kind for answer in early], [answer.kind for answer in later]
+    assert kinds == ([], [GttAnswerKind.CANCEL_REFUSED])
+    assert "not settled" in later[0].message
 
 
 # ----- refusals --------------------------------------------------------------------------------

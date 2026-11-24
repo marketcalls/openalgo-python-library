@@ -37,6 +37,11 @@ from ._order_book import CLOCK_SKEW_LIMIT_NS, book_time_ns
 from ._order_updates import units
 from ._reconcile_rules import adoption_price, leg_books
 
+#: Seconds between two order-book reads while a fired or gone GTT's child is looked for,
+#: and how long it is looked for before the leg's units decide (3.2 rule 4).
+CHILD_READ_EVERY_S = 2.0
+CHILD_SEARCH_S = 60.0
+
 
 @dataclass(frozen=True)
 class Candidates:
@@ -66,6 +71,20 @@ class Move(enum.Enum):
     UNCHANGED = "unchanged"
     #: Otherwise: the engine cannot tell.
     OTHER = "other"
+
+
+class UnitsSign(enum.Enum):
+    """What a leg's units in a read of the GTT book say of a GTT having fired, as the GTT
+    parts take them: units read while the session's own fills on the leg had not settled
+    (`_own_fills`) are never ignored, but waited for."""
+
+    #: Units read with the leg settled moved by the GTT's units on its side: it fired.
+    FIRED = "fired"
+    #: Units read while the leg had not settled, and the fire cannot be ruled out from
+    #: them: they are waited for.
+    UNSETTLED = "unsettled"
+    #: No sign of a fire, or the units or what they are judged against are not known.
+    NONE = "none"
 
 
 def child_candidates(
@@ -137,4 +156,13 @@ def _same_leg(gtt: GttBinding, row: Mapping[str, Any]) -> bool:
     )
 
 
-__all__ = ["Candidates", "Move", "child_candidates", "missed_price", "move_of"]
+__all__ = [
+    "CHILD_READ_EVERY_S",
+    "CHILD_SEARCH_S",
+    "Candidates",
+    "Move",
+    "UnitsSign",
+    "child_candidates",
+    "missed_price",
+    "move_of",
+]

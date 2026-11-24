@@ -1,6 +1,6 @@
 """The session's own fills on a leg as the GTT parts read them (`_live/_own_fills.py`;
-20-positional-live 3.3, 16-session-design 5.3 and F78): the units its orders filled, and
-whether the broker's books can be taken to show them yet.
+20-positional-live 3.3, 16-session-design 5.3 and F78): the units its orders filled,
+whether the broker's books can be taken to show them yet, and when the newest was heard.
 
 The leg is SBIN NSE CNC; the clock stands at 1 000 s. An order's word is built as the
 order path keeps it; expected values are worked by hand from each row.
@@ -108,3 +108,26 @@ def test_the_units_are_each_order_on_the_leg_by_its_latest_word_signed():
 )
 def test_the_own_fills_are_settled_only_once_the_books_can_show_them(orders, unbound, settled):
     assert own_fills(orders, *unbound).settled(LEG) is settled
+
+
+def test_the_newest_own_fill_is_when_the_last_word_with_fills_on_the_leg_was_heard():
+    orders = [
+        (intent(number=1), word(filled=5, heard_s_ago=50.0)),
+        (intent(number=2), word(filled=2, heard_s_ago=20.0)),
+        (intent(number=3), word(OrderStatus.REJECTED, filled=0, heard_s_ago=1.0)),
+        (intent(number=4), None),
+        (intent(number=5, product="NRML"), word(filled=7, heard_s_ago=5.0)),
+    ]
+
+    # The fill heard 20 s ago; the rejection, the order with no word and the NRML leg's
+    # fill are not fills on the leg.
+    assert own_fills(orders).newest_fill_ns(LEG) == NOW_NS - 20 * NS
+
+
+@pytest.mark.parametrize(
+    "orders",
+    [[], [(intent(), word(OrderStatus.OPEN, filled=0))], [(intent(), None)]],
+    ids=["no own order", "an order working unfilled", "an order with no word yet"],
+)
+def test_a_leg_with_no_own_fill_has_no_newest_fill(orders):
+    assert own_fills(orders).newest_fill_ns(LEG) is None
