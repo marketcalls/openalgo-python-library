@@ -11,7 +11,7 @@ sandbox/gtt_manager.py), as the SDK returns them. Nothing leaves the process.
 from __future__ import annotations
 
 from fake_openalgo import BROKER
-from fake_openalgo.answers import BOOK_PATHS, broker_http_error
+from fake_openalgo.answers import BOOK_PATHS, EXPIRED_TOKEN, broker_http_error
 from fake_openalgo.fixtures import *  # noqa: F403
 
 from openalgo.backtest._live._types import Mode
@@ -97,6 +97,27 @@ def test_the_gtt_book_of_a_broker_with_gtt_orders_is_a_success(fake_openalgo):
 
 def test_the_gtt_book_of_a_broker_without_gtt_orders_is_the_servers_501(make_fake_openalgo):
     fake = make_fake_openalgo(gtt=False)
+
+    answer = fake.client().gttorderbook()
+
+    assert answer == {"status": "error", "message": NOT_SUPPORTED, "code": 501}
+
+
+def test_the_gtt_book_while_the_login_has_expired_is_the_brokers_403(fake_openalgo):
+    # The reference broker's get_gtt_book reads the broker's JSON refusal and passes its
+    # message and status on (broker/zerodha/api/gtt_api.py); the 501 is checked first.
+    fake_openalgo.faults.expire_session()
+
+    answer = fake_openalgo.client().gttorderbook()
+
+    assert answer == {"status": "error", "message": EXPIRED_TOKEN, "code": 403}
+
+
+def test_the_gtt_book_of_a_broker_without_gtt_orders_is_501_whatever_its_login(
+    make_fake_openalgo,
+):
+    fake = make_fake_openalgo(gtt=False)
+    fake.faults.expire_session()
 
     answer = fake.client().gttorderbook()
 

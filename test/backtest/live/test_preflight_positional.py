@@ -16,8 +16,6 @@ import datetime as dt
 import pytest
 from fake_openalgo.fixtures import *  # noqa: F403
 
-import openalgo.backtest as bt
-from openalgo.backtest._futures_margin import parse_margin
 from openalgo.backtest._live._journal_carry import DayClose, KeptRefusal
 from openalgo.backtest._live._preflight_carry import (
     CarriedPosition,
@@ -118,6 +116,46 @@ def test_any_other_answer_refuses_the_start_with_the_servers_message(fake_openal
     )
 
 
+def test_a_gateways_page_is_quoted_with_its_http_status_once(fake_openalgo):
+    fake_openalgo.faults.bad_gateway_page("gttorderbook")
+
+    check = gtt_check(fake_openalgo.client(), mode=Mode.LIVE, broker=BROKER, positional_stops="gtt")
+
+    assert not check.ok
+    assert check.message.startswith(
+        "the start cannot tell whether zerodha holds GTT orders: OpenAlgo's GTT book answered "
+        "HTTP 502: <html>"
+    )
+
+
+def test_an_expired_brokers_login_refuses_the_start_with_the_brokers_words(fake_openalgo):
+    fake_openalgo.faults.expire_session()
+
+    check = gtt_check(fake_openalgo.client(), mode=Mode.LIVE, broker=BROKER, positional_stops="gtt")
+
+    assert not check.ok
+    assert check.message.startswith(
+        "the start cannot tell whether zerodha holds GTT orders: OpenAlgo's GTT book answered "
+        "HTTP 403: Incorrect `api_key` or `access_token`."
+    )
+
+
+@pytest.mark.parametrize("stops", ["gtt", "rearm_daily"])
+def test_a_live_session_whose_gtt_book_the_sandbox_answered_is_refused(make_fake_openalgo, stops):
+    # The analyzer switch was turned on after the session read the mode: the sandbox
+    # answers every GTT call, which says nothing of the live broker.
+    fake = make_fake_openalgo(analyzer=True, gtt=False)
+
+    check = gtt_check(fake.client(), mode=Mode.LIVE, broker=BROKER, positional_stops=stops)
+
+    assert not check.ok
+    assert check.message == (
+        "OpenAlgo answered the GTT book in SANDBOX mode, but the session runs in LIVE mode: "
+        "its analyzer switch changed after the session read it. Set the switch in OpenAlgo to "
+        "the mode you want, then start the session again"
+    )
+
+
 @pytest.mark.parametrize("stops", ["gtt", "rearm_daily"])
 def test_a_sandbox_session_asks_nothing_and_says_when_the_live_broker_is_checked(
     make_fake_openalgo, stops
@@ -167,7 +205,8 @@ def test_a_day_close_record_of_a_later_day_is_refused():
 
 def a_record(strategy, positions, *, mode=Mode.SANDBOX, instrument=("SBIN", "NSE")):
     """A day-close record of 2026-11-23 whose carried state holds `positions`, each (product,
-    signed units, average price, multiplier) of `instrument`."""
+    signed units, the rupees of margin its engine blocked) of `instrument`, as the kernel's
+    saved state writes a position (rust/oa_bt/src/engine/venue_state/book.rs)."""
     carried = {
         "instruments": [{"symbol": instrument[0], "exchange": instrument[1]}],
         "positions": [
@@ -175,20 +214,21 @@ def a_record(strategy, positions, *, mode=Mode.SANDBOX, instrument=("SBIN", "NSE
                 "instrument": 0,
                 "product": product,
                 "quantity_units": units,
-                "average_price_rupees": price,
-                "multiplier": multiplier,
+                "average_price_rupees": 800.0,
+                "multiplier": 1.0,
+                "margin_rupees": margin,
             }
-            for product, units, price, multiplier in positions
+            for product, units, margin in positions
         ],
     }
     return DayClose(strategy, dt.date(2026, 11, 23), mode, carried, {}, "0a1b2c3d4e5f", 0)
 
 
 def test_the_open_positions_of_a_carried_state_are_read_flat_ones_left_out():
-    record = a_record("hold", [("CNC", 40.0, 800.0, 1.0), ("MIS", 0.0, 0.0, 1.0)])
+    record = a_record("hold", [("CNC", 40.0, 32_000.0), ("MIS", 0.0, 0.0)])
 
     assert carried_positions(record) == (
-        CarriedPosition("hold", "SBIN", "NSE", "CNC", 40.0, 800.0, 1.0),
+        CarriedPosition("hold", "SBIN", "NSE", "CNC", 40.0, 32_000.0),
     )
 
 
@@ -206,10 +246,10 @@ def test_a_carried_state_that_cannot_be_read_is_refused_naming_its_strategy():
 
 def test_the_other_ledgers_carried_positions_are_named_for_the_banner():
     records = {
-        "hold": a_record("hold", [("CNC", 40.0, 800.0, 1.0)]),
-        "flat": a_record("flat", [("CNC", 0.0, 0.0, 1.0)]),
+        "hold": a_record("hold", [("CNC", 40.0, 32_000.0)]),
+        "flat": a_record("flat", [("CNC", 0.0, 0.0)]),
         "swing": a_record(
-            "swing", [("NRML", -130.0, 24000.0, 1.0)], instrument=("NIFTY29DEC26FUT", "NFO")
+            "swing", [("NRML", -130.0, 624_000.0)], instrument=("NIFTY29DEC26FUT", "NFO")
         ),
     }
 
@@ -219,9 +259,23 @@ def test_the_other_ledgers_carried_positions_are_named_for_the_banner():
     ]
 
 
+@pytest.mark.parametrize(
+    ("units", "shown"),
+    [(1_000_000.0, "10,00,000"), (1_234_567.0, "12,34,567"), (-2_500_000.0, "-25,00,000")],
+    ids=["a million", "above a million", "a short of millions"],
+)
+def test_carried_units_above_a_million_are_named_whole(units, shown):
+    records = {"hold": a_record("hold", [("CNC", units, 0.0)], instrument=("YESBANK", "NSE"))}
+
+    assert other_ledger_lines(records, Mode.LIVE) == [
+        f"hold: {shown} YESBANK NSE (CNC) held in sandbox, not continued in live"
+    ]
+
+
 # ----- (d) the funds check on a carry ---------------------------------------------------------
 
-SBIN_CNC = CarriedPosition("hold", "SBIN", "NSE", "CNC", 40.0, 800.0, 1.0)
+#: 40 SBIN bought at 800.00: delivery blocks the whole cost, 32,000.00.
+SBIN_CNC = CarriedPosition("hold", "SBIN", "NSE", "CNC", 40.0, 32_000.0)
 NIFTY_FUTURE = Instrument(
     symbol="NIFTY29DEC26FUT",
     exchange="NFO",
@@ -242,45 +296,37 @@ NIFTY_CALL = Instrument(
     option_type="CE",
     underlying="NIFTY",
 )
-#: Two lots of the future sold at 24,000.00: a contract value of 130 x 24,000 = 31,20,000.
-SHORT_FUTURE = CarriedPosition("swing", NIFTY_FUTURE.symbol, "NFO", "NRML", -130.0, 24000.0, 1.0)
-BOUGHT_CALL = CarriedPosition("calls", NIFTY_CALL.symbol, "NFO", "NRML", 75.0, 120.0, 1.0)
+#: Two lots of the future sold at 24,000.00: the engine blocked 20 percent of the contract
+#: value of 130 x 24,000 = 31,20,000 when it entered, 6,24,000.00.
+SHORT_FUTURE = CarriedPosition("swing", NIFTY_FUTURE.symbol, "NFO", "NRML", -130.0, 624_000.0)
 
 
 @pytest.mark.parametrize(
-    ("position", "instrument", "margin", "rupees"),
+    ("product", "units", "margin", "instrument"),
     [
-        # 40 x 800.00 paid.
-        (SBIN_CNC, Instrument.cash_equity("SBIN"), None, 32_000.0),
-        # 20 percent of 31,20,000 by default.
-        (SHORT_FUTURE, NIFTY_FUTURE, None, 624_000.0),
-        # 12 percent of 31,20,000.
-        (SHORT_FUTURE, NIFTY_FUTURE, parse_margin(bt.pct(12)), 374_400.0),
-        # 1,50,000 a lot for 2 lots.
-        (SHORT_FUTURE, NIFTY_FUTURE, parse_margin({"NIFTY": bt.rupees(150_000)}), 300_000.0),
-        # A margin set for another underlying leaves the default.
-        (SHORT_FUTURE, NIFTY_FUTURE, parse_margin({"CRUDEOIL": bt.pct(30)}), 624_000.0),
-        # The premium paid, 75 x 120.00.
-        (BOUGHT_CALL, NIFTY_CALL, None, 9_000.0),
+        ("CNC", 40.0, 32_000.0, Instrument.cash_equity("SBIN")),
+        ("NRML", -130.0, 624_000.0, NIFTY_FUTURE),
+        # A future carried after a part exit: the engine cut its margin with its units.
+        ("NRML", -65.0, 312_000.0, NIFTY_FUTURE),
+        # A lot of the call bought at 120.00: the premium paid, 75 x 120.00.
+        ("NRML", 75.0, 9_000.0, NIFTY_CALL),
     ],
-    ids=[
-        "cnc cost",
-        "future default",
-        "future pct",
-        "future per lot",
-        "other underlying",
-        "option",
-    ],
+    ids=["cnc cost", "future margin", "future after a part exit", "option premium"],
 )
-def test_the_cash_a_carried_position_holds(position, instrument, margin, rupees):
-    assert held_rupees(position, instrument, margin, TODAY) == pytest.approx(rupees)
+def test_the_cash_a_carried_position_holds_is_the_margin_its_engine_blocked(
+    product, units, margin, instrument
+):
+    record = a_record("held", [(product, units, margin)], instrument=(instrument.symbol, "NFO"))
+    (position,) = carried_positions(record)
+
+    assert held_rupees(position, instrument) == margin
 
 
 def test_a_sold_option_carried_is_refused():
-    sold = CarriedPosition("calls", NIFTY_CALL.symbol, "NFO", "NRML", -75.0, 120.0, 1.0)
+    sold = CarriedPosition("calls", NIFTY_CALL.symbol, "NFO", "NRML", -75.0, 0.0)
 
-    with pytest.raises(LiveError, match="a sold option: sold options are not held overnight"):
-        held_rupees(sold, NIFTY_CALL, None, TODAY)
+    with pytest.raises(LiveError, match="carries -75 NIFTY29DEC2624000CE, a sold option: sold"):
+        held_rupees(sold, NIFTY_CALL)
 
 
 def test_available_cash_covering_the_capital_less_what_is_carried_passes():
@@ -305,6 +351,17 @@ def test_available_cash_short_of_the_capital_less_what_is_carried_fails_with_the
         "than the capital of 10,00,000.00 rupees less the 6,56,000.00 rupees the carried "
         "positions hold (hold SBIN CNC 32,000.00, swing NIFTY29DEC26FUT NRML 6,24,000.00), "
         "3,44,000.00 rupees: lower capital, or add funds to the broker account"
+    )
+
+
+def test_no_available_cash_on_a_carry_says_a_broker_may_report_an_expired_login_so():
+    check = carry_funds_check(0.0, 100_000.0, [(SBIN_CNC, 32_000.0)], Mode.LIVE)
+
+    assert (check.ok, check.login) == (False, True)
+    assert check.message.endswith(
+        "68,000.00 rupees: lower capital, or add funds to the broker account. No cash at all is "
+        "also what some brokers report for an expired login: if the account holds funds, log in "
+        "to OpenAlgo again"
     )
 
 

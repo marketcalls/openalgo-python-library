@@ -10,16 +10,19 @@ from the journal's day-close records and kept refusals (`_journal_carry`):
   restored into this one (4.2 step 1).
 - **Funds on a carry** (`held_rupees`, `carry_funds_check`): a carried position has spent
   cash already, so the account's available cash is set against the capital less what the
-  carried positions hold: a CNC position its cost, a bought option its premium, a future
-  the margin of the engine's futures rule (20 percent of the contract value by default,
-  `_futures_margin`, or the strategy's own `margin=`) (4.2 step 3, review H7).
+  carried positions hold (4.2 step 3, review H7): the margin the engine blocked for each,
+  which its carried state keeps, so the check never works it out a second way. That is a
+  CNC position's cost and a bought option's premium (all of their value), a future's
+  margin by the engine's futures rule on its entry day (20 percent of the contract value
+  by default, `_futures_margin`), each cut with the units a part exit sold. The failure's
+  words are the preflight's own funds check's (`_preflight_server.funds_check`).
 - **Kept refusals** (`kept_refusal_checks`): a strategy whose stop GTT a broker refused for
   a reason no price explains is refused at every start with the broker's message until
   the user passes `positional_stops="rearm_daily"` or trades it in another product (3.5).
 
 A carried position is read from a day-close record's carried state, the kernel's saved
-state (its `instruments` and `positions`, rust/oa_bt/src/engine/venue_state). Amounts are
-rupees, quantities signed units, days IST dates.
+state (its `instruments` and `positions`, rust/oa_bt/src/engine/venue_state/book.rs).
+Amounts are rupees, quantities signed whole units, days IST dates.
 """
 
 from __future__ import annotations
@@ -28,36 +31,29 @@ import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from .._futures_margin import PERCENT, MarginSetting, default_percent, own_margin
 from ..calendar import Calendar
 from ..errors import LiveError
 from ..reference import Instrument
 from ..report._format import indian_digits
-from ._broker_units import CNC, NRML
 from ._journal_carry import DayClose, KeptRefusal
 from ._preflight_gtt import REARM_DAILY
 from ._preflight_plan import Check
+from ._preflight_server import funds_check
 from ._types import Mode
-
-#: The name of the funds check, as the preflight's own (`_preflight_server`).
-FUNDS_CHECK = "funds"
-#: Percent to fraction.
-_PERCENT = 100.0
 
 
 @dataclass(frozen=True)
 class CarriedPosition:
     """A position a strategy's day-close record carries: its instrument and product, its
-    signed `units`, its `average_price` in rupees and its contract `multiplier` (rupees per
-    rupee of price per unit)."""
+    signed `units`, and `margin_rupees`, the cash its engine blocked for it (module
+    docstring)."""
 
     strategy: str
     symbol: str
     exchange: str
     product: str
     units: float
-    average_price: float
-    multiplier: float
+    margin_rupees: float
 
 
 def carried_positions(record: DayClose) -> tuple[CarriedPosition, ...]:
@@ -80,8 +76,7 @@ def carried_positions(record: DayClose) -> tuple[CarriedPosition, ...]:
                     str(instrument["exchange"]),
                     str(position["product"]),
                     units,
-                    float(position["average_price_rupees"]),
-                    float(position["multiplier"]),
+                    float(position["margin_rupees"]),
                 )
             )
     except (KeyError, IndexError, TypeError, ValueError) as error:
@@ -120,40 +115,24 @@ def other_ledger_lines(records: Mapping[str, DayClose], mode: Mode) -> list[str]
     for record in records.values():
         for position in carried_positions(record):
             lines.append(
-                f"{position.strategy}: {position.units:g} {position.symbol} "
+                f"{position.strategy}: {_units(position)} {position.symbol} "
                 f"{position.exchange} ({position.product}) held in {record.mode.value}, not "
                 f"continued in {mode.value}"
             )
     return lines
 
 
-def held_rupees(
-    position: CarriedPosition, instrument: Instrument, margin: MarginSetting, day: dt.date
-) -> float:
-    """Rupees of the account's cash `position` holds (module docstring): a CNC position's
-    cost and a bought option's premium (units times average price times multiplier), a
-    future's margin by the strategy's `margin=` (`margin`, None for the default) or the
-    default percent of contract value on `day`; nothing for an MIS position, which no day
-    carries. `instrument` is the position's contract (its kind and lot size). Raises
-    LiveError for a sold option: none is carried overnight in this release (20-positional-
-    live 11.5), and its margin is the broker's."""
-    value = abs(position.units) * position.average_price * position.multiplier
+def held_rupees(position: CarriedPosition, instrument: Instrument) -> float:
+    """Rupees of the account's cash `position` holds: the margin its engine blocked
+    (module docstring). `instrument` is the position's contract. Raises LiveError for a
+    sold option: none is carried overnight in this release (20-positional-live 11.5), and
+    its margin is the broker's."""
     if instrument.kind == "option" and position.units < 0:
         raise LiveError(
-            f"{position.strategy} carries {position.units:g} {position.symbol}, a sold option: "
-            "sold options are not held overnight in this release. Close it in OpenAlgo"
+            f"{position.strategy} carries {_units(position)} {position.symbol}, a sold "
+            "option: sold options are not held overnight in this release. Close it in OpenAlgo"
         )
-    if position.product == CNC or (position.product == NRML and instrument.kind != "future"):
-        return value
-    if position.product != NRML:
-        return 0.0
-    rule = own_margin(margin, instrument)
-    if rule is None:
-        return value * default_percent(day) / _PERCENT
-    kind, amount = rule
-    if kind == PERCENT:
-        return value * amount / _PERCENT
-    return amount * abs(position.units) / instrument.lot_size
+    return position.margin_rupees
 
 
 def carry_funds_check(
@@ -165,7 +144,7 @@ def carry_funds_check(
     """The funds check of a session that carries positions (module docstring): the
     `available` cash against the `capital` (the strategies' together) less the rupees each
     carried position holds (`held`: each position with its `held_rupees`), what is left
-    never below 0. Its message says the figures; a failure names where to add funds."""
+    never below 0. Its message says the figures; a failure says where to add funds."""
     carried = sum(rupees for _, rupees in held)
     needed = max(capital - carried, 0.0)
     parts = ", ".join(
@@ -176,17 +155,7 @@ def carry_funds_check(
         f"the capital of {indian_digits(capital)} rupees less the {indian_digits(carried)} "
         f"rupees the carried positions hold ({parts}), {indian_digits(needed)} rupees"
     )
-    cash = indian_digits(available)
-    if available >= needed:
-        return Check(FUNDS_CHECK, True, f"{cash} rupees of available cash cover {figures}")
-    where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
-    return Check(
-        FUNDS_CHECK,
-        False,
-        f"OpenAlgo reports {cash} rupees of available cash (collateral not counted), less "
-        f"than {figures}: lower capital, or add funds to {where}",
-        login=available == 0 and mode is Mode.LIVE,
-    )
+    return funds_check(available, needed, figures, mode)
 
 
 def kept_refusal_checks(
@@ -208,6 +177,12 @@ def kept_refusal_checks(
     return checks
 
 
+def _units(position: CarriedPosition) -> str:
+    """A carried position's signed units, whole and grouped as Indian figures are
+    ("12,34,567")."""
+    return indian_digits(position.units, 0)
+
+
 def _refused(refusal: KeptRefusal) -> Check:
     leg = f"{refusal.exchange}:{refusal.symbol} ({refusal.product})"
     return Check(
@@ -220,7 +195,6 @@ def _refused(refusal: KeptRefusal) -> Check:
 
 
 __all__ = [
-    "FUNDS_CHECK",
     "CarriedPosition",
     "carried_positions",
     "carry_funds_check",

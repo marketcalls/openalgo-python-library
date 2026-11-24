@@ -3,14 +3,18 @@ decisions P2, P3 and P5; the lead's ruling N2-3 (a)), run for a session with a C
 strategy: whether the broker OpenAlgo is logged in to holds GTT orders, read from the server
 at every start, never from a list kept in the SDK (OpenAlgo adds GTT to more brokers).
 
-- **LIVE mode**: one `gttorderbook()` read, which only reads. Success means GTT orders are
-  supported. OpenAlgo's answer for a broker that ships no GTT module (HTTP 501, "GTT orders
+- **LIVE mode**: one `gttorderbook()` read, which only reads. An answer the sandbox gave
+  (`"mode": "analyze"`) says nothing of the broker: the analyzer switch changed after the
+  session read the mode, and the start is refused as the funds check refuses it
+  (`_preflight_answers.switch_changed`). Success means GTT orders are supported.
+  OpenAlgo's answer for a broker that ships no GTT module (HTTP 501, "GTT orders
   are not supported for broker '<name>' yet", services/gtt_orderbook_service.py) means they
   are not: the start is refused, naming the broker, with the two choices (trade MIS, or
   `positional_stops="rearm_daily"`) and, for the second, what it leaves unprotected
   (`REARM_DAILY_SENTENCE`); unless the run chose `rearm_daily` already, which holds each
   carried position's stop as a day order placed at each start. Any other answer refuses
-  the start: it cannot tell, and says so with the server's message.
+  the start: it cannot tell, and says so with the server's message
+  (`_preflight_answers.answer_reason`).
 - **SANDBOX mode**: no call. OpenAlgo answers every GTT call from the sandbox before it
   looks at the broker, so it would succeed for any broker; the check passes with the
   banner line `SANDBOX_GTT_LINE`.
@@ -25,9 +29,11 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from ..errors import ConfigError
+from ._answers import server_answer
 from ._guard_answers import SUCCESS
+from ._preflight_answers import answer_reason, switch_changed
 from ._preflight_plan import WARNING, Check
-from ._types import Mode
+from ._types import Mode, mode_of
 
 #: How a CNC or NRML position's stop is held overnight (20-positional-live 6): a GTT at the
 #: broker (the default), or a day stop placed again at each start.
@@ -49,8 +55,6 @@ REARM_DAILY_SENTENCE = (
     "Positions held overnight have no stop at the broker from the close until your next "
     "start; start bt.live before the open on every trading day you hold a position."
 )
-#: The most characters of a server's answer quoted in a message.
-_MAX_QUOTED_CHARS = 200
 
 
 class GttBookClient(Protocol):
@@ -76,17 +80,20 @@ def gtt_check(client: GttBookClient, *, mode: Mode, broker: str, positional_stop
     if mode is Mode.SANDBOX:
         return Check(GTT_CHECK, True, SANDBOX_GTT_LINE)
     answer = client.gttorderbook()
+    answered = mode_of(server_answer(answer))
+    if answered is not mode:
+        return Check(GTT_CHECK, False, switch_changed("the GTT book", answered, mode))
     rearm = positional_stops == REARM_DAILY
     if answer.get("status") == SUCCESS:
         return _supported(broker, rearm=rearm)
     if _not_supported(answer):
-        return _unsupported(broker, _reason(answer), rearm=rearm)
+        return _unsupported(broker, answer_reason(answer), rearm=rearm)
     return Check(
         GTT_CHECK,
         False,
         f"the start cannot tell whether {broker} holds GTT orders: OpenAlgo's GTT book "
-        f"answered {_reason(answer)}. A CNC or NRML position needs a GTT to keep its stop "
-        "at the broker overnight: check OpenAlgo and the broker's login, then start again",
+        f"answered {answer_reason(answer)}. A CNC or NRML position needs a GTT to keep its "
+        "stop at the broker overnight: check OpenAlgo and the broker's login, then start again",
     )
 
 
@@ -130,16 +137,6 @@ def _not_supported(answer: Mapping[str, Any]) -> bool:
     """Whether an answer is OpenAlgo's for a broker without GTT orders."""
     message = str(answer.get("message") or "")
     return answer.get("code") == NOT_SUPPORTED_STATUS or NOT_SUPPORTED_WORDS in message
-
-
-def _reason(answer: Mapping[str, Any]) -> str:
-    """What an error answer says: the server's message with its HTTP status when the SDK
-    gave one, quoted and clipped to `_MAX_QUOTED_CHARS`."""
-    message = str(answer.get("message") or "an error without a message")
-    if len(message) > _MAX_QUOTED_CHARS:
-        message = f"{message[:_MAX_QUOTED_CHARS]}..."
-    code = answer.get("code")
-    return f"HTTP {code}: {message}" if code else message
 
 
 __all__ = [

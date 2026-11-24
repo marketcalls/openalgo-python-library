@@ -8,7 +8,7 @@ candles the live bars are checked against (D27).
 
 The answers are read as the SDK returns them (openalgo/account.py, openalgo/data.py): the
 server's JSON on HTTP 200, else the SDK's own error, whose message "HTTP <code>: <body>"
-holds the server's answer (`server_answer` takes it back out). Funds do not prove the
+holds the server's answer, worded by `_preflight_answers`. Funds do not prove the
 broker's login: a broker whose login has expired may still answer them with success and
 no data, or with zeros (broker/*/api/funds.py on the server), and in SANDBOX mode they
 are the sandbox's own and never reach the broker. A quote does, in both modes: the
@@ -28,9 +28,9 @@ from .._layout import NANOS_PER_MINUTE, parse_interval
 from ..errors import ConfigError
 from ..reference.symbols import INDEX_EXCHANGES
 from ..report._format import indian_digits
-from ._answers import server_answer
 from ._guard_answers import SUCCESS
 from ._order_trades import UNSUPPORTED_BROKERS, UNVERIFIED_BROKERS
+from ._preflight_answers import answer_reason, quoted, switch_changed
 from ._preflight_expiry import expiry_checks
 from ._preflight_plan import WARNING, Check, InstrumentFacts, PreflightPlan, positive_amount
 from ._types import Mode, mode_of
@@ -39,9 +39,8 @@ from .bars import DEFAULT_INTERVAL_NS
 #: The interval of the broker candles the live bars are checked against (D27), as
 #: OpenAlgo writes it: "1m".
 CANDLE_INTERVAL = f"{DEFAULT_INTERVAL_NS // NANOS_PER_MINUTE}m"
-#: The most characters of an answer quoted in a message: a gateway's error page in front
-#: of OpenAlgo can run to kilobytes of HTML.
-_MAX_QUOTED_CHARS = 200
+#: The name of the funds check.
+FUNDS_CHECK = "funds"
 
 
 class PreflightClient(Protocol):
@@ -99,7 +98,8 @@ def read_server(client: PreflightClient, plan: PreflightPlan) -> ServerFindings:
         capital = positive_amount(plan.capital)
         # Without a usable capital there is nothing to compare: its own check fails.
         if capital is not None:
-            checks.append(_funds_check(available, capital, plan.mode))
+            needed = f"the capital of {indian_digits(capital)} rupees"
+            checks.append(funds_check(available, capital, needed, plan.mode))
     found = [_symbol_check(client, symbol, exchange) for symbol, exchange in plan.instruments]
     checks += [check for check, _ in found]
     facts = tuple(facts for _, facts in found if facts is not None)
@@ -127,9 +127,9 @@ _KEY_REFUSED_STATUS = 403
 
 def _ping_failed(ping: Mapping[str, Any]) -> Check:
     if ping.get("status") == SUCCESS:
-        reason = f"it answered without naming the broker: {_quoted(ping)}"
+        reason = f"it answered without naming the broker: {quoted(ping)}"
     else:
-        reason = _reason(ping)
+        reason = answer_reason(ping)
     return Check(
         "broker_session",
         False,
@@ -150,9 +150,9 @@ def _session_check(broker: str, funds: Mapping[str, Any], available: float | Non
     if available is not None:
         return Check("broker_session", True, f"OpenAlgo is logged in to {broker}; funds answered")
     if funds.get("status") == SUCCESS:
-        reason = f"it answered without the available cash: {_quoted(funds)}"
+        reason = f"it answered without the available cash: {quoted(funds)}"
     else:
-        reason = _reason(funds)
+        reason = answer_reason(funds)
     return Check(
         "broker_session",
         False,
@@ -188,23 +188,16 @@ def _mode_check(funds: Mapping[str, Any], mode: Mode) -> Check:
     answered = mode_of(funds)
     if answered is mode:
         return Check("mode", True, f"OpenAlgo answered in {mode.name} mode, the session's")
-    return Check(
-        "mode",
-        False,
-        f"OpenAlgo answered funds in {answered.name} mode, but the session runs in "
-        f"{mode.name} mode: its analyzer switch changed after the session read it. Set the "
-        "switch in OpenAlgo to the mode you want, then start the session again",
-    )
+    return Check("mode", False, switch_changed("funds", answered, mode))
 
 
-def _funds_check(available: float, capital: float, mode: Mode) -> Check:
-    cash, needed = indian_digits(available), indian_digits(capital)
-    if available >= capital:
-        return Check(
-            "funds",
-            True,
-            f"{cash} rupees of available cash cover the capital of {needed} rupees",
-        )
+def funds_check(available: float, needed: float, needed_words: str, mode: Mode) -> Check:
+    """The funds check of a session in `mode`: OpenAlgo's `available` cash against the
+    `needed` rupees, which `needed_words` names ("the capital of 1,00,000.00 rupees"). A
+    failure says where to add funds, and that no cash at all may be an expired login."""
+    cash = indian_digits(available)
+    if available >= needed:
+        return Check(FUNDS_CHECK, True, f"{cash} rupees of available cash cover {needed_words}")
     where = "the sandbox's funds in OpenAlgo" if mode is Mode.SANDBOX else "the broker account"
     # Some brokers answer an expired login with zeros instead of an error.
     expired = (
@@ -214,11 +207,10 @@ def _funds_check(available: float, capital: float, mode: Mode) -> Check:
         else ""
     )
     return Check(
-        "funds",
+        FUNDS_CHECK,
         False,
-        f"OpenAlgo reports {cash} rupees of available cash (collateral not "
-        f"counted), less than the capital of {needed} rupees: lower capital, or add "
-        f"funds to {where}{expired}",
+        f"OpenAlgo reports {cash} rupees of available cash (collateral not counted), less "
+        f"than {needed_words}: lower capital, or add funds to {where}{expired}",
         # The sandbox's funds never reach the broker: only a broker's zero hints at it.
         login=available == 0 and mode is Mode.LIVE,
     )
@@ -238,7 +230,7 @@ def _symbol_check(
     answer = client.symbol(symbol=symbol, exchange=exchange)
     data = answer.get("data") if answer.get("status") == SUCCESS else None
     if not isinstance(data, Mapping):
-        reason = _reason(answer) if answer.get("status") != SUCCESS else _quoted(answer)
+        reason = answer_reason(answer) if answer.get("status") != SUCCESS else quoted(answer)
         return Check(
             name,
             False,
@@ -299,9 +291,9 @@ def _quotes_check(client: PreflightClient, facts: InstrumentFacts) -> Check:
     if ltp is not None and ltp > 0:
         return Check("broker_quotes", True, f"the broker quoted {instrument} at {ltp} rupees")
     if answer.get("status") != SUCCESS:
-        reason = _reason(answer)
+        reason = answer_reason(answer)
     else:
-        reason = f"it answered without a positive price: {_quoted(answer)}"
+        reason = f"it answered without a positive price: {quoted(answer)}"
     return Check(
         "broker_quotes",
         False,
@@ -325,7 +317,7 @@ def _interval_check(answer: Mapping[str, Any], intervals: tuple[Any, ...]) -> Ch
         return Check("interval", False, "; ".join(wrong))
     data = answer.get("data") if answer.get("status") == SUCCESS else None
     if not isinstance(data, Mapping):
-        reason = _reason(answer) if answer.get("status") != SUCCESS else _quoted(answer)
+        reason = answer_reason(answer) if answer.get("status") != SUCCESS else quoted(answer)
         return Check(
             "interval",
             False,
@@ -372,22 +364,11 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _reason(answer: Mapping[str, Any]) -> str:
-    """What an error answer says: the server's own message and HTTP status where the SDK
-    wrapped them as "HTTP <code>: <body>", else the SDK's message."""
-    own = server_answer(answer)
-    message = own.get("message")
-    text = _clip(str(message)) if message else "an error without a message"
-    # `server_answer` gives a new answer only when it took the SDK's wrapper apart.
-    return f"HTTP {own['code']}: {text}" if own is not answer else text
-
-
-def _quoted(answer: Mapping[str, Any]) -> str:
-    return _clip(repr(dict(answer)))
-
-
-def _clip(text: str) -> str:
-    return text if len(text) <= _MAX_QUOTED_CHARS else f"{text[:_MAX_QUOTED_CHARS]}..."
-
-
-__all__ = ["CANDLE_INTERVAL", "PreflightClient", "ServerFindings", "read_server"]
+__all__ = [
+    "CANDLE_INTERVAL",
+    "FUNDS_CHECK",
+    "PreflightClient",
+    "ServerFindings",
+    "funds_check",
+    "read_server",
+]

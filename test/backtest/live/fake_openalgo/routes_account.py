@@ -10,8 +10,10 @@ mode reads the sandbox's own
 books, whatever the broker's login. `ping` and `analyzer` ask OpenAlgo only, so they
 answer while the broker's login has expired (services/ping_service.py,
 services/analyzer_service.py). The GTT book of a broker that ships no GTT module is
-OpenAlgo's HTTP 501; the sandbox answers it for every broker
-(services/gtt_orderbook_service.py).
+OpenAlgo's HTTP 501, whatever the login; the sandbox answers it for every broker
+(services/gtt_orderbook_service.py). A broker's GTT book on an expired login is the
+broker's own refusal, passed on with its status (broker/zerodha/api/gtt_api.py,
+get_gtt_book).
 """
 
 from __future__ import annotations
@@ -20,7 +22,13 @@ from typing import Any
 
 from openalgo.backtest._live._types import Mode
 
-from .answers import BOOK_PATHS, GTT_BOOK_STATUSES, GTT_NOT_SUPPORTED, broker_http_error
+from .answers import (
+    BOOK_PATHS,
+    EXPIRED_TOKEN,
+    GTT_BOOK_STATUSES,
+    GTT_NOT_SUPPORTED,
+    broker_http_error,
+)
 from .rows import (
     funds_data,
     holdings_data,
@@ -107,7 +115,8 @@ def holdings(venue: Venue, payload: dict[str, Any]) -> Answer:
 def gttorderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
     """`gttorderbook` (restx_api/gtt_orderbook.py, services/gtt_orderbook_service.py): the
     GTTs the account holds, none in this fake, from the sandbox in analyzer mode and from
-    a broker that ships GTT orders; OpenAlgo's 501 from one that does not."""
+    a broker that ships GTT orders; OpenAlgo's 501 from one that does not, and the
+    broker's 403 refusal of an expired login (module docstring)."""
     status = payload.get("status", "active")
     if status not in GTT_BOOK_STATUSES:
         words = {"status": [f"Must be one of: {', '.join(GTT_BOOK_STATUSES)}."]}
@@ -116,6 +125,8 @@ def gttorderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
         return {"status": "success", "data": [], **_ANALYZE}, 200
     if not venue.gtt_supported:
         return {"status": "error", "message": GTT_NOT_SUPPORTED.format(broker=venue.broker)}, 501
+    if venue.session_expired:
+        return {"status": "error", "message": EXPIRED_TOKEN}, 403
     return {"status": "success", "data": []}, 200
 
 
