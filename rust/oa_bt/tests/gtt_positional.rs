@@ -2,8 +2,8 @@
 //! The GTT holding the stop of a CNC position (04-execution 4.4, design
 //! 20-positional-live P6 and the decisions GTT-1 to GTT-10): the one SINGLE GTT a
 //! position gets, how it fires, how it follows trails, adds and targets, cancel-then-exit,
-//! the engine's exit after an unfilled child, slippage on child fills and the 360-day
-//! renewal. The targets are the engine's, tested as an MIS leg's (`positional_targets`
+//! the engine's exit after an unfilled child, slippage on child fills and on a target's
+//! fill, and the 360-day renewal. The targets are the engine's, tested as an MIS leg's (`positional_targets`
 //! has the worked cases of the change).
 //!
 //! A daily strategy on daily bars from 2025-07-01, CNC, no charges. Every order is
@@ -405,6 +405,35 @@ fn a_child_filled_at_its_limit_after_a_gap_takes_no_slippage() {
     });
     let exit = output.fills[1].fill;
     assert_eq!((exit.price_rupees, exit.at), (1435.55, FillAt::Level));
+}
+
+#[test]
+fn a_target_fill_takes_the_whole_slippage_as_an_mis_target_does() {
+    // Two percent of slippage: bought at 1530.00, target 30 points at 1560.00, reached
+    // inside 07-03's range. The engine sells at the target less two percent, 1528.80,
+    // with no limit to hold it: the target is no GTT child (P6), so the child's buffer
+    // (a limit 1 percent beyond, 1544.40) does not apply.
+    let rules = LegRules {
+        target: Some(points(30.0)),
+        ..stop(50.0)
+    };
+    let bars = july(&[(3, (1540.0, 1565.0, 1535.0, 1550.0))]);
+    let (output, _, _) = run_daily(&bars, buy_on_the_first(rules), |config| {
+        config.slippage = SlippageSpec::PercentOfPrice {
+            percent: 2.0,
+            min_ticks: 0,
+        };
+    });
+    let exit = (
+        day_open(july_2025(3)),
+        Step::Levels,
+        Side::Sell,
+        10.0,
+        1528.8,
+        FillAt::Level,
+        "leg_target",
+    );
+    assert_eq!(fill_rows(&output)[1..], [exit]);
 }
 
 // ---------------------------------------------------------------- renewal (GTT-2)

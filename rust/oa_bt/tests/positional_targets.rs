@@ -418,6 +418,42 @@ fn after_a_first_target_the_stop_gtt_sells_the_units_left_in_one_order() {
     );
 }
 
+/// Stop 50 points and one target, 100 points (1100.00), for half the position.
+fn stop_and_a_target_for_half() -> LegRules {
+    LegRules {
+        stop: Some(points(50.0)),
+        targets: vec![TargetSpec {
+            distance: points(100.0),
+            fraction: 0.5,
+        }],
+        ..LegRules::default()
+    }
+}
+
+#[test]
+fn with_a_target_for_half_the_position_the_stop_gtt_sells_every_unit_in_one_order() {
+    // g1 holds the stop of all 100 shares, the target's half included. 07-03 falls to
+    // 940.00 through the stop and never reaches the target: g1 sells the 100 at 950.00,
+    // one exit fill.
+    let (output, gtts) = run(
+        Side::Buy,
+        stop_and_a_target_for_half(),
+        (1000.0, 1005.0, 940.0, 945.0),
+        FLAT,
+    );
+    assert_eq!(gtts.len(), 1, "{gtts:?}");
+    let row = (
+        third_day(),
+        Step::Levels,
+        Side::Sell,
+        LONG_UNITS,
+        950.0,
+        FillAt::Level,
+        "leg_sl",
+    );
+    assert_eq!(exit_of(&output), (row, None, Some(gtts[0].id)));
+}
+
 // ---------------------------------------------------------------- the bar of a partial exit at the open
 
 /// Through both levels of the long from inside: the stop at 950.00 and the target at
