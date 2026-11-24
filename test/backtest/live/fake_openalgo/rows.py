@@ -236,6 +236,46 @@ def funds_data(book: Book, markets: dict[tuple[str, str], MarketState]) -> dict[
     }
 
 
+def holdings_data(book: Book, markets: dict[tuple[str, str], MarketState]) -> dict[str, Any]:
+    """The `data` of a `holdings` answer: each holding with units as a row, then the
+    totals. A broker's rows are its `transform_holdings_data`'s (broker/zerodha/mapping/
+    order_data.py: pnl and its percent from the last price, product CNC) and its totals
+    `calculate_portfolio_statistics`'s, rounded to 2 decimals by services/
+    holdings_service.py; the sandbox's add the value (sandbox/holdings_manager.py,
+    get_holdings). The fake models no settlement, so the sandbox's settlement date is left
+    out."""
+    rows, value, invested, pnl_total = [], 0.0, 0.0, 0.0
+    for (symbol, exchange), (quantity, average) in book.holdings.items():
+        if not quantity:
+            continue
+        last = _last(markets, symbol, exchange) or 0.0
+        pnl = (last - average) * quantity
+        percent = round((last - average) / average * 100, 2) if average and last else 0.0
+        row = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "quantity": quantity,
+            "product": "CNC",
+            "average_price": float(average),
+            "ltp": float(last),
+            "pnl": _amount(pnl),
+            "pnlpercent": percent,
+        }
+        if book.mode is Mode.SANDBOX:
+            row["current_value"] = abs(quantity) * last
+        rows.append(row)
+        value += last * quantity
+        invested += average * quantity
+        pnl_total += pnl
+    statistics = {
+        "totalholdingvalue": _amount(value),
+        "totalinvvalue": _amount(invested),
+        "totalprofitandloss": _amount(pnl_total),
+        "totalpnlpercentage": _amount(pnl_total / invested * 100) if invested else 0.0,
+    }
+    return {"holdings": rows, "statistics": statistics}
+
+
 def _last(markets: dict[tuple[str, str], MarketState], symbol: str, exchange: str) -> float | None:
     market = markets.get((symbol, exchange))
     return market.last_price if market is not None else None
@@ -243,6 +283,7 @@ def _last(markets: dict[tuple[str, str], MarketState], symbol: str, exchange: st
 
 __all__ = [
     "funds_data",
+    "holdings_data",
     "order_row",
     "order_statistics",
     "order_status_data",

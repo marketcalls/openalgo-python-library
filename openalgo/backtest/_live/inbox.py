@@ -217,7 +217,8 @@ class GuardLocked:
 @dataclass(frozen=True)
 class Books:
     """The answers of one reconciliation's reads, as the SDK returned them, numbered by
-    `generation`; the reads ran from `started_ns` to `ended_ns`."""
+    `generation`; the reads ran from `started_ns` to `ended_ns`. `holdings` is the
+    holdings' answer of a session with a CNC strategy (`_broker_units`), else None."""
 
     generation: int
     positionbook: Mapping[str, Any]
@@ -226,17 +227,20 @@ class Books:
     funds: Mapping[str, Any]
     started_ns: int
     ended_ns: int
+    holdings: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class PositionRows:
     """A position book read for a held cancel (4.11), as the SDK returned it, and when it
     was read; with the order book read after it when it was asked for
-    (`ReadPositions.orders`), else None."""
+    (`ReadPositions.orders`), else None, and the holdings of a session with a CNC
+    strategy, else None (`_broker_units`)."""
 
     positionbook: Mapping[str, Any]
     read_ns: int
     orderbook: Mapping[str, Any] | None = None
+    holdings: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

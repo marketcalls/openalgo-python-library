@@ -7,11 +7,14 @@ The gates as a session sets them are tested on the fake OpenAlgo
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from openalgo.backtest._live._groups import (
     LONG,
     SHORT,
+    Groups,
     InstrumentGroup,
     Stand,
     instrument_groups,
@@ -22,10 +25,10 @@ from openalgo.backtest._live._groups import (
 def test_each_instrument_has_a_group_of_its_strategies_in_call_order():
     groups = instrument_groups(
         [
-            ("SbinTrend", "SBIN", "NSE"),
-            ("InfyTrend", "INFY", "NSE"),
-            ("SbinBreakout", "SBIN", "NSE"),
-            ("SbinBse", "SBIN", "BSE"),
+            ("SbinTrend", "SBIN", "NSE", "MIS"),
+            ("InfyTrend", "INFY", "NSE", "MIS"),
+            ("SbinBreakout", "SBIN", "NSE", "MIS"),
+            ("SbinBse", "SBIN", "BSE", "MIS"),
         ]
     )
     assert groups == (
@@ -34,6 +37,46 @@ def test_each_instrument_has_a_group_of_its_strategies_in_call_order():
         InstrumentGroup("SBIN", "BSE", "MIS", ("SbinBse",)),
     )
     assert [group.shared for group in groups] == [True, False, False]
+
+
+def test_an_mis_and_a_cnc_strategy_on_one_symbol_are_two_groups():
+    groups = instrument_groups(
+        [
+            ("SbinDay", "SBIN", "NSE", "MIS"),
+            ("SbinHold", "SBIN", "NSE", "CNC"),
+            ("SbinScalp", "SBIN", "NSE", "MIS"),
+        ]
+    )
+    assert groups == (
+        InstrumentGroup("SBIN", "NSE", "MIS", ("SbinDay", "SbinScalp")),
+        InstrumentGroup("SBIN", "NSE", "CNC", ("SbinHold",)),
+    )
+
+
+def a_trader(name: str, product: str) -> SimpleNamespace:
+    return SimpleNamespace(name=name, symbol="SBIN", exchange="NSE", product=product)
+
+
+DAY, HOLD, SCALP = a_trader("SbinDay", "MIS"), a_trader("SbinHold", "CNC"), a_trader("Scalp", "MIS")
+SESSION_GROUPS = Groups((DAY, HOLD, SCALP), event=lambda *args, **fields: None)
+
+
+@pytest.mark.parametrize(
+    ("trader", "members", "shared"),
+    [(DAY, (DAY, SCALP), True), (HOLD, (HOLD,), False), (SCALP, (DAY, SCALP), True)],
+    ids=["mis", "cnc", "second mis"],
+)
+def test_a_strategys_group_is_its_instrument_in_its_product(trader, members, shared):
+    assert (SESSION_GROUPS.members(trader), SESSION_GROUPS.shared(trader)) == (members, shared)
+
+
+def test_the_market_data_of_a_symbol_goes_to_its_strategies_in_every_product():
+    assert SESSION_GROUPS.of("SBIN", "NSE") == (DAY, HOLD, SCALP)
+
+
+def test_each_group_names_its_own_members():
+    mis, cnc = SESSION_GROUPS.groups
+    assert (SESSION_GROUPS.of_group(mis), SESSION_GROUPS.of_group(cnc)) == ((DAY, SCALP), (HOLD,))
 
 
 @pytest.mark.parametrize(

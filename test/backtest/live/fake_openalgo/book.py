@@ -80,8 +80,10 @@ class OrderTerms:
 
 
 class Book:
-    """The orders, fills and positions of one mode. `cash` is the available cash the
-    book's funds report, rupees."""
+    """The orders, fills, positions and delivery holdings of one mode. `cash` is the
+    available cash the book's funds report, rupees; `holdings` the units held for delivery
+    and their average price in rupees, by (symbol, exchange), as a test sets them
+    (`FakeOpenAlgo.set_holding`)."""
 
     def __init__(self, mode: Mode, ids: Ids, cash: float) -> None:
         self.mode = mode
@@ -90,6 +92,7 @@ class Book:
         self.orders: dict[str, FakeOrder] = {}
         self.fills: list[Fill] = []
         self.positions = Positions()
+        self.holdings: dict[tuple[str, str], tuple[int, float]] = {}
 
     def place(
         self, terms: OrderTerms, now_ns: int, last_price: float | None, client: str = ""

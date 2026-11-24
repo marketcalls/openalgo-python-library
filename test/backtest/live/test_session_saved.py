@@ -76,10 +76,20 @@ def test_the_saved_position_stop_and_day_locks_are_read_back():
         "venue_map": [order_record(2, STOP)],
         "adopted": -6,
     }
-    saved = read_saved(json.loads(json.dumps(state)), "StopHold")
+    saved = read_saved(json.loads(json.dumps(state)), "StopHold", "MIS")
     assert (saved.units, saved.adopted, saved.sent) == (10, -6, {2: True})
     assert saved.stop == STOP
     assert saved.locks == {"reconciliation"}
+
+
+@pytest.mark.parametrize(("product", "units"), [("MIS", 10), ("CNC", 7)])
+def test_the_saved_position_is_the_one_in_the_strategys_product(product, units):
+    state = live_state(10.0, [])
+    state["positions"].append({"instrument": 0, "product": "CNC", "quantity_units": 7.0})
+
+    saved = read_saved({"live_state": state, "venue_map": []}, "StopHold", product)
+
+    assert (saved.product, saved.units) == (product, units)
 
 
 def test_only_the_locks_that_last_the_day_are_set_again():
@@ -88,9 +98,9 @@ def test_only_the_locks_that_last_the_day_are_set_again():
 
 
 def test_nothing_saved_reads_as_nothing():
-    assert read_saved(None, "StopHold") is None
+    assert read_saved(None, "StopHold", "MIS") is None
 
 
 def test_a_saved_state_that_cannot_be_read_refuses_the_restart_naming_the_strategy():
     with pytest.raises(LiveError, match="StopHold"):
-        read_saved({"live_state": live_state(10.0, []), "venue_map": "nothing"}, "StopHold")
+        read_saved({"live_state": live_state(10.0, []), "venue_map": "nothing"}, "StopHold", "MIS")

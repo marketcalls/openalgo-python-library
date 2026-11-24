@@ -56,7 +56,7 @@ class _Kernel:
 class _Leg:
     """A strategy holding 10 SBIN whose kernel's `protect` answers `outcome`."""
 
-    name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
+    name, symbol, exchange, product, finished = "StopHold", "SBIN", "NSE", "MIS", False
 
     def __init__(self, outcome: str) -> None:
         self.engine = _Kernel(outcome)

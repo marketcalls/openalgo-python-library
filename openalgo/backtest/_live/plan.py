@@ -63,6 +63,7 @@ from .._calendar_convert import interval_nanos
 from ..calendar import Calendar, default_calendar
 from ..strategy import Strategy
 from ._bars_candle import candle_bar
+from ._broker_units import CNC
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_engine import bind_strategy, check_grid, session_engine
@@ -93,6 +94,19 @@ class SessionSpec:
     def intervals(self) -> tuple[str, ...]:
         """Every strategy's bar interval, each once, in call order."""
         return tuple(dict.fromkeys(spec.interval for spec in self.strategies))
+
+    @property
+    def product(self) -> str:
+        """The product the strategies trade, as the preflight checks it (`product_check`):
+        their one product, or each named once in call order and joined with commas, which
+        the check refuses."""
+        return ", ".join(dict.fromkeys(spec.product for spec in self.strategies))
+
+    @property
+    def reads_holdings(self) -> bool:
+        """True when a strategy trades CNC: from the day after a buy its units are in the
+        holdings, so the order worker reads them with every book read (`_broker_units`)."""
+        return any(spec.product == CNC for spec in self.strategies)
 
     @property
     def capital(self) -> float:

@@ -128,6 +128,7 @@ class Rig:
             self.engine,
             strategy=STRATEGY,
             instruments=[SBIN],
+            product="MIS",
             session=journal_session(mode, starts),
             request_ids=itertools.count(1),
             alerts=self.alerts,

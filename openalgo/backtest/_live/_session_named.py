@@ -84,15 +84,16 @@ def named_legs(session: Any) -> NamedLegs:
     (`Reconciler.late_counted`). `session` is the `_session_loop.Session`."""
     reconcile = session.reconcile
     differs, unsure, counted = [], [], 0
-    groups: set[tuple[str, str]] = set()
+    groups: set[tuple[str, str, str]] = set()
     for trader in session.traders:
         late = reconcile.late(trader.name)
         seen = differing(reconcile, trader)
         group = _group_of(late, seen)
         if group is not None:
-            if (trader.symbol, trader.exchange) in groups:
+            key = (trader.symbol, trader.exchange, trader.product)
+            if key in groups:
                 continue
-            groups.add((trader.symbol, trader.exchange))
+            groups.add(key)
         if late is not None:
             words = late_summary if group is None else late_group_summary
             differs.append(words(trader, late))
@@ -205,9 +206,9 @@ def _shared(session: Any) -> Iterator[SharedPosition]:
     for group in groups.groups:
         if not group.shared:
             continue
-        members = groups.of(group.symbol, group.exchange)
+        members = groups.of_group(group)
         held = sum(round(member.open_units()) for member in members)
-        read = session.reconcile.group_read(group.symbol, group.exchange)
+        read = session.reconcile.group_read(group)
         where = (group.symbol, group.exchange, group.members)
         if read is None:
             yield SharedPosition(*where, None, held)

@@ -17,7 +17,7 @@ job.
 
 `TraderOrders` is a part of `_session_trader.Trader`, which holds the kernel session
 (`engine`) and the strategy's part of the plan (`part`, its run context among it), the
-venue map (`venue`), the strategy's name, whether the kernel session finished
+venue map (`venue`), the strategy's name and product, whether the kernel session finished
 (`finished`), the event stream's writer (`_event`), the session's warnings (`_warn`), and
 the risk exits' reasons and the position's units at each placement (`reasons`,
 `units_at_place`). Times are UTC nanoseconds, quantities units. Used by the loop only.
@@ -32,7 +32,7 @@ from .._engine import call
 from ..errors import LiveError
 from ._plan_catch_up import INSTRUMENT
 from ._session_unsent import to_send
-from ._venue_requests import LIVE_PRODUCT, OrderRequest
+from ._venue_requests import OrderRequest
 from ._worker_queue import WithdrawPlace
 from .venue_map import VenueMap
 
@@ -41,6 +41,9 @@ class TraderOrders:
     """The orders and the position of a `_session_trader.Trader` (module docstring)."""
 
     name: str
+    #: The product the strategy trades ("MIS", "CNC" or "NRML"): its kernel position's,
+    #: and its leg's at the broker (`_broker_units`).
+    product: str
     #: The strategy's kernel session (`_session_bookkeeping.Bookkeeping.engine`).
     engine: Any
     part: Any
@@ -85,8 +88,9 @@ class TraderOrders:
         return requests + self.venue.withdraw_locked()
 
     def open_units(self) -> float:
-        """The kernel's position in the strategy's instrument, signed units (0 flat)."""
-        position = call(self.engine.position, INSTRUMENT, LIVE_PRODUCT)
+        """The kernel's position in the strategy's instrument and product, signed units (0
+        flat)."""
+        position = call(self.engine.position, INSTRUMENT, self.product)
         return 0.0 if position is None else float(position["quantity_units"])
 
     def working(self) -> list[int]:
@@ -128,7 +132,7 @@ class TraderOrders:
         what it did (its EXIT_REQUESTS), or None once the kernel session finished."""
         if self.finished:
             return None
-        return str(call(self.engine.request_exit, INSTRUMENT, LIVE_PRODUCT, reason))
+        return str(call(self.engine.request_exit, INSTRUMENT, self.product, reason))
 
     def cancel(self, kernel_order: int) -> None:
         """Ask the kernel to cancel a working order (nothing once it finished)."""

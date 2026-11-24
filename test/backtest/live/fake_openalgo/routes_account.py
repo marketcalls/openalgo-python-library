@@ -1,6 +1,7 @@
-"""The account routes: `orderbook`, `tradebook`, `positionbook`, `funds`, `analyzer` (the
-SDK's `analyzerstatus`) and `ping`, each a function of the venue and the request's JSON
-that returns (body, HTTP status), run under the venue's lock.
+"""The account routes: `orderbook`, `tradebook`, `positionbook`, `holdings`, `funds`,
+`gttorderbook`, `analyzer` (the SDK's `analyzerstatus`) and `ping`, each a function of the
+venue and the request's JSON that returns (body, HTTP status), run under the venue's
+lock.
 
 Live mode reads the broker: an expired login fails the books with the HTTP client's error
 (HTTP 500, `_broker_failed`) and answers funds with success and no data (the broker's
@@ -8,7 +9,9 @@ margin call returns nothing, broker/zerodha/api/funds.py, `get_margin_data`). Sa
 mode reads the sandbox's own
 books, whatever the broker's login. `ping` and `analyzer` ask OpenAlgo only, so they
 answer while the broker's login has expired (services/ping_service.py,
-services/analyzer_service.py).
+services/analyzer_service.py). The GTT book of a broker that ships no GTT module is
+OpenAlgo's HTTP 501; the sandbox answers it for every broker
+(services/gtt_orderbook_service.py).
 """
 
 from __future__ import annotations
@@ -17,8 +20,15 @@ from typing import Any
 
 from openalgo.backtest._live._types import Mode
 
-from .answers import BOOK_PATHS, broker_http_error
-from .rows import funds_data, order_row, order_statistics, position_row, trade_row
+from .answers import BOOK_PATHS, GTT_BOOK_STATUSES, GTT_NOT_SUPPORTED, broker_http_error
+from .rows import (
+    funds_data,
+    holdings_data,
+    order_row,
+    order_statistics,
+    position_row,
+    trade_row,
+)
 from .venue import Venue
 
 Answer = tuple[dict[str, Any], int]
@@ -82,6 +92,33 @@ def positionbook(venue: Venue, payload: dict[str, Any]) -> Answer:
     return {**answer, **_ANALYZE}, 200
 
 
+def holdings(venue: Venue, payload: dict[str, Any]) -> Answer:
+    """`holdings` (services/holdings_service.py): the book's delivery holdings."""
+    del payload  # the API key only, checked before any route
+    book = venue.book
+    data = holdings_data(book, venue.markets)
+    if book.mode is Mode.SANDBOX:
+        return {"status": "success", "data": data, **_ANALYZE}, 200
+    if venue.session_expired:
+        return _broker_failed("holdings")
+    return {"status": "success", "data": data}, 200
+
+
+def gttorderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
+    """`gttorderbook` (restx_api/gtt_orderbook.py, services/gtt_orderbook_service.py): the
+    GTTs the account holds, none in this fake, from the sandbox in analyzer mode and from
+    a broker that ships GTT orders; OpenAlgo's 501 from one that does not."""
+    status = payload.get("status", "active")
+    if status not in GTT_BOOK_STATUSES:
+        words = {"status": [f"Must be one of: {', '.join(GTT_BOOK_STATUSES)}."]}
+        return {"status": "error", "message": words}, 400
+    if venue.mode is Mode.SANDBOX:
+        return {"status": "success", "data": [], **_ANALYZE}, 200
+    if not venue.gtt_supported:
+        return {"status": "error", "message": GTT_NOT_SUPPORTED.format(broker=venue.broker)}, 501
+    return {"status": "success", "data": []}, 200
+
+
 def funds(venue: Venue, payload: dict[str, Any]) -> Answer:
     """`funds` (services/funds_service.py)."""
     del payload  # the API key only, checked before any route
@@ -120,4 +157,13 @@ def _broker_failed(book: str) -> Answer:
     return {"status": "error", "message": broker_http_error(403, BOOK_PATHS[book])}, 500
 
 
-__all__ = ["analyzer", "funds", "orderbook", "ping", "positionbook", "tradebook"]
+__all__ = [
+    "analyzer",
+    "funds",
+    "gttorderbook",
+    "holdings",
+    "orderbook",
+    "ping",
+    "positionbook",
+    "tradebook",
+]

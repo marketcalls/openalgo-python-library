@@ -80,8 +80,6 @@ from .worker import JournalTarget
 LOGIN_RETRY_EVERY_S = 60.0
 #: The IST time from which a broker still not logged in is alerted (08-live-trading 7).
 LOGIN_ALERT_AT = "09:00"
-#: The product of every order of this release (Tier 1).
-PRODUCT = "MIS"
 #: The entry lock of the start phase (3.1 steps 11 to 15).
 STARTING_LOCK = "starting"
 #: The folder of the day's logs, under the account's folder.
@@ -165,6 +163,7 @@ def _open(
         sleep=settings.sleep,
         threads=settings.threads,
         orders_per_second=spec.arguments.max_orders_per_second,
+        read_holdings=spec.reads_holdings,
         stack=stack,
     )
     journal = started.journal
@@ -307,7 +306,7 @@ def _preflight(
     plan = PreflightPlan(
         instruments=spec.instruments,
         intervals=spec.intervals,
-        product=PRODUCT,
+        product=spec.product,
         capital=spec.capital,
         max_daily_loss=spec.max_daily_loss,
         account_max_daily_loss=options.account_max_daily_loss,
@@ -380,7 +379,6 @@ __all__ = [
     "LOGIN_ALERT_AT",
     "LOGIN_RETRY_EVERY_S",
     "LOGS_FOLDER",
-    "PRODUCT",
     "STARTING_LOCK",
     "StartSettings",
     "begin_trading",

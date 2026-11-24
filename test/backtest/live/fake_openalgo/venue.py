@@ -59,7 +59,8 @@ class TelegramMessage:
 class Venue:
     """The fake broker and server. `username` is the OpenAlgo user (the order updates'
     `user_id`, and linked to Telegram); `live_cash` and `sandbox_cash` are the available
-    cash of each book, rupees."""
+    cash of each book, rupees; `gtt_supported` whether OpenAlgo ships GTT orders for the
+    broker (`routes_account.gttorderbook`)."""
 
     def __init__(
         self,
@@ -72,9 +73,11 @@ class Venue:
         live_cash: float,
         sandbox_cash: float,
         analyzer: bool,
+        gtt_supported: bool = True,
     ) -> None:
         self.clock, self.log, self.feed = clock, log, feed
         self.broker, self.username = broker, username
+        self.gtt_supported = gtt_supported
         self.lock = threading.RLock()
         self.markets: dict[tuple[str, str], MarketState] = {}
         #: The market holidays OpenAlgo answers `market/holidays` with (`holidays`).

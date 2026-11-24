@@ -97,8 +97,9 @@ def ist_instant(day: dt.date, hhmm: str) -> int:
 
 
 class Trader(Bookkeeping, TraderOrders):
-    """One strategy of the session (module docstring): `part`, its share of the plan,
-    `venue`, its venue map; `square_off_ns` its MIS square-off and `close_ns` its
+    """One strategy of the session (module docstring): `part`, its share of the plan
+    (its `name`, `symbol`, `exchange` and `product` are its spec's), `venue`, its venue
+    map; `square_off_ns` its MIS square-off and `close_ns` its
     exchange's session close (UTC nanoseconds); `now` the session's clock, `event` the
     event stream's writer, `decision` the decisions file's and `warn` keeps a warning of
     the session; `locked_entries` the order worker's record of the strategies whose
@@ -120,7 +121,7 @@ class Trader(Bookkeeping, TraderOrders):
         self.part, self.venue = part, venue
         self.locked_entries, self._warn = locked_entries, warn
         self.name, self.symbol = part.spec.name, part.spec.symbol
-        self.exchange = part.spec.exchange
+        self.exchange, self.product = part.spec.exchange, part.spec.product
         self.square_off_ns, self.close_ns = square_off_ns, close_ns
         self._now, self._event = now, event
         self._opens = [opened for opened, _ in part.slices]

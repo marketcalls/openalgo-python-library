@@ -32,7 +32,7 @@ class Member:
     """A member holding `units` SBIN, its stop `stop_id` (kernel order 2, 10 units) with
     `filled` units its engine has taken; `working` its kernel's working orders."""
 
-    symbol, exchange = "SBIN", "NSE"
+    symbol, exchange, product = "SBIN", "NSE", "MIS"
 
     def __init__(self, name: str, stop_id: str, units: int = 10, filled: int = 0):
         self.name, self.stop_id, self.units, self.filled_units = name, stop_id, units, filled

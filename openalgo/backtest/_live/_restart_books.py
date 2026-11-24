@@ -5,10 +5,11 @@ steps 9 and 10, 3.6, 5.5; unit 12), before the plan is built.
 the order worker resolves them against the order book before anything else is sent; an
 ERROR alert names them after `UNBOUND_AT_START_ALERT_S`, and an intent the book cannot
 tell from another order refuses the start (LiveError: the user checks the order book).
-**Step 10**: the worker reads the position, order and trade books (`ReadBooks`), again
-every `START_BOOKS_RETRY_S` while one cannot be read, for at most `START_BOOKS_WAIT_S`
-(then LiveError). The messages the worker posts meanwhile are kept for the loop
-(`StartBooks.deferred`), but the resolutions, which the journal holds already.
+**Step 10**: the worker reads the position, order and trade books (`ReadBooks`; with the
+holdings in a session with a CNC strategy), again every `START_BOOKS_RETRY_S` while one
+cannot be read, for at most `START_BOOKS_WAIT_S` (then LiveError). The messages the worker
+posts meanwhile are kept for the loop (`StartBooks.deferred`), but the resolutions, which
+the journal holds already.
 
 A strategy whose saved state is of another instrument than the session trades for it
 (the same class name moved to another symbol or contract) refuses the start, naming both
@@ -199,10 +200,12 @@ def _ambiguous(message: Resolutions) -> None:
 
 
 def _readable(books: Books) -> bool:
-    return all(
-        answer.get("status") == "success"
-        for answer in (books.positionbook, books.orderbook, books.tradebook)
-    )
+    """Whether every book the start judges by was read: the position, order and trade
+    books, and the holdings when the session reads them (a CNC strategy)."""
+    read = (books.positionbook, books.orderbook, books.tradebook)
+    if books.holdings is not None:
+        read += (books.holdings,)
+    return all(answer.get("status") == "success" for answer in read)
 
 
 def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Restart:
@@ -214,14 +217,20 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
     found: dict[str, _Found] = {}
     moved: list[str] = []
     for each in spec.strategies:
-        saved = read_saved(journal.rms_state(each.name, day=day), each.name)
+        saved = read_saved(journal.rms_state(each.name, day=day), each.name, each.product)
         # Before its position is judged against another instrument's books.
         elsewhere = another_instrument(saved, each.name, each.symbol, each.exchange)
         if elsewhere is not None:
             moved.append(elsewhere)
             continue
         leg = leg_books(
-            books.positionbook, books.tradebook, books.orderbook, each.symbol, each.exchange
+            books.positionbook,
+            books.tradebook,
+            books.orderbook,
+            each.symbol,
+            each.exchange,
+            product=each.product,
+            holdings=books.holdings,
         )
         if leg.units is None or leg.trades is None:
             raise LiveError(_UNREAD)
@@ -229,7 +238,8 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
         found[each.name] = _Found(each, saved, leg, leg.units, units)
     legs: dict[str, LegStart] = {}
     refused: list[str] = []
-    for group in instrument_groups((s.name, s.symbol, s.exchange) for s in spec.strategies):
+    named = ((s.name, s.symbol, s.exchange, s.product) for s in spec.strategies)
+    for group in instrument_groups(named):
         members = [found[name] for name in group.members if name in found]
         if not members:
             continue

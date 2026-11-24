@@ -2,10 +2,14 @@
 strategies that trade one instrument and product, which a broker nets into one position,
 and the two entry gates the session sets on each member of a group of two or more.
 
-Every instrument the session trades has a group (`InstrumentGroup`), its members the
-strategies trading it in call order; most have one member. Each member keeps its own
-engine, position, orders and broker-held stop; what belongs to the broker's net position
-(the comparison with the books, the exit guard) is the group's.
+Every instrument and product the session trades has a group (`InstrumentGroup`), its
+members the strategies trading it in call order; most have one member. A group is keyed
+by symbol, exchange and product, so an MIS and a CNC strategy on one symbol are two
+groups (20-positional-live 7.1, decision 11.6): the broker keeps their positions on lines
+of their own. Each member keeps its own engine, position, orders and broker-held stop;
+what belongs to the broker's net position (the comparison with the books, the exit guard)
+is the group's. The market's messages (ticks, quotes, candles, other clients' fills) go
+to every strategy of the instrument, whatever its product (`Groups.of`).
 
 **The gates** (`Groups.before_decisions`, run before each member's decisions in the
 loop's step C, so a member deciding after another in the same step sees the other's new
@@ -38,8 +42,9 @@ from ._group_rules import and_join
 from ._order_state import ENTRY_PURPOSES
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
-from ._venue_requests import LIVE_PRODUCT
 
+#: The key of a group: (symbol, exchange, product).
+GroupKey = tuple[str, str, str]
 #: The sides `set_group_side` takes (the binding's `GROUP_SIDES`).
 LONG = "long"
 SHORT = "short"
@@ -72,16 +77,23 @@ class InstrumentGroup:
         """True when several strategies of the session trade the instrument."""
         return len(self.members) > 1
 
+    @property
+    def key(self) -> GroupKey:
+        """(symbol, exchange, product): what tells one group from another."""
+        return (self.symbol, self.exchange, self.product)
 
-def instrument_groups(strategies: Iterable[tuple[str, str, str]]) -> tuple[InstrumentGroup, ...]:
-    """The groups of a session's strategies, each given as (name, symbol, exchange) in
-    call order: one per instrument in the live product, ordered by its first member."""
-    members: dict[tuple[str, str], list[str]] = {}
-    for name, symbol, exchange in strategies:
-        members.setdefault((symbol, exchange), []).append(name)
+
+def instrument_groups(
+    strategies: Iterable[tuple[str, str, str, str]],
+) -> tuple[InstrumentGroup, ...]:
+    """The groups of a session's strategies, each given as (name, symbol, exchange,
+    product) in call order: one per instrument and product, ordered by its first member."""
+    members: dict[GroupKey, list[str]] = {}
+    for name, symbol, exchange, product in strategies:
+        members.setdefault((symbol, exchange, product), []).append(name)
     return tuple(
-        InstrumentGroup(symbol, exchange, LIVE_PRODUCT, tuple(names))
-        for (symbol, exchange), names in members.items()
+        InstrumentGroup(symbol, exchange, product, tuple(names))
+        for (symbol, exchange, product), names in members.items()
     )
 
 
@@ -153,22 +165,31 @@ class Groups:
 
     def __init__(self, traders: Sequence[Trader], *, event: Callable[..., None]) -> None:
         self._event = event
-        self.groups = instrument_groups((t.name, t.symbol, t.exchange) for t in traders)
-        self._members: dict[tuple[str, str], tuple[Trader, ...]] = {}
+        self.groups = instrument_groups((t.name, t.symbol, t.exchange, t.product) for t in traders)
+        self._members: dict[GroupKey, tuple[Trader, ...]] = {}
+        self._traders: dict[tuple[str, str], tuple[Trader, ...]] = {}
         for trader in traders:
-            key = (trader.symbol, trader.exchange)
+            key = (trader.symbol, trader.exchange, trader.product)
             self._members[key] = (*self._members.get(key, ()), trader)
+            market = (trader.symbol, trader.exchange)
+            self._traders[market] = (*self._traders.get(market, ()), trader)
         self._shared_set: set[str] = set()
         self._sides: dict[str, str | None] = {}
         self._reversing: set[str] = set()
 
     def of(self, symbol: str, exchange: str) -> tuple[Trader, ...]:
-        """The members trading `exchange:symbol`, in call order (none for another)."""
-        return self._members.get((symbol, exchange), ())
+        """The strategies trading `exchange:symbol` in any product, in call order (none
+        for another): those its market data goes to."""
+        return self._traders.get((symbol, exchange), ())
+
+    def of_group(self, group: InstrumentGroup) -> tuple[Trader, ...]:
+        """The members of `group`, in call order."""
+        return self._members.get(group.key, ())
 
     def members(self, trader: Trader) -> tuple[Trader, ...]:
-        """The members of `trader`'s group, `trader` among them, in call order."""
-        return self.of(trader.symbol, trader.exchange)
+        """The members of `trader`'s group (its instrument in its product), `trader` among
+        them, in call order."""
+        return self._members.get((trader.symbol, trader.exchange, trader.product), ())
 
     def shared(self, trader: Trader) -> bool:
         """True when `trader`'s instrument is traded by another strategy of the session."""
@@ -181,13 +202,13 @@ class Groups:
         if trader.finished or not self.shared(trader):
             return
         if trader.name not in self._shared_set:
-            call(trader.engine.set_shared, INSTRUMENT, LIVE_PRODUCT, True)
+            call(trader.engine.set_shared, INSTRUMENT, trader.product, True)
             self._shared_set.add(trader.name)
         stands = [stand_of(other) for other in self.members(trader) if other is not trader]
         resulting = frozenset().union(*(stand.resulting for stand in stands))
         side = next(iter(resulting)) if len(resulting) == 1 else None
         if trader.name not in self._sides or self._sides[trader.name] != side:
-            call(trader.engine.set_group_side, INSTRUMENT, LIVE_PRODUCT, side)
+            call(trader.engine.set_group_side, INSTRUMENT, trader.product, side)
             self._sides[trader.name] = side
         reversing = len(resulting) > 1 or any(stand.reversing for stand in stands)
         if reversing and trader.name not in self._reversing:
@@ -217,6 +238,7 @@ def shared_lines(groups: Iterable[InstrumentGroup]) -> list[str]:
 __all__ = [
     "GROUP_REVERSING_LOCK",
     "LONG",
+    "GroupKey",
     "OPENING_ROLES",
     "SHARED_RULE",
     "SHORT",
