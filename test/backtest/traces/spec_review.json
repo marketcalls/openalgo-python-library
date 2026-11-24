@@ -888,19 +888,20 @@
       "id": "GTT-11",
       "kind": "gap",
       "severity": "low",
-      "status": "open",
+      "status": "resolved",
       "title": "Several targets, adds and partial exits on a positional position",
       "documents": ["04-execution 4.4 item 2", "12-position-sizing 3 and 4"],
       "question": "One OCO GTT holds one stop and one target. How are targets=[...] with several targets, after_first_target, an add (which changes the quantity and the levels) and a partial exit held as GTTs, so that the working exit quantity never exceeds the position?",
       "readings": [
         "A. One OCO GTT per target, each with its own quantity and a stop leg for that quantity, plus a SINGLE stop GTT for the remainder; an add or a partial exit modifies them (a full replacement, effective from the next base bar).",
-        "B. Only the stop and the nearest target are GTTs; further targets are re-armed when the first fills."
+        "B. Only the stop and the nearest target are GTTs; further targets are re-armed when the first fills.",
+        "C. One SINGLE stop GTT for all the open units; every target held by the engine as an MIS leg's; a target's partial exit or an add modifies the stop GTT."
       ],
       "recommended": "A",
-      "decision": "",
-      "decided_on": "",
-      "reason": "A keeps every unit protected by exactly one stop and never sells more than is held. No trace exercises it yet.",
-      "proposed_wording": "04-execution 4.4 item 2, add the rule chosen.",
+      "decision": "C",
+      "decided_on": "2026-11-24",
+      "reason": "Decided by the maintainer on 2026-11-24 (design 20 P6): OpenAlgo's OCO GTT differs from one broker to the next, so a position's stop is one SINGLE GTT and its targets are held by the engine. C keeps what recommended A for: every unit is protected by exactly one stop, and nothing sells more than is held.",
+      "proposed_wording": "04-execution 4.4 item 2, as amended on 2026-11-24.",
       "cases": []
     }
   ]

@@ -166,10 +166,12 @@ These are settled. Do not redesign around them without asking.
 - **GTT orders for positional trades.** In Indian markets every pending order is
   cancelled the same day, except a GTT. So ordinary orders are DAY orders at every
   strategy interval, and anything that must rest overnight on a CNC or NRML position
-  (a stop, a target, a resting entry) is a GTT: SINGLE for one trigger, OCO for a stop
-  with a target. Backtests model a GTT the way it works (a trigger, then a child order
-  that may not fill on a gap), and live sends it through the SDK's GTT calls. MIS
-  cannot hold a GTT.
+  (a stop, a resting entry) is a SINGLE GTT. A position's stop is one SINGLE GTT for all
+  its open units on every broker, and its targets are held by the engine as an MIS
+  position's are; no OCO GTT is used for a position's levels, because OpenAlgo's OCO
+  differs from one broker to the next (maintainer, 2026-11-24, design 20 P6). Backtests
+  model a GTT the way it works (a trigger, then a child order that may not fill on a
+  gap), and live sends it through the SDK's GTT calls. MIS cannot hold a GTT.
 - **Reports are built in.** openstatz is not used. Everything a trader would get from
   it (the metrics, rolling statistics, drawdown tables, Monte Carlo, benchmark
   comparison, the charts and the HTML report) is built inside `openalgo` as original
