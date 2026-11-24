@@ -82,6 +82,7 @@ impl Engine {
             orders: &[],
             exits: &[],
             leg_stops: &[],
+            at_open: &[],
         };
         check_parts(read, &parts)?;
         let gtts = read

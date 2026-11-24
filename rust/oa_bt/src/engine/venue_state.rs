@@ -244,6 +244,7 @@ impl Engine {
             orders: &orders,
             exits: &desk.exits,
             leg_stops: &desk.leg_stops,
+            at_open: &desk.orders_at_open,
         };
         check_parts(read, &parts)?;
         let drawdown_limit = self.config.risk.drawdown_halt_percent;

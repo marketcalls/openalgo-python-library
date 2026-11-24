@@ -10,7 +10,9 @@
 //!   "reason", "sent", "request", "status", units, filled units and what its fills were
 //!   charged), "desk" (cancellations and modifications waiting for the broker's answer,
 //!   the exits of the positions, the legs' stops, the targets fired, the entry locks, the
-//!   sizing cap), "commands" (not yet taken), "risk" (trading state, daily loss totals,
+//!   sizing cap, and "orders_at_open": a pre-open decision's orders waiting for the
+//!   session's open, which a restore sends at the open), "commands" (not yet taken),
+//!   "risk" (trading state, daily loss totals,
 //!   drawdown peak, the cooldown and time exit counters), "open_trades" and
 //!   "session_buys". An order is named by its id while it works and by "ended" once it
 //!   has ended. An order's "sent" is False only for a strategy exit that waits for the

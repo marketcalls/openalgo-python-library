@@ -338,3 +338,27 @@ fn an_intraday_strategy_and_a_second_call_are_refused() {
     let again = kernel.pre_open_decision(&[], None, at);
     assert!(matches!(again, Err(KernelError::InvalidConfig { .. })));
 }
+
+#[test]
+fn an_order_waiting_for_the_open_survives_a_restart_and_goes_at_the_open() {
+    let mut kernel = daily_session(july(3));
+    let at = open_of(july(3)) - 45 * 60 * SECOND;
+    kernel
+        .pre_open_decision(&[daily(july(2), 800.0)], None, at)
+        .unwrap();
+    kernel.submit(buy()).expect("submitted");
+    assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
+    let saved = kernel.live_state();
+    let mut restarted = daily_session(july(3));
+    let ids = restarted.restore_live_state(&saved).expect("restored");
+    assert_eq!(ids, vec![(BUY, BUY)]);
+    assert_eq!(
+        restarted.take_commands(),
+        Vec::new(),
+        "nothing before the open"
+    );
+    restarted
+        .push_tick(SBIN, 801.0, open_of(july(3)) + SECOND / 5)
+        .expect("the open's tick");
+    assert_eq!(places(&restarted.take_commands()), vec![ENTRY]);
+}
