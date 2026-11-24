@@ -8,8 +8,9 @@ analyzer and semi-auto switches, and every fault of the fault suite (`Faults`). 
 opens a socket: the `offline` fixture fails a test that tries.
 
 Modules, one job each: `clock` (the manual clock), `market` (instruments and prices),
-`orders`, `book` and `positions` (the broker), `ids` (order and trade IDs), `venue` (the
-fake's state), `schema` and the `routes_*` (the server's checks and answers), `rows`,
+`orders`, `book` and `positions` (the broker), `gtts` (GTT orders, their IDs, rows and
+firing rule), `ids` (order and trade IDs), `venue` (the fake's state) and `venue_gtt` (its
+GTT part), `schema` and the `routes_*` (the server's checks and answers), `rows`,
 `messages` and `answers` (the server's shapes), `rest` (the HTTP transport), `limiter`
 (the server's rate limits), `feed_server` and `feed` (the WebSocket), `direct_feed` (a feed
 delivered on the caller's thread, for the session's tests), `faults`, `log`, `fake` (the

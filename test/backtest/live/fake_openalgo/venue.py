@@ -34,6 +34,7 @@ from .market import Instrument, MarketState
 from .messages import order_update
 from .orders import FakeOrder
 from .positions import Position
+from .venue_gtt import GttVenue
 
 
 @dataclass(frozen=True)
@@ -56,11 +57,12 @@ class TelegramMessage:
     ts_ns: int
 
 
-class Venue:
+class Venue(GttVenue):
     """The fake broker and server. `username` is the OpenAlgo user (the order updates'
     `user_id`, and linked to Telegram); `live_cash` and `sandbox_cash` are the available
     cash of each book, rupees; `gtt_supported` whether OpenAlgo ships GTT orders for the
-    broker (`routes_account.gttorderbook`)."""
+    broker (`routes_account.gttorderbook`, `routes_gtt`), and `gtt_history` whether the
+    broker's GTT book keeps the GTTs that ended (`venue_gtt`)."""
 
     def __init__(
         self,
@@ -74,10 +76,12 @@ class Venue:
         sandbox_cash: float,
         analyzer: bool,
         gtt_supported: bool = True,
+        gtt_history: bool = True,
     ) -> None:
         self.clock, self.log, self.feed = clock, log, feed
         self.broker, self.username = broker, username
         self.gtt_supported = gtt_supported
+        self.init_gtts(history=gtt_history)
         self.lock = threading.RLock()
         self.markets: dict[tuple[str, str], MarketState] = {}
         #: The market holidays OpenAlgo answers `market/holidays` with (`holidays`).
@@ -186,14 +190,15 @@ class Venue:
     ) -> None:
         """A trade print now of `volume` units at `price`: the price moves, the working
         orders of that instrument are worked (the broker's always, the sandbox's while
-        the switch is on), and a tick is sent (`bid` and `ask` give the best quotes, else
-        they are the price)."""
+        the switch is on), the GTTs it reaches fire (`venue_gtt`), and a tick is sent
+        (`bid` and `ask` give the best quotes, else they are the price)."""
         with self.lock:
             market = self._known(symbol, exchange)
             market.trade(self.clock.now(), price, volume, bid, ask)
             for book in self._working_books():
                 for order in book.working_orders(symbol, exchange):
                     self._publish_all(book, self._work(book, order, market, arriving=False))
+                self.fire_gtts(book, market)
         self.feed.tick(market)
         self.flush()
 

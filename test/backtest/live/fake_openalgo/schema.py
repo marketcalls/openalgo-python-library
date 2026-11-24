@@ -1,9 +1,11 @@
 """The REST layer's checks of an order request, before any service runs: the
-schemas of restx_api/schemas.py (`OrderSchema`, `ModifyOrderSchema`, `CancelOrderSchema`)
-and restx_api/account_schema.py (`OrderStatusSchema`), with their words. A refused
-request is answered HTTP 400 with `str(err.messages)` as its message, a dict of each
-field's errors in the schemas' order; an unknown field is refused, as the schemas
-declare no other policy.
+schemas of restx_api/schemas.py (`OrderSchema`, `ModifyOrderSchema`, `CancelOrderSchema`,
+and the GTT schemas `PlaceGTTOrderSchema`, `ModifyGTTOrderSchema`,
+`CancelGTTOrderSchema`) and restx_api/account_schema.py (`OrderStatusSchema`), with their
+words. A refused request is answered HTTP 400 with `str(err.messages)` as its message, a
+dict of each field's errors in the schemas' order; an unknown field is refused, as the
+order schemas declare no other policy, and left out by the GTT schemas, which exclude it
+(`unknown = EXCLUDE`).
 """
 
 from __future__ import annotations
@@ -28,8 +30,10 @@ _KEY_LENGTH = "Length must be between 1 and 256."
 @dataclass(frozen=True)
 class Field:
     """One field of a schema: its kind ("str", "float" or "int"), whether it is required,
-    its default when not, the values it may take, and the lower bound of a number with
-    the words of its refusal (`floor_open`: the bound itself is refused)."""
+    its default when not, the values it may take (and the words refusing another, the
+    schema's own by default), the lower bound of a number with the words of its refusal
+    (`floor_open`: the bound itself is refused), and whether null is taken (`nullable`,
+    loaded as None)."""
 
     name: str
     kind: str
@@ -39,6 +43,8 @@ class Field:
     floor: float | None = None
     floor_open: bool = False
     floor_words: str = ""
+    choice_words: str = ""
+    nullable: bool = False
 
 
 _KEY = Field("apikey", "str")
@@ -76,11 +82,37 @@ MODIFY = (
 )  # fmt: skip
 CANCEL = (_KEY, _STRATEGY, _ORDER_ID)
 STATUS = (_KEY, _STRATEGY, _ORDER_ID)
+_TRIGGER_ID = Field("trigger_id", "str")
+_GTT_PRODUCT_WORDS = (
+    "GTT supports only CNC (delivery) or NRML (overnight F&O); MIS is intraday-only."
+)
+#: The fields `PlaceGTTOrderSchema` and `ModifyGTTOrderSchema` share, in their order.
+_GTT_FIELDS = (
+    Field("trigger_type", "str"), _EXCHANGE, _SYMBOL, _ACTION,
+    Field("product", "str", choices=("NRML", "CNC"), choice_words=_GTT_PRODUCT_WORDS),
+    _QUANTITY,
+    Field("pricetype", "str", required=False, default="LIMIT", choices=("LIMIT", "MARKET")),
+    Field("price", "float", floor=0, floor_words=_PRICE_WORDS),
+    Field("triggerprice_sl", "float", required=False, default=0.0, floor=0,
+          floor_words="triggerprice_sl must be non-negative."),
+    Field("triggerprice_tg", "float", required=False, default=0.0, floor=0,
+          floor_words="triggerprice_tg must be non-negative."),
+    Field("stoploss", "float", required=False, nullable=True),
+    Field("target", "float", required=False, nullable=True),
+)  # fmt: skip
+PLACE_GTT = (
+    _KEY, _STRATEGY, *_GTT_FIELDS, Field("expires_at", "str", required=False, nullable=True)
+)  # fmt: skip
+MODIFY_GTT = (_KEY, _STRATEGY, _TRIGGER_ID, *_GTT_FIELDS)
+CANCEL_GTT = (_KEY, _STRATEGY, _TRIGGER_ID)
 
 
-def load(fields: tuple[Field, ...], payload: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+def load(
+    fields: tuple[Field, ...], payload: Mapping[str, Any], *, exclude_unknown: bool = False
+) -> tuple[dict[str, Any], str]:
     """The request as the schema loads it, and "" when it passed; else ({}, the REST
-    layer's message)."""
+    layer's message). A field the schema does not declare is refused, or left out with
+    `exclude_unknown` (the GTT schemas)."""
     errors: dict[str, list[str]] = {}
     loaded: dict[str, Any] = {}
     for spec in fields:
@@ -97,7 +129,7 @@ def load(fields: tuple[Field, ...], payload: Mapping[str, Any]) -> tuple[dict[st
             loaded[spec.name] = value
     known = {spec.name for spec in fields}
     for name in payload:
-        if name not in known:
+        if name not in known and not exclude_unknown:
             errors[name] = ["Unknown field."]
     if not errors and "quantity" in loaded:
         quantity = loaded["quantity"]
@@ -109,13 +141,15 @@ def load(fields: tuple[Field, ...], payload: Mapping[str, Any]) -> tuple[dict[st
 
 
 def _field(spec: Field, raw: Any) -> tuple[Any, str]:
+    if raw is None and spec.nullable:
+        return None, ""
     if spec.kind == "str":
         if not isinstance(raw, str):
             return None, "Not a valid string."
         if spec.name == "apikey" and not 1 <= len(raw) <= 256:
             return None, _KEY_LENGTH
         if spec.choices and raw not in spec.choices:
-            return None, f"Must be one of: {', '.join(spec.choices)}."
+            return None, spec.choice_words or f"Must be one of: {', '.join(spec.choices)}."
         return raw, ""
     number = _number(raw, integer=spec.kind == "int")
     if number is None:
@@ -139,4 +173,15 @@ def _number(raw: Any, *, integer: bool) -> float | int | None:
     return number
 
 
-__all__ = ["CANCEL", "MODIFY", "PLACE", "STATUS", "VALID_EXCHANGES", "Field", "load"]
+__all__ = [
+    "CANCEL",
+    "CANCEL_GTT",
+    "MODIFY",
+    "MODIFY_GTT",
+    "PLACE",
+    "PLACE_GTT",
+    "STATUS",
+    "VALID_EXCHANGES",
+    "Field",
+    "load",
+]

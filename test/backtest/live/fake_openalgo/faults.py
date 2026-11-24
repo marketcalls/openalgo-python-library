@@ -28,7 +28,16 @@ LOST_ANSWER = "lost_answer"
 SLOW_ANSWER = "slow_answer"
 RATE_LIMITED = "rate_limited"
 #: The endpoints whose broker answer the server can lose after the broker acted.
-ORDER_WRITES = frozenset({"placeorder", "modifyorder", "cancelorder"})
+ORDER_WRITES = frozenset(
+    {
+        "placeorder",
+        "modifyorder",
+        "cancelorder",
+        "placegttorder",
+        "modifygttorder",
+        "cancelgttorder",
+    }
+)
 #: A gateway's status when it gives up waiting for the server.
 GATEWAY_TIMEOUT_STATUS = 504
 
@@ -94,7 +103,8 @@ class Faults:
         """The next order write succeeds at the broker but the server loses the broker's
         answer: HTTP 502 with the server's "may have been placed" words for a placement
         (services/place_order_service.py), HTTP 500 "due to internal error" for a modify
-        or cancel. Raises ValueError for an endpoint that writes no order, and in sandbox
+        or cancel and for each GTT call (the GTT is placed, changed or cancelled all the
+        same). Raises ValueError for an endpoint that writes no order, and in sandbox
         mode, which sends nothing to a broker."""
         if endpoint not in ORDER_WRITES:
             raise ValueError(f"only {sorted(ORDER_WRITES)} can lose a broker's answer")

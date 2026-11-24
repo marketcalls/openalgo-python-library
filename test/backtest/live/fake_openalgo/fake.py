@@ -29,6 +29,7 @@ from .direct_feed import DirectFeed
 from .faults import Faults
 from .feed import Feed
 from .feed_server import FeedServer
+from .gtts import FakeGtt
 from .log import FakeLog
 from .market import Candle, Instrument
 from .orders import FakeOrder, Fill
@@ -53,7 +54,10 @@ _FEED_TIMING = {"poll": 0.002, "backoff": (0.01,), "backoff_slice": 0.005}
 class FakeOpenAlgo:
     """The fake server. `start_ns` starts its clock (UTC nanoseconds); `analyzer` is the
     analyzer switch at the start (False: live mode); `gtt` whether OpenAlgo ships GTT
-    orders for the broker (False: its GTT calls answer HTTP 501 in live mode).
+    orders for the broker (False: its GTT calls answer HTTP 501 in live mode), and
+    `gtt_history` whether the broker's GTT book keeps the GTTs that ended (False: it lists
+    the active ones whatever is asked, as four of the seven brokers with GTT orders do;
+    the sandbox's book always keeps them).
 
     Attributes: `clock` (the manual clock to hand the live layer as `Now` and `Sleep`),
     `log` (everything that happened), `faults` (the faults a test schedules) and
@@ -70,6 +74,7 @@ class FakeOpenAlgo:
         live_cash: float = LIVE_CASH,
         sandbox_cash: float = SANDBOX_CASH,
         gtt: bool = True,
+        gtt_history: bool = True,
     ) -> None:
         self.clock = ManualClock(start_ns)
         self.log = FakeLog()
@@ -85,6 +90,7 @@ class FakeOpenAlgo:
             sandbox_cash=sandbox_cash,
             analyzer=analyzer,
             gtt_supported=gtt,
+            gtt_history=gtt_history,
         )
         self.faults = Faults(self._venue, feed, frozenset(ROUTES))
         self._handler = RestHandler(self._venue, self.faults, API_KEY)
@@ -278,6 +284,49 @@ class FakeOpenAlgo:
                 raise ValueError(f"the fake broker does not know {exchange}:{symbol}")
             book = self._venue.books[mode or self.mode]
             book.holdings[(symbol, exchange)] = (quantity, average_price)
+
+    def end_day(self) -> None:
+        """A day boundary in both books (`book.Book.end_day`): each CNC position's units
+        move into the holdings, NRML positions carry over, the day's orders and trades are
+        cleared, and GTTs stay. The test moves the clock to the next session itself.
+        Raises ValueError for an MIS position still open."""
+        with self._venue.lock:
+            for book in self._venue.books.values():
+                book.end_day()
+
+    # -- GTT orders ---------------------------------------------------------
+
+    def refuse_next_gtt(self, reason: str, *, call: str = "placegttorder") -> None:
+        """The broker (or the sandbox) refuses the next GTT `call` ("placegttorder",
+        "modifygttorder" or "cancelgttorder") with `reason`, HTTP 400: a trigger too near
+        the price, a segment it takes no GTT on, whatever its words. Raises ValueError for
+        another call."""
+        with self._venue.lock:
+            self._venue.refuse_next_gtt(call, reason)
+
+    def half_apply_next_gtt_modify(self) -> None:
+        """The next GTT modify changes the trigger only, keeps the units, and is answered
+        as the server's internal error (HTTP 500): a broker module that failed part way.
+        Raises ValueError in sandbox mode, whose modify is all or nothing."""
+        with self._venue.lock:
+            if self._venue.mode is Mode.SANDBOX:
+                raise ValueError("the OpenAlgo sandbox changes a GTT all at once or not at all")
+            self._venue.half_apply_next_gtt_modify()
+
+    def set_gtt_status(self, trigger_id: str, status: str) -> None:
+        """What the broker or the user does to a resting GTT outside the session's calls:
+        its row shows `status` from now ("cancelled" by hand, "expired", "rejected" after
+        placement, "deleted", "disabled", "transit", or any word), and no child is placed.
+        Raises ValueError for an unknown trigger ID or a GTT that is not active."""
+        with self._venue.lock:
+            self._venue.set_gtt_status(trigger_id, status)
+
+    def gtts(self, mode: Mode | None = None) -> list[FakeGtt]:
+        """Copies of a book's GTTs (the selected one by default), ended ones included,
+        oldest first."""
+        with self._venue.lock:
+            book = self._venue.books[mode or self.mode]
+            return [dataclasses.replace(gtt) for gtt in book.gtts.values()]
 
     def set_holidays(self, rows: Iterable[dict[str, Any]]) -> None:
         """Replace OpenAlgo's market holidays (`market/holidays` rows, as

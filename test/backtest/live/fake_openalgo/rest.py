@@ -26,12 +26,15 @@ import httpx
 
 from openalgo.backtest._layout import NANOS_PER_SECOND
 
-from . import routes_account, routes_data, routes_orders
+from . import routes_account, routes_data, routes_gtt, routes_orders
 from .answers import (
     CANCEL_FAILED,
+    CANCEL_GTT_FAILED,
     DROPPED_WORDS,
     INVALID_KEY,
     MODIFY_FAILED,
+    MODIFY_GTT_FAILED,
+    PLACE_GTT_FAILED,
     REFUSED_WORDS,
     TIMEOUT_WORDS,
     UNANSWERED_ORDER_MESSAGE,
@@ -75,6 +78,9 @@ ROUTES: dict[str, Route] = {
     "holdings": routes_account.holdings,
     "funds": routes_account.funds,
     "gttorderbook": routes_account.gttorderbook,
+    "placegttorder": routes_gtt.place,
+    "modifygttorder": routes_gtt.modify,
+    "cancelgttorder": routes_gtt.cancel,
     "analyzer": routes_account.analyzer,
     "ping": routes_account.ping,
     "symbol": routes_data.symbol,
@@ -91,11 +97,15 @@ _TELEGRAM = "telegram/notify"
 _TELEGRAM_KEY_REFUSED = ({"status": "error", "message": "Invalid or missing API key"}, 401)
 #: The server's answer when it lost the broker's answer to an order write after the
 #: broker acted (services/place_order_service.py, modify_order_service.py,
-#: cancel_order_service.py).
+#: cancel_order_service.py), or the broker module failed after it acted on a GTT call
+#: (services/place_gtt_order_service.py and its siblings: HTTP 500 "due to internal error").
 _LOST = {
     "placeorder": ({"status": "error", "message": UNANSWERED_ORDER_MESSAGE}, 502),
     "modifyorder": ({"status": "error", "message": MODIFY_FAILED}, 500),
     "cancelorder": ({"status": "error", "message": CANCEL_FAILED}, 500),
+    "placegttorder": ({"status": "error", "message": PLACE_GTT_FAILED}, 500),
+    "modifygttorder": ({"status": "error", "message": MODIFY_GTT_FAILED}, 500),
+    "cancelgttorder": ({"status": "error", "message": CANCEL_GTT_FAILED}, 500),
 }
 
 

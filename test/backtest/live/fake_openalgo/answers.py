@@ -37,6 +37,12 @@ UNANSWERED_ORDER_MESSAGE = (
 #: failed part way (HTTP 500).
 MODIFY_FAILED = "Failed to modify order due to internal error"
 CANCEL_FAILED = "Failed to cancel order due to internal error"
+#: services/place_gtt_order_service.py, modify_gtt_order_service.py and
+#: cancel_gtt_order_service.py: the broker module failed (HTTP 500), possibly after the
+#: broker acted.
+PLACE_GTT_FAILED = "Failed to place GTT due to internal error"
+MODIFY_GTT_FAILED = "Failed to modify GTT due to internal error"
+CANCEL_GTT_FAILED = "Failed to cancel GTT due to internal error"
 #: services/order_router_service.py, queue_order: semi-auto mode queued a placement.
 QUEUED_FOR_APPROVAL = "Order queued for approval in Action Center"
 SEMI_AUTO_MODE = "semi_auto"
@@ -144,6 +150,7 @@ __all__ = [
     "BOOK_PATHS",
     "BROKER_API",
     "CANCEL_FAILED",
+    "CANCEL_GTT_FAILED",
     "CANCEL_REFUSED",
     "DROPPED_WORDS",
     "EXPIRED_TOKEN",
@@ -152,6 +159,8 @@ __all__ = [
     "GTT_NOT_SUPPORTED",
     "INVALID_KEY",
     "MODIFY_FAILED",
+    "MODIFY_GTT_FAILED",
+    "PLACE_GTT_FAILED",
     "QUEUED_FOR_APPROVAL",
     "REFUSED_WORDS",
     "SANDBOX_INVALID_KEY",
