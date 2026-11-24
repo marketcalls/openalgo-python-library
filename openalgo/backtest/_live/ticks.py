@@ -8,9 +8,8 @@
 
 The data of mode 1 (LTP) holds `ltp`, `timestamp` and, when the server sent one, `ltt`;
 mode 2 (quote) holds every quote field, 0 for a field the server left out; mode 3
-(depth) holds `ltp`, `timestamp` and `depth` ({"buy": [...], "sell": [...]}, best level
-first) and, as the SDK passes it on, neither a volume nor a last trade time. The server's
-own frame has the same envelope, so it reads the same way.
+(depth) holds the same quote fields and `depth` ({"buy": [...], "sell": [...]}, best
+level first). The server's own frame has the same envelope, so it reads the same way.
 
 The last trade time
 -------------------

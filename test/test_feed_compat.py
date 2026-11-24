@@ -1,7 +1,8 @@
 """What must stay as it was in 2.0.5: the WebSocket URL, the constructor and
 its attributes, every method signature, and the frames, payloads and
 snapshots of a client that registers no hook. A quote payload and snapshot keep
-every 2.0.5 key and have gained the fields the server sends that 2.0.5 dropped.
+every 2.0.5 key and have gained the fields the server sends that 2.0.5 dropped. A
+depth payload keeps its 2.0.5 keys and has gained the same quote fields.
 
 Fake socket only: see feed_fakes.py. Nothing here reaches the network.
 """
@@ -324,6 +325,20 @@ CALLBACK_PAYLOADS = {
         "data": {
             "ltp": 7.0,
             "timestamp": 1700000000000,
+            # Added after 2.0.5, 0 when the server sends none (test_feed_quotes.py).
+            "open": 0,
+            "high": 0,
+            "low": 0,
+            "close": 0,
+            "volume": 0,
+            "last_trade_quantity": 0,
+            "avg_trade_price": 0,
+            "change": 0,
+            "change_percent": 0,
+            "ltt": 0,
+            "total_buy_quantity": 0,
+            "total_sell_quantity": 0,
+            "oi": 0,
             "depth": {
                 "buy": [{"price": 6.0, "quantity": 5, "orders": 1}],
                 "sell": [{"price": 8.0, "quantity": 7, "orders": 2}],
