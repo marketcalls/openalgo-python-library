@@ -4,7 +4,9 @@
 - The raw order updates the feed's order callback queued are drained, each normalized (one
   that cannot be read is logged and counted, never raised) and taken by the order path,
   and its news is posted as `inbox.OrderNews`. A fill of an order the order path does not
-  follow is posted as `inbox.OtherFill`, so the loop can ask for a comparison soon (5.1).
+  follow is posted as `inbox.OtherFill`, so the loop can ask for a comparison soon (5.1),
+  and any word of such an order is told to `unknown_order` (the GTT follower, which reads
+  its book at once when a GTT rests on that symbol: 20-positional-live 3.1).
 - Posting news: a terminal word settles its order (`_worker_settle`) and lets its requests
   be taken again, and a STOP intent's terminal word clears its leg's journal stop first
   (`_worker_stops`), so the news says whether it did.
@@ -63,6 +65,9 @@ class NewsHandover:
         self._in_hand = 0
         #: Raw order updates that could not be read, logged and dropped.
         self.unreadable = 0
+        #: Told each word of an order the order path does not follow (module docstring);
+        #: set by the worker once its GTT follower is built.
+        self.unknown_order: Callable[[OrderUpdate], None] | None = None
 
     @property
     def pending(self) -> int:
@@ -117,9 +122,13 @@ class NewsHandover:
             logger.warning("an order update cannot be read, dropped: %s", error)
             return None
         news = path.on_update(update)
-        # A fill of an order the order path does not follow (another client's, or an
-        # unbound intent's, kept aside): the loop asks for a comparison soon (5.1).
-        if news is None and update.filled_quantity > 0 and path.last_known(update.order_id) is None:
+        if news is not None or path.last_known(update.order_id) is not None:
+            return news
+        # An order the order path does not follow (another client's, a GTT's child, or an
+        # unbound intent's, kept aside): its fill asks for a comparison soon (5.1).
+        if self.unknown_order is not None:
+            self.unknown_order(update)
+        if update.filled_quantity > 0:
             self._post(OtherFill(update.symbol, update.exchange, update.ts_recv_ns))
         return news
 

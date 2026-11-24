@@ -24,13 +24,8 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .._products import CNC, PRODUCTS
 from ..errors import LiveError
-
-#: OpenAlgo's products (its `product` field): intraday, held for delivery, and derivatives
-#: held overnight.
-MIS, CNC, NRML = "MIS", "CNC", "NRML"
-#: Every product the reader knows, in the order messages name them.
-PRODUCTS = (MIS, CNC, NRML)
 
 
 def broker_units(
@@ -98,4 +93,4 @@ def _units(rows: Sequence[Any], key: tuple[str, ...], fields: tuple[str, ...]) -
     return total
 
 
-__all__ = ["CNC", "MIS", "NRML", "PRODUCTS", "broker_units"]
+__all__ = ["broker_units"]

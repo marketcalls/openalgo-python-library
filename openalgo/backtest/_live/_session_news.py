@@ -24,6 +24,9 @@ other clients' fills) go to `_session_feed`.
 - `Books`: to the reconciler (`reconcile`); a read the worker did not make (the guard
   locked) stops its reads. Each fill the kernel takes is told to it too, and the news of
   an orphan it cancels is expected.
+- `GttNews`: to the reconciler's record of the legs a GTT holds in flight
+  (`_gtt_flight`), and an event; what each answer and outcome asks of the kernel is
+  applied by unit N3b of 2.5.0, with the kernel's GTT answer calls.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
@@ -45,6 +48,7 @@ from typing import Any
 
 from ._exit_reasons import exit_reason, exit_words
 from ._fill_ledger import FillOutcome, FillResult, Increment
+from ._gtt_types import GttOutcome
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
 from ._order_throttle import throttled_news
@@ -57,6 +61,7 @@ from ._venue_requests import Applied, CancelRequest, Handled, ModifyRequest, Pla
 from ._worker_queue import ReadBooks
 from .inbox import (
     Books,
+    GttNews,
     GuardLocked,
     HeldFills,
     Message,
@@ -341,6 +346,15 @@ class News(ResolutionNews):
     def _books(self, message: Books) -> None:
         self._session.reconcile.books(message)
 
+    def _gtt_news(self, message: GttNews) -> None:
+        news = message.news
+        self._session.reconcile.gtts.take(news)
+        if isinstance(news, GttOutcome):
+            fields = {"strategy": news.strategy, "seq": news.seq, "found": news.event.value}
+        else:
+            fields = {"strategy": news.request.strategy, "seq": news.seq, "answer": news.kind.value}
+        self._session.event("gtt", **fields)
+
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)
 
@@ -376,6 +390,7 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         HeldFills: News._held_fills,
         PositionRows: News._positions,
         Books: News._books,
+        GttNews: News._gtt_news,
         GuardLocked: News._guard_locked,
         WorkerFailed: News._worker_failed,
     }

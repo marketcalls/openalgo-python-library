@@ -14,13 +14,24 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 
-from ...gtt import GTT_PRODUCTS
+from .._products import OVERNIGHT_PRODUCTS
 from ..errors import JournalError
 from ._journal_file import check_name
 from ._journal_rows import finite_number, unreadable, whole_number
 
 #: The sides of a GTT's child order, as OpenAlgo's actions.
 GTT_SIDES = ("BUY", "SELL")
+#: How a GTT's state note records the broker's refusal of its placement, after what the
+#: GTT was for ("stop" or "entry", a `Purpose` value) and before the broker's words: a
+#: stop's refusal of an earlier day is found by it (20-positional-live 3.5,
+#: `JournalGtts.refused_days`).
+REFUSED_BY_BROKER = " refused by the broker: "
+
+
+def refusal_note(purpose: str, message: str) -> str:
+    """The state note of a GTT whose placement the broker refused with `message`, placed
+    for `purpose` ("stop" or "entry")."""
+    return f"{purpose}{REFUSED_BY_BROKER}{message}"
 
 
 class GttState(enum.Enum):
@@ -128,7 +139,7 @@ def check_leg(strategy: str, symbol: str, exchange: str, product: str) -> None:
     cannot hold (OpenAlgo takes CNC and NRML only: MIS is squared off the same day)."""
     for name, value in (("strategy", strategy), ("symbol", symbol), ("exchange", exchange)):
         check_name(name, value)
-    if product not in GTT_PRODUCTS:
+    if product not in OVERNIGHT_PRODUCTS:
         raise JournalError(
             f"a GTT holds a position overnight, so its product is CNC or NRML, not {product!r}"
         )
@@ -168,6 +179,7 @@ def child_from(row: sqlite3.Row) -> GttChild:
 
 __all__ = [
     "GTT_SIDES",
+    "REFUSED_BY_BROKER",
     "GttBinding",
     "GttChild",
     "GttState",
@@ -175,4 +187,5 @@ __all__ = [
     "binding_from",
     "check_leg",
     "child_from",
+    "refusal_note",
 ]

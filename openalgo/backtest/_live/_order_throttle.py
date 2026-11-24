@@ -1,6 +1,7 @@
 """The live order rate throttle (18-multi-strategy 2.5a rule 12): at most
-`max_orders_per_second` order calls (`placeorder`, `modifyorder` and `cancelorder`
-together) in any one-second window of the session. Always on.
+`max_orders_per_second` order calls (`placeorder`, `modifyorder` and `cancelorder`, and
+the GTT calls `placegttorder`, `modifygttorder` and `cancelgttorder`, 20-positional-live
+13.2 PL3, together) in any one-second window of the session. Always on.
 
 - **The window** is the order path's `RateBudget` (`_order_rate`): the order path counts
   each order call it makes, and the order worker (`worker`) takes an order request off its
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._gtt_types import GttRequest
 from ._order_rate import DEFAULT_ORDERS_PER_SECOND, RateBudget
 from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, Now
@@ -148,6 +150,13 @@ def throttled_news(session: Any, message: Throttled, *, alerted: bool) -> bool:
     if isinstance(request, CancelOrphan):
         named = {"strategy": None, "order_id": request.order_id, "purpose": ORPHAN_PURPOSE}
         what = f"the cancel of order {request.order_id}, which no strategy holds,"
+    elif isinstance(request, GttRequest):
+        named = {
+            "strategy": request.strategy,
+            "request_id": request.request_id,
+            "purpose": f"gtt_{request.action.value}",
+        }
+        what = f"{request.strategy}'s GTT {request.action.value} of {request.symbol}"
     else:
         intent = request.intent
         named = {

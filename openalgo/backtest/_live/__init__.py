@@ -50,7 +50,12 @@ the values both hash, `_version_values`),
 `_preflight_expiry` and `_preflight_calendar` (the master contract's expiry and OpenAlgo's
 holidays against the tables), and `_fill_comparison` (each fill against a backtest of the
 same bars, priced by `_session_slippage`); `_exit_reasons` names why an order closes a
-position.
+position. The order worker's GTT parts (20-positional-live 3) are `_gtt_send` (each GTT
+request sent journal first and confirmed by the GTT book, `_gtt_confirm`) and
+`_gtt_follow` (the GTTs the broker holds followed, a fired GTT's child found, `_gtt_child`),
+on `_gtt_calls` and `_gtt_reads`; their values are `_gtt_types` and the book's rows
+`_gtt_book`; `_gtt_flight` holds a leg in flight for the reconciler while its GTT's fate is
+open. OpenAlgo's product names are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

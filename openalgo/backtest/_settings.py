@@ -27,6 +27,7 @@ from ._intraday_assumptions import TIMES as INTRADAY_TIMES
 from ._intraday_assumptions import intraday_times
 from ._layout import parse_interval
 from ._perturbation import FILL_MODELS, delay, delay_assumption
+from ._products import CNC, MIS, NRML
 from ._risk_settings import choice, refuse_combined_rules, risk_settings
 from ._run_dates import instant, run_dates
 from ._run_plan import RunPlan
@@ -67,10 +68,10 @@ def _slippage(value: Any) -> tuple[str, float, int]:
 def _product(strategy: type, product: str | None, interval: str, exchange: str) -> str:
     chosen = strategy.product or product
     if chosen is not None:
-        return choice(chosen, ("CNC", "MIS", "NRML"), "product")
+        return choice(chosen, (CNC, MIS, NRML), "product")
     if parse_interval(interval)[0] == "intraday":
-        return "MIS"
-    return "NRML" if exchange in DERIVATIVE_EXCHANGES else "CNC"
+        return MIS
+    return NRML if exchange in DERIVATIVE_EXCHANGES else CNC
 
 
 def _base(base: str | None, interval: str) -> str:
@@ -156,7 +157,7 @@ def assumptions(plan: RunPlan, calendar: Any) -> dict[str, Any]:
     (`_intraday_assumptions`)."""
     block: dict[str, Any] = {"base": plan.base, "product": plan.product}
     times: dict[str, str | None] = dict.fromkeys(INTRADAY_TIMES)
-    if plan.product == "MIS":
+    if plan.product == MIS:
         given = {name: getattr(plan, name) for name in INTRADAY_TIMES}
         times = intraday_times(calendar, plan.exchange, plan.start, plan.end, given)
     block.update(times)

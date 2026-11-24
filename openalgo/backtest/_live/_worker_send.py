@@ -33,6 +33,9 @@ a request"), split from `worker` so each module keeps one job.
 - A restart's `Settle` makes a restored order's modify or cancel unsettled, so a read
   settles it as an unanswered one (3.6); `CancelOrphan` cancels an order of the journal
   the engine does not hold (5.3), with an ERROR alert when it cannot be cancelled.
+- A `GttRequest` goes to the GTT sender (`_gtt_send`); `ReadGtts` asks the GTT follower
+  for a read of the GTT book, and `BindGttChild` binds a fired GTT's child
+  (`_gtt_follow`; 20-positional-live 3).
 
 Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -47,6 +50,8 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._answers import server_answer
+from ._gtt_send import GttSender
+from ._gtt_types import BindGttChild, GttRequest, ReadGtts
 from ._locked_entries import LockedEntries, locked_words
 from ._order_answers import Outcome
 from ._order_check import OrderCheck
@@ -112,7 +117,8 @@ class Sender:
     `news` are the worker's; `post` puts a message on the loop's inbox, `calling` marks the
     worker busy for a call that may reach the server, `now` gives UTC nanoseconds, and
     `locked` is the record of the strategies whose entries the loop has locked;
-    `read_holdings` is True for a session with a CNC strategy."""
+    `read_holdings` is True for a session with a CNC strategy; `gtts` sends the GTT
+    requests and holds the GTT follower."""
 
     def __init__(
         self,
@@ -131,9 +137,11 @@ class Sender:
         now: Callable[[], int],
         locked: LockedEntries,
         read_holdings: bool,
+        gtts: GttSender,
     ) -> None:
         self._client = client
         self._read_holdings = read_holdings
+        self._gtts = gtts
         self._path = path
         self._journal = journal
         self._alerts = alerts
@@ -169,6 +177,12 @@ class Sender:
             self.unsettle(request.change)
         elif isinstance(request, CancelOrphan):
             self._cancel_orphan(request.order_id)
+        elif isinstance(request, GttRequest):
+            self._gtts.execute(request)
+        elif isinstance(request, ReadGtts):
+            self._gtts.follower.read_now()
+        elif isinstance(request, BindGttChild):
+            self._gtts.follower.bind_child(request.seq, request.order_id, request.kernel_order)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
 

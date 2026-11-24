@@ -32,6 +32,7 @@ from ._journal_gtt_rows import (
     binding_from,
     check_leg,
     child_from,
+    refusal_note,
 )
 from ._journal_handle import JournalHandle
 from ._journal_rows import whole_number
@@ -48,6 +49,13 @@ _OPEN = "SELECT * FROM gtts WHERE ledger = ? AND state NOT IN ({ended}) ORDER BY
 _ENDED = tuple(state.value for state in GttState if state.terminal)
 _CHILD = "SELECT * FROM gtt_children WHERE ledger = ? AND gtt_seq = ?"
 _CHILD_OF_ORDER = "SELECT * FROM gtt_children WHERE ledger = ? AND day = ? AND order_id = ?"
+_REFUSED_DAYS = (
+    "SELECT DISTINCT g.day FROM gtts AS g JOIN gtt_states AS s "
+    "ON s.ledger = g.ledger AND s.gtt_seq = g.seq "
+    "WHERE g.ledger = ? AND g.strategy = ? AND g.symbol = ? AND g.exchange = ? "
+    "AND g.product = ? AND g.day < ? AND s.state = ? AND substr(s.note, 1, ?) = ? "
+    "ORDER BY g.day"
+)
 
 
 class JournalGtts(JournalHandle):
@@ -184,6 +192,23 @@ class JournalGtts(JournalHandle):
         with self._sql("read the open GTTs") as sql:
             rows = sql.execute(query, (self._ledger, *_ENDED)).fetchall()
         return [binding_from(row) for row in rows]
+
+    def refused_days(
+        self, strategy: str, symbol: str, exchange: str, product: str, purpose: str
+    ) -> list[date]:
+        """The trading days before the session's on which the broker refused to place a
+        GTT of `strategy`'s leg made for `purpose` ("stop" or "entry"), oldest first: those
+        whose placement was noted not placed with the broker's refusal
+        (`_journal_gtt_rows.refusal_note`). Raises JournalError before `start_session`."""
+        key = self._day_key(None, "read the GTT refusals of earlier days")
+        prefix = refusal_note(purpose, "")
+        leg = (strategy, symbol, exchange, product)
+        state = GttState.NOT_PLACED.value
+        with self._sql("read the GTT refusals of earlier days") as sql:
+            rows = sql.execute(
+                _REFUSED_DAYS, (self._ledger, *leg, key, state, len(prefix), prefix)
+            ).fetchall()
+        return [date.fromisoformat(row["day"]) for row in rows]
 
     def gtt_states(self, seq: int) -> list[tuple[GttState, str, int]]:
         """Each state GTT `seq` took, with its note and when (UTC nanoseconds), oldest

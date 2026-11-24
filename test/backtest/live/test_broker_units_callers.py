@@ -64,13 +64,13 @@ NO_FUNDS = {"status": "error", "message": "funds not read in these tests"}
 
 class Kernel:
     """The kernel session of a leg holding `units` of SBIN NSE in `product`: one tranche
-    opened at `START_NS`, no working order, and a stop (kernel order 2) of as many units with
-    none filled. Every call that names a product is recorded (`calls`, as (call, product))
-    and fails the test unless it names the leg's product, the only one the kernel holds the
-    leg in; `exits` are the reasons of the exits asked for."""
+    opened at `opened_ns` (`START_NS` by default), no working order, and a stop (kernel order
+    2) of as many units with none filled. Every call that names a product is recorded
+    (`calls`, as (call, product)) and fails the test unless it names the leg's product, the
+    only one the kernel holds the leg in; `exits` are the reasons of the exits asked for."""
 
-    def __init__(self, product: str, units: int) -> None:
-        self.product, self.units = product, units
+    def __init__(self, product: str, units: int, opened_ns: int = START_NS) -> None:
+        self.product, self.units, self.opened_ns = product, units, opened_ns
         self.calls: list[tuple[str, str]] = []
         self.exits: list[str] = []
 
@@ -81,7 +81,7 @@ class Kernel:
     def position(self, instrument: int, product: str) -> dict[str, Any]:
         self._named("position", product)
         units = float(self.units)
-        return {"quantity_units": units, "tranches": [(1, units, 500.0, START_NS)]}
+        return {"quantity_units": units, "tranches": [(1, units, 500.0, self.opened_ns)]}
 
     def order(self, kernel_order: int) -> dict[str, Any]:
         """The leg's stop: as many units as the leg holds, none filled."""
@@ -114,15 +114,15 @@ class Kernel:
 
 
 class Leg(TraderOrders):
-    """A strategy holding `units` of SBIN NSE in `product`: the session's own position and
-    exit calls (`TraderOrders`) on a `Kernel`. A stop of as many units is kernel order 2,
-    broker order "S1"."""
+    """A strategy holding `units` of SBIN NSE in `product`, opened at `opened_ns`: the
+    session's own position and exit calls (`TraderOrders`) on a `Kernel`. A stop of as many
+    units is kernel order 2, broker order "S1"."""
 
     symbol, exchange, finished, square_off_ns = "SBIN", "NSE", False, 0
 
-    def __init__(self, name: str, product: str, units: int) -> None:
+    def __init__(self, name: str, product: str, units: int, opened_ns: int = START_NS) -> None:
         self.name, self.product = name, product
-        self.engine = Kernel(product, units)
+        self.engine = Kernel(product, units, opened_ns)
         self.venue = SimpleNamespace(
             bound=lambda: {},
             changing=lambda kernel_order: False,
@@ -166,9 +166,8 @@ class Loop:
         )
         self.margin = MarginHolds(self)
         idle = SimpleNamespace(stop=None, unbound_add_units=0, orders={})
-        self.stops = SimpleNamespace(
-            leg=lambda trader: idle, held=SimpleNamespace(holds=lambda trader: False)
-        )
+        nothing = SimpleNamespace(holds=lambda trader: False)
+        self.stops = SimpleNamespace(leg=lambda trader: idle, held=nothing, protection=nothing)
         self.positions_read: list[PositionRows] = []
         self.risk = SimpleNamespace(positions=self.positions_read.append)
 
@@ -254,7 +253,7 @@ def read(
     """Ask for a read of every leg now and answer it with `positions`, `trades` and
     `HOLDINGS`."""
     reconciler.ask_of(None)
-    (request,) = [r for r in loop.handed if isinstance(r, ReadBooks)]
+    request = [r for r in loop.handed if isinstance(r, ReadBooks)][-1]
     loop.clock += NS
     books = Books(
         request.generation,
@@ -342,18 +341,39 @@ def test_a_shared_instrument_is_compared_on_its_own_products_units():
     }
 
 
-def test_a_shared_cnc_difference_is_shared_out_by_when_each_cnc_position_opened():
+def test_a_shared_cnc_difference_is_judged_on_the_cnc_units():
     first, second = Leg("HoldA", "CNC", 30), Leg("HoldB", "CNC", 20)
     loop, reconciler = reconciling(first, second)
 
     read(loop, reconciler, POSITIONS, other_client_sold(3))
 
-    # 30 + 20 = 50 held, 47 at the broker, and another client's sale of 3 explains it:
-    # the allocation reads when each CNC position opened (the kernel fails another product).
+    # 30 + 20 = 50 held, 47 at the broker, and another client's sale of 3 explains it.
     assert compared(loop) == {
         "HoldA": ("explained_shared", CNC_UNITS),
         "HoldB": ("explained_shared", CNC_UNITS),
     }
+
+
+#: When HoldA's and HoldB's positions opened in each case, UTC nanoseconds: a minute apart.
+EARLIER, LATER = START_NS - 60 * NS, START_NS
+
+
+@pytest.mark.parametrize(
+    ("opened", "after"),
+    [((EARLIER, LATER), (30, 17)), ((LATER, EARLIER), (27, 20))],
+    ids=["HoldB opened last", "HoldA opened last"],
+)
+def test_a_shared_cnc_sale_is_taken_from_the_cnc_position_opened_last(opened, after):
+    first, second = Leg("HoldA", "CNC", 30, opened[0]), Leg("HoldB", "CNC", 20, opened[1])
+    loop, reconciler = reconciling(first, second)
+
+    for _ in range(2):
+        read(loop, reconciler, POSITIONS, other_client_sold(3))
+
+    # Seen twice, the sale of 3 is shared out (18-multi-strategy 4.7): the member whose CNC
+    # position opened most recently takes it, read from the kernel in CNC: 20 - 3 = 17, or
+    # 30 - 3 = 27.
+    assert (first.engine.units, second.engine.units) == after
     assert ("position", "CNC") in first.engine.calls
 
 

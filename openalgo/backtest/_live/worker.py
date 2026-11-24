@@ -24,7 +24,10 @@ and posts `inbox.WorkerReady`. Then each `step`:
 7. settles the orders whose modify or cancel was unanswered or refused, posting the
    check's news and `inbox.Settled` (an expired modify with an ERROR alert; one the order
    path cannot read at all, refused at once: `_worker_send`);
-8. executes one ready request of any priority, after draining the updates; an entry or
+8. reads the GTT book for each GTT call waiting for its confirmation, and what the GTT
+   follower has due (`_gtt_send`, `_gtt_follow`; 20-positional-live 3): nothing at all in
+   a session that holds no GTT;
+9. executes one ready request of any priority, after draining the updates; an entry or
    add of a strategy whose entries the loop has locked since it was queued is refused just
    before it would be sent (`locked_entries`, 2.4.0 item P3-1).
 
@@ -45,11 +48,13 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
 
 from ..errors import JournalError, LiveError
+from ._gtt_parts import gtt_parts
+from ._gtt_send import GttSender
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._journal_reads import JournalSession
 from ._locked_entries import LockedEntries
@@ -102,6 +107,7 @@ class _Started:
     path: OrderPath
     stops: StopBook
     sender: Sender
+    gtts: GttSender
 
 
 class OrderWorker(WorkerThread):
@@ -110,7 +116,8 @@ class OrderWorker(WorkerThread):
     shared alerts, `inbox` the loop's, `journal` where W is; `now` gives UTC nanoseconds
     and `sleep` waits seconds; `orders_per_second` is the order rate (`_order_throttle`);
     `read_holdings` reads the holdings with every book read, for a session with a CNC
-    strategy (`_broker_units`; an MIS session reads none).
+    strategy (`_broker_units`; an MIS session reads none); `market_open(now_ns)` says
+    whether the market is open, for the GTT follower's reads on the clock (None: none).
 
     The loop calls `put` and `withdraw_put_back`, reads `busy_since_ns` and
     `raw_pending` and writes `locked_entries` from its thread, and the feed's order
@@ -130,9 +137,11 @@ class OrderWorker(WorkerThread):
         sleep: Sleep,
         orders_per_second: int = DEFAULT_ORDERS_PER_SECOND,
         read_holdings: bool = False,
+        market_open: Callable[[int], bool] | None = None,
     ) -> None:
         self._client = client
         self._read_holdings = read_holdings
+        self._market_open = market_open
         self._guard = guard
         self._alerts = alerts
         # What the worker and its parts post goes on the loop's inbox.
@@ -234,6 +243,21 @@ class OrderWorker(WorkerThread):
                 rate=self._throttle.budget,
             )
             path.restore()
+            gtts = gtt_parts(
+                self._client,
+                journal=journal,
+                path=path,
+                guard=self._guard,
+                queue=self._queue,
+                budget=self._throttle.budget,
+                news=self._news,
+                post=self._post,
+                alerts=self._alerts,
+                now=self._now,
+                sleep=self._sleep,
+                calling=self._calling,
+                market_open=self._market_open,
+            )
         except BaseException:
             journal.close()
             raise
@@ -253,8 +277,9 @@ class OrderWorker(WorkerThread):
             now=self._now,
             locked=self.locked_entries,
             read_holdings=self._read_holdings,
+            gtts=gtts,
         )
-        self._started = _Started(journal, path, stops, sender)
+        self._started = _Started(journal, path, stops, sender, gtts)
         self._post(WorkerReady(session))
         return session
 
@@ -304,6 +329,9 @@ class OrderWorker(WorkerThread):
             self._held = held
             self._post(HeldFills(held))
         started.sender.settle_due()
+        self._notice_lock()
+        started.gtts.due()
+        started.gtts.follower.due()
         self._notice_lock()
         return self._run_next(started, Priority.UPKEEP) or took
 

@@ -23,6 +23,7 @@ from typing import Any
 
 from ._calendar_convert import format_ist
 from ._messages import counted
+from ._products import CNC
 from ._reject_reasons import ENTRY_WINDOW, PRODUCT_RULE, PRODUCT_RULE_CASES, REASONS
 
 MARGIN = "margin"
@@ -63,7 +64,7 @@ def product_rule_case(order: dict[str, Any], kind: str) -> str:
     a short, or a GTT on MIS."""
     if kind == INDEX_KIND:
         return "index"
-    if order["product"] == "CNC" and order["side"] == "SELL":
+    if order["product"] == CNC and order["side"] == "SELL":
         return "delivery_short"
     return "gtt_on_mis"
 
