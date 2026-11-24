@@ -41,7 +41,7 @@
 //! MARKET and SL-M) and `trigger_price` (rupees, None for MARKET and LIMIT). A result
 //! returns the stamp it was recorded with as (slice index, slice open in UTC nanoseconds,
 //! step number). The session's own controls (an exit it asks for, the entry locks, the
-//! sizing cap, the stop) are in `session`.
+//! sizing cap, the stop) are in `session`; a GTT's commands and answers in `gtts`.
 
 use oa_bt::engine::{BaseBar, Engine, EventStamp, KernelError, VenueCommand, VENUE_REFUSAL_KINDS};
 use oa_bt::exec::{InstrumentId, OrderId, OrderType, RejectCode};
@@ -49,6 +49,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
 use super::errors::{engine_error, venue_result_error};
+use super::gtts::command_into;
 use super::session::role_codes;
 use super::setup::unknown;
 
@@ -173,6 +174,15 @@ fn command<'py>(py: Python<'py>, command: &VenueCommand) -> PyResult<Bound<'py, 
         VenueCommand::Cancel { order } => {
             dict.set_item("command", "cancel")?;
             dict.set_item("order_id", order.0)?;
+        }
+        VenueCommand::PlaceGtt { gtt, order, terms } => {
+            command_into(&dict, ("place_gtt", gtt), Some(order), &terms)?;
+        }
+        VenueCommand::ModifyGtt { gtt, terms } => {
+            command_into(&dict, ("modify_gtt", gtt), None, &terms)?;
+        }
+        VenueCommand::CancelGtt { gtt, terms } => {
+            command_into(&dict, ("cancel_gtt", gtt), None, &terms)?;
         }
     }
     Ok(dict)

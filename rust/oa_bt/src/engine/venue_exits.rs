@@ -101,7 +101,9 @@ impl Engine {
                 .into_iter()
                 .find(|(held, _)| *held == key)
                 .map(|(_, slice)| slice);
-            let due = |slice: usize| next.index.saturating_sub(slice) >= max_hold as usize;
+            // A position carried from an earlier day counts the slices it was held then.
+            let before = self.risk.carried_slices_of(key);
+            let due = |slice: usize| next.index.saturating_sub(slice) + before >= max_hold as usize;
             if entered.is_some_and(due) {
                 return Ok(Some(EngineExit::Risk(RiskExitReason::TimeExit)));
             }

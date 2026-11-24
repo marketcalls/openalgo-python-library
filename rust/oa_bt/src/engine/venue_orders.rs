@@ -1,9 +1,11 @@
 //! Commands out of an external session (`venue`): the units an order is sent with, the
 //! order sent at once or made its position's exit, a modification sent and held until the
 //! venue answers, and a cancellation, which the engine's own withdrawals send at most once
-//! in a slice (`cancel` sends it again at once after a refusal: `venue_session`).
+//! in a slice (`cancel` sends it again at once after a refusal: `venue_session`). A
+//! strategy's GTT order rests as its GTT (`venue_gtts`): nothing of the order is placed,
+//! and withdrawing it asks for its GTT's cancellation until the venue fires it.
 
-use crate::exec::{OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec};
+use crate::exec::{OrderAction, OrderId, OrderRequest, OrderStatus, QuantitySpec, Validity};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 use crate::sizing::round_down_to_venue;
@@ -65,6 +67,11 @@ impl Engine {
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
         }
         let role = self.submission_role(&order.request, order.quantity_units, Some(id));
+        if order.request.validity == Validity::Gtt {
+            // It rests as its GTT, whose place `place_order_gtt` has sent.
+            self.record_role(id, role);
+            return self.progress_exits(at);
+        }
         if exit {
             self.record_role(id, role);
             self.own_strategy_exit(at, id)?;
@@ -135,6 +142,10 @@ impl Engine {
             self.end_order(stamp, id, OrderAction::Cancel, OrderEventKind::Canceled)?;
             self.tidy_venue();
             return Ok(OrderStatus::Canceled);
+        }
+        if let Some(gtt) = self.resting_gtt_of(id) {
+            self.ask_cancel_gtt(stamp.slice, gtt)?;
+            return Ok(status);
         }
         let sent_this_slice = self.venue.cancels_sent.contains(&(id, stamp.slice));
         if self.venue.cancelling.contains(&id) || sent_this_slice {

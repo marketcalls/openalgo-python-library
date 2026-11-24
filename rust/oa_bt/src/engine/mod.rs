@@ -51,7 +51,10 @@
 //! | `Engine::request_exit(InstrumentId, Product, EngineExit)` | while paused or waiting | a live session's exit of a whole position for its own reason (`venue_session`), through the position's exit owner (`venue_owner`); returns what it did (`ExitRequest`: sent, waits for cancels, already exiting, flat, market closed) |
 //! | `Engine::request_limit_exit(InstrumentId, Product, EngineExit, limit)` | as `request_exit` | the same exit as LIMIT orders at `limit` rupees, the price rule's marketable fallback (`venue_protect`) |
 //! | `Engine::push_tick(InstrumentId, price, at)` | as `apply_fill` | tick mode (`venue_ticks`): the session's last price at `at` ratchets the instrument's legs (the broker's stop follows under its throttle, `venue_legs`), exits a target it reaches through the exit owner, marks the position and runs the daily loss limit and drawdown halt on that mark; a stop it reaches is the broker's |
-//! | `Engine::protect(InstrumentId, Product)` | while paused or waiting | a live session places a leg's stop again at its level for what its exits leave, when none works and no exit holds the position (`venue_protect`); returns what it did (`Protect`: placed, waits for cancels, stop works, exiting, no stop level, flat, market closed) |
+//! | `Engine::protect(InstrumentId, Product)` | while paused or waiting | a live session places a leg's stop again at its level for what its exits leave, when none works and no exit holds the position (`venue_protect`; a CNC or NRML leg's stop GTT also while the market is closed, or the leg exited when the price has crossed its stop, `venue_gtt_protect`); returns what it did (`Protect`: placed, waits for cancels, stop works, exiting, no stop level, flat, market closed, stop crossed) |
+//! | `Engine::apply_gtt_placed(GttId)`, `apply_gtt_refused`, `apply_gtt_modified`, `apply_gtt_modify_refused`, `apply_gtt_cancelled`, `apply_gtt_cancel_refused`, `apply_gtt_ended(GttId, GttEnd)` | as `apply_fill` | a live session's answers about its GTTs (`venue_gtt_answers`): a CNC or NRML leg's stop GTT and a strategy's GTT order, placed with `VenueCommand::PlaceGtt` and kept with `ModifyGtt` and `CancelGtt` (`venue_gtts`) |
+//! | `Engine::apply_gtt_triggered(GttId, at)` | as `apply_fill` | the venue fired a GTT: returns the kernel order its child is followed as (`venue_gtt_child`) |
+//! | `Engine::gtt_view(GttId)`, `gtt_views(InstrumentId, Product)` | any time | a GTT's state, terms, pending modification and child (`venue_gtts`) |
 //! | `Engine::reprice_exit(OrderId, limit)` | while paused or waiting | a live session modifies a leg's stop (or the engine's exit) to a LIMIT at `limit` rupees for the order's total units, partly filled or not; sent now (true) or with the answer to the modification that waits (false); the repriced stop exits the position (`venue_protect`) |
 //! | `Engine::lock_entries(reason)`, `Engine::unlock_entries(reason)`, `entry_locks` | any time | a live session's entry locks, reasons in a set (names with no spaces around them): while any is set, entries and adds are rejected `live_lock` (`venue_gates`) |
 //! | `Engine::cap_sizing_equity(rupees)`, `Engine::daily_loss_measure()` | any time | a live session's cap on the engine default's sizing equity; the strategy's daily loss measure (`venue_session`) |
@@ -60,6 +63,8 @@
 //! | `Engine::apply_external_fill(InstrumentId, Product, Side, units, price, at, ExitReason)` | as `apply_fill` | a live session's fill with no order of its own (`venue_external`): the broker closed or reduced the position by itself; recorded through `execute_fill`, flagged `external`, then the closing orders are fitted to what is left; refused whole unless it only closes or reduces (`beyond_position`) |
 //! | `Engine::live_state()` | any time | a live session's state as plain data that survives a JSON round trip (`venue_state`): positions with tranches, legs, working orders with roles and terms, pending modifies and cancels, exits and leg stops, the daily loss totals, the trading state, counters, cash |
 //! | `Engine::restore_live_state(&StateValue)` | once, in a session built for a restart, after its catch-up and before any order | the saved state put back as it stood (`venue_state`), but for the entry locks (the session keeps its own) and a sizing cap the session has set; returns (saved id, new id) of each restored working order; refused whole (`LiveStateError`), also for parts that do not hold together and for a state saved while the session closed |
+//! | `Engine::carried_state()` | once the day's session has closed (after its close, or `stop_session`) | `live_state` at the close without its DAY parts, for the next trading day's session (`venue_state::carry`): positions with tranches, legs, the GTTs at the venue and the GTT orders, cash, the trading state, the daily loss measure's totals, the slices held |
+//! | `Engine::restore_carried_state(&StateValue)` | once, in a session of a later trading day, after its catch-up and before any order | the carried state put back, the GTTs and GTT orders under new ids (`CarriedIds`); the daily loss measure and the trading state start the session as a backtest's do at a session boundary; refused whole (`LiveStateError`) |
 //! | `Engine::market_fill_price(InstrumentId, Side, bar_open, open)` | any time | the price a backtest fills a MARKET order at, at the open of a bar the caller names, by the run's slippage rule; records nothing (`market_fill`): what a live session's day summary sets its MARKET fills against |
 //! | `Engine::stop_session()` | any time | a live session ends where it stands: nothing is sent, working orders and open positions are reported as they are (a strategy exit never sent ends `Canceled`), the slice in progress is closed for the records as step 8 closes a session (the day's contract notes settled, then its position-history and equity rows), the undelivered events are returned (`venue_session`) |
 //! | `Engine::finish()` | after `Pause::Finished` or `stop_session` | the `RunOutput` |
@@ -107,7 +112,7 @@
 //! |---|---|---|
 //! | 1 session open, reference events | `steps::open_phase` (resumed by `steps::resume_open_phase` after a timer pause); intraday times resolved lazily by `session::session_times`; GTTs older than 360 days re-created (`gtt::renew_old_gtts`, GTT-2); futures switches are planned before the run (`futures`); then, under a delay, the cancellations and modifications whose delay has ended (`held_changes::apply_held_changes`, stamped in step 2) | times, GTTs and rolls yes; lot-size change events no |
 //! | 2 fills at the open | `steps::step_open_fills`: per instrument the risk exits of step 6 (`risk_exits_at_open`) and the engine's exits after unfilled GTT children (`gtt_fire::gtt_exits_at_open`), then `fills::fill_queued` (eligible when the open is at or after `decided_at`, SPEC-35, or the end of the order's delay, `delay`; a missing bar keeps the order queued, SPEC-06; entry window and margin checked at the fill bar; under a fill model they fill in step 3 instead, `fill_model`), the time exit, then `session::square_off_at_open` (the square-off timer, SPEC-05); after every instrument, `rebalance::fill_rebalance_buys` (the buys of a rebalance, after its sales), then `roll::roll_due_futures` (the futures auto-roll, near leg first, SPEC-19, GTT-9). In a slice where a timer is due, `timers::fill_due_orders` runs the engine exits and queued orders first, `timers::timers_pause` returns `Pause::Timers`, and `step_open_fills` then fills what the timers placed | MARKET orders, converted stop-limit exits, timers, square-off, rolls |
-//! | 3 resting orders, leg levels | first a portfolio run's account breach found while the slice was open cancels the working entries and adds (`account_breach`); then `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12), `gtt_fire::test_gtts` (CNC and NRML levels and GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
+//! | 3 resting orders, leg levels | first a portfolio run's account breach found while the slice was open cancels the working entries and adds (`account_breach`); then `steps::step_levels` -> `legs::test_leg_levels` -> `rms::LegState::test_bar` (MIS; an option's stop as the segment's stop-limit, R12; a CNC or NRML leg's targets alike, its stop fired as its GTT, `gtt_levels`), `gtt_fire::test_gtts` (strategy GTT orders), `resting::test_resting_orders` (LIMIT, SL, SL-M), exits through `fills::execute_fill`; then, under a fill model, the queued orders at the model's price (`fill_model::fill_queued_at_model`); a live session on ticks (`venue_ticks`) | yes |
 //! | 4 ratchets | `steps::step_ratchets` -> `legs::ratchet_legs` -> `rms::LegState::ratchet`, then `gtt::sync_gtts` (GTTs follow the levels, GTT-3); a live session on ticks | yes |
 //! | 5 mark | `steps::step_mark`: close, or last close and stale; the open trades see the slice's bar (`excursion`) | yes |
 //! | 6 aggregate rules | `aggregate::step_aggregate_rules`: daily loss limit, daily profit target (`daily_caps`), drawdown halt; their exits at the next open (`risk_exits_at_open`, step 2) or the last close; the session boundary in step 1 (`risk_session_open`); a portfolio run's account breach after them, or in step 1 when it was found between slices (`account_breach`) | yes (combined rules: Phase 3) |
@@ -160,11 +165,17 @@
 //! | `venue_ends` | Its rejections and cancellations, and the slice every venue result is recorded in |
 //! | `venue_answers` | The venue's answers to the cancellations and modifications it was sent |
 //! | `venue_clock` | The end of a slice: a session close that waits for the venue to end its orders, the next open reached at the close of the slice before |
+//! | `venue_command` | `VenueCommand`: what a live session asks of its venue, for an order or a GTT |
 //! | `venue_error` | `VenueError`: a venue result that cannot be recorded, with its kind |
 //! | `venue_roles` | What each order of a live session is for: `OrderRole`, `EngineExit`, `RiskExitReason`; an order against the position beyond its closing side's room is an entry (a MARKET one is judged in the room the leg's stop makes for it, and the exit owner sends it), and a modification keeps the role |
 //! | `venue_session` | A live session's controls: an exit it asks for and what came of it (`ExitRequest`), the entry locks, the sizing cap, the daily loss measure, the stop where it stands |
 //! | `venue_gates` | The entry gates a live session adds at submission: the entry locks, nothing in flight, a position at most the freeze quantity |
 //! | `venue_group` | A live session's strategy on an instrument others of its strategies trade: the side gate, market orders only, a closing order's margin rejection (`GroupSide`) |
+//! | `venue_gtts` | A live session's GTTs: what it follows of each (`GttTerms`, `GttView`), the place, modify and cancel commands, the queries |
+//! | `venue_gtt_sync` | A CNC or NRML leg's stop GTT kept on its leg: placed, cut and moved under the one-minute throttle, cancelled |
+//! | `venue_gtt_answers` | The venue's answers about a GTT: placed, refused, modified or not, cancelled or not, ended (`GttEnd`) |
+//! | `venue_gtt_child` | A fired GTT's child followed as an order; a child not filled through a base bar cancelled, then the engine's exit |
+//! | `venue_gtt_protect` | A CNC or NRML leg protected again: a new stop GTT, or an exit when the price has crossed the stop |
 //! | `queries` | `AccountView` and the queries of positions, legs, orders and the account |
 //! | `steps` | Steps 1 to 8 |
 //! | `fills` | Step 2 fills of queued orders, `execute_fill` |
@@ -180,8 +191,9 @@
 //! | `modify` | `modify`: a full replacement of a working order |
 //! | `order_fill` | Where and how an order fills; the price of any fill (slippage, limits) |
 //! | `market_fill` | The price a backtest fills a MARKET order at, for a bar the caller names, recording nothing (a live session's slippage against the backtest) |
-//! | `gtt` | GTTs holding CNC and NRML levels: placement, cancel-then-exit, step-4 sync, renewal |
-//! | `gtt_plan` | Which GTTs a positional leg needs (GTT-11) and when one is modified (GTT-3) |
+//! | `gtt` | The GTT holding a CNC or NRML position's stop: placement, cancel-then-exit, step-4 sync, renewal |
+//! | `gtt_plan` | The stop GTT a positional leg needs (design 20-positional-live P6) and when it is modified (GTT-3) |
+//! | `gtt_levels` | A CNC or NRML leg against a bar: its targets as an MIS leg's, its stop by its GTT, in the order of step 3 |
 //! | `gtt_fire` | Step 3 for GTTs, the child fill, the engine's exit after an unfilled child |
 //! | `gtt_orders` | Strategy GTT orders (`validity="gtt"`), the per-segment order shape |
 //! | `accounting` | Slippage, margin and charges of a fill; contract notes at the session close |
@@ -221,7 +233,7 @@
 //! (entry, add, reduce, exit by fraction, `reverse=True`, modification), GTT orders,
 //! the quantity, tick, freeze, product, entry-window, market-closed and reverse checks,
 //! leg rules (stop, targets, every trail form, breakeven, `after_first_target`)
-//! engine-held on MIS and held as GTTs on CNC and NRML, the square-off, timers
+//! engine-held, with a CNC or NRML leg's stop held as a GTT, the square-off, timers
 //! (`self.at`, `self.every`), charges on every fill with contract-note rounding, the
 //! dated default slippage and margin tables (cash, MIS with leverage on request, long
 //! options, futures at the default of D23 or the run's own `margin=`), delivery cash
@@ -260,6 +272,7 @@ mod futures;
 mod futures_plan;
 mod gtt;
 mod gtt_fire;
+mod gtt_levels;
 mod gtt_orders;
 mod gtt_plan;
 mod held_changes;
@@ -296,6 +309,7 @@ mod venue;
 mod venue_answers;
 mod venue_checks;
 mod venue_clock;
+mod venue_command;
 mod venue_cover;
 mod venue_ends;
 mod venue_error;
@@ -305,6 +319,11 @@ mod venue_external;
 mod venue_fills;
 mod venue_gates;
 mod venue_group;
+mod venue_gtt_answers;
+mod venue_gtt_child;
+mod venue_gtt_protect;
+mod venue_gtt_sync;
+mod venue_gtts;
 mod venue_legs;
 mod venue_orders;
 mod venue_owner;
@@ -347,7 +366,9 @@ pub use timers::{TimerCount, TimerSpec};
 pub use venue::{Venue, VenueCommand};
 pub use venue_error::{Pending, VenueError, UNKNOWN_ORDER_KIND, VENUE_REFUSAL_KINDS};
 pub use venue_group::GroupSide;
+pub use venue_gtt_answers::{GttEnd, GTT_REFUSED_LOCK};
+pub use venue_gtts::{GttTerms, GttView};
 pub use venue_protect::Protect;
 pub use venue_roles::{EngineExit, OrderRole, RiskExitReason};
 pub use venue_session::ExitRequest;
-pub use venue_state::{LiveStateError, StateValue, LIVE_STATE_LAYOUT};
+pub use venue_state::{CarriedIds, LiveStateError, StateValue, LIVE_STATE_LAYOUT};

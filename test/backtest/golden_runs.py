@@ -11,7 +11,8 @@ Four runs, each a different path through the engine:
     futures_roll       an `on_bar` strategy on the NIFTY futures series, daily, across
                        the roll from the September to the October 2024 contract
     gtt_positional     a positional strategy on daily bars that buys a dip with a GTT
-                       order and holds its stop and target as GTTs (CNC)
+                       order and holds its stop as a GTT and its target by the engine
+                       (CNC)
 
 Every run charges the default costs and slippage. The bars are made from integers only
 (a 64-bit linear congruential generator walking in ticks), so they are the same bits on
@@ -239,8 +240,9 @@ def futures_roll() -> bt.Result:
 
 class GttDipBuyer(bt.Strategy):
     """While flat and above its 10-day mean, rests a GTT buy of 50 shares 1 percent
-    below the close, with a 3 percent stop and a 5 percent target held as GTTs; a GTT
-    that has not fired in 5 sessions is cancelled and placed again."""
+    below the close, with a 3 percent stop held as a GTT and a 5 percent target held by
+    the engine; a GTT buy that has not fired in 5 sessions is cancelled and placed
+    again."""
 
     symbol, exchange, interval = "INFY", "NSE", "D"
     product = "CNC"

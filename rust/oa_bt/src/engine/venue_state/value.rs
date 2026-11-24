@@ -129,12 +129,26 @@ pub(super) struct Read<'a> {
     path: String,
 }
 
+/// The root of a path into a same-day state: the call that returned it.
+pub(super) const LIVE_ROOT: &str = "live_state";
+
+/// The root of a path into a carried state: the call that returned it (`carry`).
+pub(super) const CARRIED_ROOT: &str = "carried_state";
+
 impl<'a> Read<'a> {
     /// The root of a saved state.
     pub(super) fn root(value: &'a StateValue) -> Read<'a> {
         Read {
             value,
-            path: "live_state".to_string(),
+            path: LIVE_ROOT.to_string(),
+        }
+    }
+
+    /// The root of a carried state: its errors name `carried_state` (`carry`).
+    pub(super) fn carried_root(value: &'a StateValue) -> Read<'a> {
+        Read {
+            value,
+            path: CARRIED_ROOT.to_string(),
         }
     }
 

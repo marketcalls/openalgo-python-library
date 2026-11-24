@@ -32,7 +32,7 @@ Violations = list[str]
 # Price and where it filled, or None when the child cannot fill in its bar.
 Outcome = tuple[str, Decimal] | None
 
-EXIT_REASON_BY_LEG = {"stop": "leg_sl", "target": "leg_target"}
+EXIT_REASON_BY_LEG = {"stop": "leg_sl"}
 UNFILLED = "gtt_child_unfilled"
 
 
@@ -62,7 +62,8 @@ def child_outcome(bar: Bar, trigger: Event, sells: bool) -> Outcome:
     """Where and at what price the child fills in the bar its GTT fired in, or None."""
     level = trigger_of(trigger, trigger["fired_leg"])
     limit = rupees(trigger["child_limit_rupees"])
-    approached_upward = (trigger["fired_leg"] == "target") == sells
+    # A stop is reached from above when the child sells (a long), from below otherwise.
+    approached_upward = not sells
     if not is_beyond(bar.open, level, approached_upward):
         return "level", level
     if is_beyond(bar.open, limit, upward=sells):
@@ -99,7 +100,7 @@ def _trigger_in_force_violations(case: Case, trigger: Event, where: str) -> Viol
     if trigger_of(in_force, trigger["fired_leg"]) != level:
         return [f"{where} fires at {level}, not at the trigger in force"]
     bar = bars_by_slice(case)[trigger["instrument"]].get(trigger["slice_ist"])
-    approached_upward = (trigger["fired_leg"] == "target") == _sells(case, trigger)
+    approached_upward = not _sells(case, trigger)
     if bar is None:
         return [f"{where} fires in a slice without a bar"]
     reached = bar.high if approached_upward else bar.low

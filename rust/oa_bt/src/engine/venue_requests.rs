@@ -2,19 +2,25 @@
 //! carry yet (`KernelError::NotBuilt`), and the modifications it cannot send. A backtest
 //! refuses none of them here.
 //!
+//! Leg rules on CNC and NRML are taken: their stop is a GTT at the broker (`venue_gtts`),
+//! their targets the kernel's on ticks (`venue_ticks`). So is a strategy's GTT order that
+//! opens or adds (`validity="gtt"`), which rests as a GTT.
+//!
 //! | Refused | Why |
 //! |---|---|
-//! | Leg rules on CNC or NRML | those legs are held as GTTs, which a session does not carry; MIS legs are the broker's and the kernel's (`venue_legs`, `venue_ticks`) |
-//! | A GTT order, `rebalance()` | not built for a live session |
-//! | Modifying a partly filled order | not built: cancel it and place a new one for the rest |
+//! | A GTT order that only reduces, or any GTT order against the position held | not built for a live session: a resting GTT exit beside the leg's stop GTT would be a second exit at the broker, and both could fire (a backtest cancels the stop GTT before such an exit fills; the broker does not); use `stop=` and `target=` |
+//! | `rebalance()` | not built for a live session |
+//! | Modifying a partly filled order | not built: cancel it and place a new one |
+//! | Modifying a GTT order | not built: cancel it and place a new one. The venue holds only its GTT, whose answers carry the GTT's terms and not the order's request (its leg rules, tag, units), and a GTT is modified at most once a minute in live (04-execution 4.4 item 5): the replacement would wait up to a minute, with no answer path to apply it to the order |
 //! | Modifying an order whose last modification waits, or an exit not sent yet | one modification at a time; an exit waiting for its cancels has nothing at the venue |
 //! | A replacement left with no units | the venue takes no order of none: cancel it |
 
 use crate::exec::{ExecError, Order, OrderRequest, Validity};
+use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
-use super::gtt::held_as_gtt;
 use super::kernel::Engine;
+use super::venue_roles::goes_against;
 
 fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
     KernelError::NotBuilt { feature, instead }
@@ -29,21 +35,27 @@ fn invalid(reason: &str) -> KernelError {
 impl Engine {
     /// Refuse, in an external session, what the venue cannot carry yet (module docs).
     ///
-    /// Errors: `NotBuilt` for leg rules on CNC or NRML, a GTT order and a rebalance order.
+    /// Errors: `NotBuilt` for a GTT order that only reduces or goes against the position
+    /// held, and a rebalance order.
     pub(super) fn check_venue_request(&self, request: &OrderRequest) -> Result<(), KernelError> {
         if !self.is_external() {
             return Ok(());
         }
-        if !request.leg_rules.is_empty() && held_as_gtt(request.product) {
+        let instead = "hold the position's exits with stop= and target=, or place a DAY order";
+        if request.validity == Validity::Gtt && request.reduce_only {
             return Err(not_built(
-                "stop=, target=, trailing and breakeven on CNC or NRML in a live session",
-                "live trading is MIS only: trade MIS, where the broker holds the stop",
+                "a GTT order that only reduces, in a live session",
+                instead,
             ));
         }
-        if request.validity == Validity::Gtt {
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        if request.validity == Validity::Gtt && goes_against(self.held_units(key), request.side) {
             return Err(not_built(
-                "a GTT order in a live session",
-                "live trading is MIS only: place a DAY order",
+                "a GTT order against the position held, in a live session",
+                instead,
             ));
         }
         if request.rebalance {
@@ -59,10 +71,17 @@ impl Engine {
     /// that has partly filled, one whose last modification is not answered yet, and an
     /// exit not sent yet.
     ///
-    /// Errors: `NotBuilt` for a partly filled order; `Exec(InvalidRequest)` for the others.
+    /// Errors: `NotBuilt` for a partly filled order and a GTT order; `Exec(InvalidRequest)`
+    /// for the others.
     pub(super) fn check_venue_replacement(&self, order: &Order) -> Result<(), KernelError> {
         if !self.is_external() {
             return Ok(());
+        }
+        if order.request.validity == Validity::Gtt {
+            return Err(not_built(
+                "modifying a GTT order in a live session",
+                "cancel the order and place a new one",
+            ));
         }
         if order.filled_units > 0.0 {
             return Err(not_built(

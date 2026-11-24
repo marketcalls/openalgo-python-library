@@ -73,11 +73,13 @@ its date.
     derivation         numbered steps (slice_ist, step, text, cites) that walk the
                        sequence slice by slice and justify every expected number
 
-Positional products (04-execution 4.4). On a CNC or NRML position the stop and target are
-held as a GTT: placed with the fill that opens the position, modified by a trail or
-breakeven, fired by a bar that reaches a trigger, after which its child LIMIT fills or is
-cancelled unfilled and the engine exits at the next bar open. A gtt event has the keys
-gtt_id, instrument, quantity_units, stop_trigger_rupees, target_trigger_rupees,
+Positional products (04-execution 4.4, 20-positional-live P6). On a CNC or NRML position
+the stop is held as one SINGLE GTT for the whole position and the targets by the engine,
+as an MIS leg's are: the GTT is placed with the fill that opens the position, modified by
+a trail, a breakeven, an add or a target's partial exit, and fired by a bar that reaches
+its trigger, after which its child LIMIT fills or is cancelled unfilled and the engine
+exits at the next bar open. A gtt event has the keys gtt_id, instrument, quantity_units,
+stop_trigger_rupees, target_trigger_rupees (always null: no GTT holds a target),
 fired_leg, child_limit_rupees and price_rupees; which of them are set depends on its name
 (vocabulary.GTT_EVENT_FIELDS). The level timeline keeps a stop whose GTT has fired at its
 level until the position closes; the gtt events say whether its child filled.
@@ -249,7 +251,7 @@ test_gtt_modifications_follow_the_rules = case_rule(checks_gtt.gtt_modifications
 test_gtts_are_placed_with_the_fill_that_opens_the_position = case_rule(
     checks_gtt.gtts_are_placed_with_the_fill_that_opens_the_position
 )
-test_positional_levels_are_held_by_gtts = case_rule(checks_gtt.positional_levels_are_held_by_gtts)
+test_positional_stops_are_held_by_gtts = case_rule(checks_gtt.positional_stops_are_held_by_gtts)
 test_engine_exits_cancel_the_gtt_first = case_rule(checks_gtt.engine_exits_cancel_the_gtt_first)
 test_gtt_children_carry_the_buffer = case_rule(checks_gtt_children.gtt_children_carry_the_buffer)
 test_gtt_children_fill_by_the_limit_rule = case_rule(

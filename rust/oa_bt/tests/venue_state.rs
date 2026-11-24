@@ -156,6 +156,7 @@ impl Lagging {
                     VenueCommand::Cancel { order } => {
                         self.answers.push((slice + 1, Answer::Cancel(order)));
                     }
+                    other => panic!("an MIS session sends no GTT command: {other:?}"),
                 }
             }
         }
@@ -531,6 +532,7 @@ impl Renumber {
             VenueCommand::Cancel { order } => VenueCommand::Cancel {
                 order: saved(order),
             },
+            gtt => gtt,
         }
     }
 

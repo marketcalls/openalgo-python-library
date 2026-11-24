@@ -6,9 +6,9 @@
 //!   (`instrument` the registration index, `product` "CNC", "MIS" or "NRML"), through the
 //!   position's exit owner: the orders on its closing side are cancelled, then it exits.
 //!   `reason` is "square_off" or a risk reason of `RISK_EXIT_REASONS` ("unprotected",
-//!   "stop_rejected", "stop_unfilled", "kill_switch", "account_loss", "account_profit",
-//!   "operator_stop", and the kernel's own "daily_loss", "daily_profit", "drawdown",
-//!   "time_exit"); its "place" command carries
+//!   "stop_rejected", "stop_unfilled", "stop_crossed", "kill_switch", "account_loss",
+//!   "account_profit", "operator_stop", and the kernel's own "daily_loss", "daily_profit",
+//!   "drawdown", "time_exit"); its "place" command carries
 //!   the role "square_off", or "risk_exit" with the reason. Taken while the session waits
 //!   or is paused at a decision point. Returns what it did, one of `EXIT_REQUESTS`:
 //!   "sent", "waits_for_cancels" (sent once the orders on the closing side have ended, if

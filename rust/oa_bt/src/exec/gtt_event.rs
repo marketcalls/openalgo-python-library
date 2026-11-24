@@ -4,12 +4,20 @@
 //!
 //! | Event | Step | Fields set |
 //! |---|---|---|
-//! | `GttPlaced` | 2 after the fill that opened the position, 7 for a strategy GTT, 4 after a re-plan, 1 for a re-creation | quantity, triggers |
-//! | `GttModified` | 4 (a trail, a breakeven, an add or a partial exit) | quantity, triggers |
-//! | `GttTriggered` | 3 | quantity, triggers, fired leg, child limit |
+//! | `GttPlaced` | 2 after the fill that opened the position, 7 for a strategy GTT, 4 after a re-plan, 1 for a re-creation | quantity, trigger |
+//! | `GttModified` | 4 (a trail, a breakeven, an add or a partial exit) | quantity, trigger |
+//! | `GttTriggered` | 3 | quantity, trigger, fired leg, child limit |
 //! | `GttChildFilled` | 3 | quantity, child limit, price |
 //! | `GttChildCanceled` | 3 | quantity, child limit |
-//! | `GttCanceled` | the step of the engine exit it precedes, 7 when the strategy cancels, 1 for a re-creation | quantity, triggers |
+//! | `GttCanceled` | the step of the engine exit it precedes, 7 when the strategy cancels, 1 for a re-creation | quantity, trigger |
+//! | `GttRejected` | a live session: the venue refused its place (`venue_gtt_answers`) | quantity, trigger |
+//! | `GttEnded` | a live session: it ended at the venue without the session asking (expired, rejected after placement, cancelled outside the session) | quantity, trigger |
+//!
+//! A live session writes `GttPlaced`, `GttModified` and `GttCanceled` when the venue
+//! confirms the place, the modification or the cancellation, in the slice in progress.
+//!
+//! The trigger is `stop_trigger_rupees` for a position's stop and `order_trigger_rupees`
+//! for a strategy's GTT order. No GTT holds a target (design 20-positional-live P6).
 
 use crate::model::Product;
 
@@ -32,6 +40,10 @@ pub enum GttEventName {
     ChildCanceled = 4,
     /// The GTT was cancelled.
     Canceled = 5,
+    /// The venue refused its place.
+    Rejected = 6,
+    /// It ended at the venue without the session asking.
+    Ended = 7,
 }
 
 impl GttEventName {
@@ -44,6 +56,8 @@ impl GttEventName {
             GttEventName::ChildFilled => "GttChildFilled",
             GttEventName::ChildCanceled => "GttChildCanceled",
             GttEventName::Canceled => "GttCanceled",
+            GttEventName::Rejected => "GttRejected",
+            GttEventName::Ended => "GttEnded",
         }
     }
 }
@@ -58,8 +72,8 @@ pub struct GttEvent {
     pub product: Product,
     /// The child order's quantity.
     pub quantity_units: f64,
+    /// The trigger of a position's stop.
     pub stop_trigger_rupees: Option<f64>,
-    pub target_trigger_rupees: Option<f64>,
     /// The trigger of a strategy's own GTT.
     pub order_trigger_rupees: Option<f64>,
     /// The leg that fired.
@@ -83,10 +97,6 @@ impl GttEvent {
             GttEventName::Triggered | GttEventName::ChildFilled | GttEventName::ChildCanceled
         );
         let trigger = |role| shows_triggers.then(|| gtt.trigger(role)).flatten();
-        let child = gtt
-            .fired
-            .and_then(|role| gtt.leg(role))
-            .map(|leg| leg.child_limit_rupees);
         GttEvent {
             name,
             gtt: gtt.id,
@@ -94,12 +104,9 @@ impl GttEvent {
             product: gtt.product,
             quantity_units: gtt.quantity_units,
             stop_trigger_rupees: trigger(GttLegRole::Stop),
-            target_trigger_rupees: trigger(GttLegRole::Target),
             order_trigger_rupees: trigger(GttLegRole::Order),
-            fired_leg: (name == GttEventName::Triggered)
-                .then_some(gtt.fired)
-                .flatten(),
-            child_limit_rupees: shows_child.then_some(child).flatten(),
+            fired_leg: (name == GttEventName::Triggered).then_some(gtt.leg.role),
+            child_limit_rupees: shows_child.then_some(gtt.leg.child_limit_rupees),
             price_rupees: None,
         }
     }
@@ -116,49 +123,37 @@ impl GttEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::gtt::{GttKind, GttLeg, GttPurpose, GttSlot, GttStatus};
+    use crate::exec::gtt::{GttLeg, GttPurpose, GttStatus};
     use crate::exec::matching::TriggerDirection;
     use crate::model::Side;
 
-    /// Trace 06b's OCO: stop 1473.90 (child 1459.15) and target 1556.65 (child
-    /// 1541.05), its stop fired.
-    fn fired_oco() -> Gtt {
-        let leg = |role, trigger, direction, child| GttLeg {
-            role,
-            trigger_rupees: trigger,
-            direction,
-            child_limit_rupees: child,
-        };
+    /// Trace 06b's stop GTT: trigger 1473.90, child 1459.15, fired.
+    fn fired_stop() -> Gtt {
         Gtt {
             id: GttId(1),
             instrument: InstrumentId(0),
             product: Product::Cnc,
             side: Side::Sell,
             quantity_units: 10.0,
-            kind: GttKind::Oco,
-            legs: vec![
-                leg(GttLegRole::Stop, 1473.9, TriggerDirection::Falling, 1459.15),
-                leg(
-                    GttLegRole::Target,
-                    1556.65,
-                    TriggerDirection::Rising,
-                    1541.05,
-                ),
-            ],
-            purpose: GttPurpose::Protect(GttSlot::Target(0)),
+            leg: GttLeg {
+                role: GttLegRole::Stop,
+                trigger_rupees: 1473.9,
+                direction: TriggerDirection::Falling,
+                child_limit_rupees: 1459.15,
+            },
+            purpose: GttPurpose::Protect,
             status: GttStatus::Triggered,
             created_on: 0,
             eligible_from: 0,
             last_modified_slice: None,
-            fired: Some(GttLegRole::Stop),
         }
     }
 
     #[test]
-    fn a_trigger_event_carries_both_triggers_the_fired_leg_and_its_child_limit() {
-        let event = GttEvent::of(GttEventName::Triggered, &fired_oco());
+    fn a_trigger_event_carries_the_trigger_the_fired_leg_and_its_child_limit() {
+        let event = GttEvent::of(GttEventName::Triggered, &fired_stop());
         assert_eq!(event.stop_trigger_rupees, Some(1473.9));
-        assert_eq!(event.target_trigger_rupees, Some(1556.65));
+        assert_eq!(event.order_trigger_rupees, None);
         assert_eq!(event.fired_leg, Some(GttLegRole::Stop));
         assert_eq!(event.child_limit_rupees, Some(1459.15));
         assert_eq!(event.price_rupees, None);
@@ -166,7 +161,7 @@ mod tests {
 
     #[test]
     fn a_child_fill_carries_the_child_limit_and_the_price_but_no_trigger() {
-        let event = GttEvent::child_filled(&fired_oco(), 1473.9);
+        let event = GttEvent::child_filled(&fired_stop(), 1473.9);
         assert_eq!(event.name.code(), "GttChildFilled");
         assert_eq!((event.stop_trigger_rupees, event.fired_leg), (None, None));
         assert_eq!(event.child_limit_rupees, Some(1459.15));
@@ -175,7 +170,7 @@ mod tests {
 
     #[test]
     fn a_placement_carries_the_triggers_and_nothing_of_a_child() {
-        let event = GttEvent::of(GttEventName::Placed, &fired_oco());
+        let event = GttEvent::of(GttEventName::Placed, &fired_stop());
         assert_eq!(event.quantity_units, 10.0);
         assert_eq!(event.stop_trigger_rupees, Some(1473.9));
         assert_eq!((event.fired_leg, event.child_limit_rupees), (None, None));

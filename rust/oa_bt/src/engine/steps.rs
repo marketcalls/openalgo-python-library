@@ -109,7 +109,8 @@ impl Engine {
         self.roll_due_futures(slice)
     }
 
-    /// Step 3: engine-held leg levels (`legs::test_leg_levels`), then GTTs
+    /// Step 3: leg levels (`legs::test_leg_levels`: engine-held, but for a CNC or NRML
+    /// leg's stop, fired as its GTT, `gtt_levels`), then strategy GTT orders
     /// (`gtt_fire::test_gtts`), then resting DAY orders (`resting::test_resting_orders`),
     /// each across the instruments in registration order. In a live session the venue
     /// fills the resting orders and holds the legs' stops, and the targets are tested on
@@ -125,8 +126,9 @@ impl Engine {
     }
 
     /// Step 4: trail and breakeven ratchets, in force from the next slice
-    /// (`legs::ratchet_legs`); then the GTTs of CNC and NRML legs follow their levels
-    /// (`gtt::sync_gtts`). A live session ratchets on ticks instead (`venue_ticks`).
+    /// (`legs::ratchet_legs`); then the stop GTT of every CNC and NRML leg follows its
+    /// stop and units (`gtt::sync_gtts`). A live session ratchets on ticks instead
+    /// (`venue_ticks`).
     fn step_ratchets(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if self.is_external() {
             return Ok(());

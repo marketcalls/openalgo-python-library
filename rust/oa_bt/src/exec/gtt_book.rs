@@ -98,13 +98,14 @@ impl GttBook {
             .collect()
     }
 
-    /// The active GTTs that hold the levels of a position, in id order.
+    /// The active GTTs that hold the stop of a position, in id order: one (design
+    /// 20-positional-live P6), as `engine::gtt` places them.
     pub fn protecting(&self, instrument: InstrumentId, product: Product) -> Vec<GttId> {
         self.active()
             .filter(|gtt| {
                 gtt.instrument == instrument
                     && gtt.product == product
-                    && matches!(gtt.purpose, GttPurpose::Protect(_))
+                    && gtt.purpose == GttPurpose::Protect
             })
             .map(|gtt| gtt.id)
             .collect()
@@ -121,7 +122,7 @@ impl GttBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::gtt::{GttKind, GttLeg, GttLegRole, GttSlot};
+    use crate::exec::gtt::{GttLeg, GttLegRole};
     use crate::exec::matching::TriggerDirection;
     use crate::model::Side;
 
@@ -132,19 +133,17 @@ mod tests {
             product,
             side: Side::Sell,
             quantity_units: 10.0,
-            kind: GttKind::Single,
-            legs: vec![GttLeg {
+            leg: GttLeg {
                 role: GttLegRole::Stop,
                 trigger_rupees: 1460.0,
                 direction: TriggerDirection::Falling,
                 child_limit_rupees: 1445.4,
-            }],
-            purpose: GttPurpose::Protect(GttSlot::Remainder),
+            },
+            purpose: GttPurpose::Protect,
             status: GttStatus::Active,
             created_on: 0,
             eligible_from: 0,
             last_modified_slice: None,
-            fired: None,
         }
     }
 

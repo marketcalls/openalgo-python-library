@@ -265,9 +265,11 @@ EVENT_KEYS = {
 # GTT orders for positional trades, 04-execution 4.4. The documents describe the life
 # cycle (placed, modified, fired with a child order, child filled or cancelled, cancelled)
 # but do not name its events; the names and fields are the fixture's (specification
-# review GTT-8). Products whose stops and targets are held as GTTs (item 2):
+# review GTT-8). Products whose stop is held as a GTT (item 2):
 GTT_PRODUCTS = ("CNC", "NRML")
-GTT_LEGS = ("stop", "target")
+# The trigger a positional GTT holds, and its fired_leg: the stop. The targets are held by
+# the engine (20-positional-live P6), so target_trigger_rupees is null in every GTT event.
+GTT_LEGS = ("stop",)
 # Default buffer of the child LIMIT beyond the trigger, in percent, by instrument type
 # (04-execution 4.4 item 3, decision GTT-1; configurable per segment).
 GTT_CHILD_BUFFER_PERCENT = {"equity": 1, "future": 1, "option": 5}

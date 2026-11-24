@@ -3,9 +3,10 @@
 //! leg (16-session-design 4, requirements R2 to R7).
 //!
 //! - Leg rules (`stop`, `target`, `targets`, `trail`, `breakeven`, `after_first_target`)
-//!   are taken on MIS orders of a session; on CNC and NRML they raise
-//!   `NotImplementedError` (those legs are held as GTTs).
-//! - A leg's stop is the broker's: once the leg has a stop level (the fill that opens it,
+//!   are taken on orders of every product. A CNC or NRML leg's stop is a GTT the broker
+//!   holds ("place_gtt", `gtts`), its targets, trail and breakeven the kernel's on ticks as
+//!   below; a GTT order (`validity="GTT"`) that only reduces raises `NotImplementedError`.
+//! - An MIS leg's stop is the broker's: once the leg has a stop level (the fill that opens it,
 //!   or a trail or breakeven that sets one) a "place" command with the role "leg_stop"
 //!   goes out for the units filled, a reduce-only "SL-M" at the leg's level for cash
 //!   equity and futures, an "SL" with its limit 5 percent beyond the trigger for options.
@@ -37,7 +38,10 @@
 //!   "waits_for_cancels" when resting orders sent only to close the position take its
 //!   room (they are cancelled, and the stop is placed once they have ended); and nothing
 //!   placed for "stop_works", "exiting" (an exit of the position waits or works),
-//!   "no_stop_level", "flat" and "market_closed".
+//!   "no_stop_level", "flat" and "market_closed". A CNC or NRML leg's stop GTT is placed
+//!   also while the market is closed; "stop_crossed" when the last price is already at or
+//!   beyond the stop: no GTT, the leg exited at market ("risk_exit" "stop_crossed", its
+//!   fills flagged "stop_crossed"), and before the open that exit waits for the open.
 //! - `reprice_exit(order_id, limit_rupees)`: a leg's stop (or the engine's exit) modified
 //!   to a "LIMIT" at the price for the order's total units, partly filled or not; True when
 //!   the "modify" went now, False when it goes with the answer to the one that waits. The

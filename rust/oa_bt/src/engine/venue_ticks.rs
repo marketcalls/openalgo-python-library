@@ -9,13 +9,16 @@
 //! - **Ratchets** (step 4) write `leg_trail_armed` and `leg_breakeven_armed` once each and
 //!   a row of the position history; a stop they move is sent to the broker's stop under
 //!   its throttle (`venue_legs`).
-//! - **The stop** is the broker's: a price at or through it executes nothing here.
+//! - **The stop** is the broker's (an MIS leg's stop order, a CNC or NRML leg's stop GTT):
+//!   a price at or through it executes nothing here.
 //! - **A target** (step 3) the price reaches writes `leg_target_hit` (its level and index)
 //!   and makes the strategy's exit of the target's units: a reduce-only MARKET DAY order
 //!   with the exit reason `leg_target`, taken by the position's exit owner (`venue_owner`)
-//!   as a strategy exit: a full one cancels the stop first, a partial one waits for the
-//!   stop to be modified down (R4). Its fill marks the target filled, and
-//!   `after_first_target="breakeven"` then moves the stop. A target fires once per leg:
+//!   as a strategy exit: a full one cancels the stop first (a stop GTT's cancellation
+//!   confirmed before the exit is sent), a partial one waits for the stop to be modified
+//!   down (R4; a stop GTT cut to the units left). The legs of every product are held so,
+//!   CNC and NRML as MIS (design 20-positional-live P6). Its fill marks the target filled,
+//!   and `after_first_target="breakeven"` then moves the stop. A target fires once per leg:
 //!   an exit of it that ends without filling (rejected by the broker, cancelled) is not
 //!   made again on a later tick, so a broker that keeps refusing it is not sent one exit
 //!   per tick and the stop is not cut and restored each time; the session retries a
@@ -29,7 +32,7 @@
 //! above. While the market is closed (the session's closing slice) a tick only marks.
 
 use crate::exec::{InstrumentId, Order, OrderId, OrderRequest, QuantitySpec};
-use crate::model::{Product, TsNanos};
+use crate::model::TsNanos;
 use crate::portfolio::PositionKey;
 use crate::rms::{ExitReason, LevelHit, LevelKind};
 
@@ -95,7 +98,7 @@ impl Engine {
         let keys: Vec<PositionKey> = self
             .leg_order()
             .into_iter()
-            .filter(|key| key.instrument == instrument && key.product == Product::Mis)
+            .filter(|key| key.instrument == instrument)
             .collect();
         for key in keys {
             let outcome = match self.leg_mut(key) {

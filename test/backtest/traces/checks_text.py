@@ -22,6 +22,7 @@ CITABLE_SOURCES = (
     "10-simple-path ",
     "12-position-sizing ",
     "14-strategy-api ",
+    "20-positional-live ",
     "strategy-module ",
     "vectors: ",
 )

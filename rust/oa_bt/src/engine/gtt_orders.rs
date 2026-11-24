@@ -11,12 +11,16 @@
 //! fires, the order fills through the checks of the fill bar at the child's price
 //! (`gtt_fire`). A modification replaces the GTT's trigger and child in full
 //! (`GttModified`), from the next base bar; cancelling the order cancels the GTT.
+//!
+//! In a live session the GTT's place is sent instead (`VenueCommand::PlaceGtt`, carrying
+//! the order's id) and the GTT is in force once the venue confirms it; the venue fires it,
+//! and the order then works at the venue as its child (`venue_gtt_child`).
 
 use crate::exec::gtt::child_limit;
 use crate::exec::segment::venue_order_type;
 use crate::exec::{
-    ExecError, Gtt, GttAction, GttEventName, GttKind, GttLeg, GttLegRole, GttPurpose, GttStatus,
-    OrderId, OrderRequest, OrderType, TriggerDirection, Validity,
+    ExecError, Gtt, GttAction, GttEventName, GttLeg, GttLegRole, GttPurpose, GttStatus, OrderId,
+    OrderRequest, OrderType, TriggerDirection, Validity,
 };
 
 use super::error::KernelError;
@@ -40,7 +44,7 @@ impl Engine {
         })
     }
 
-    /// The single leg of a GTT order: its trigger, the side the price reaches it from
+    /// The trigger of a GTT order: its price, the side the price reaches it from
     /// (the decision price, the last close), and its child limit.
     ///
     /// Errors: `Exec` for a price that is unusable or an order with no last close to
@@ -95,21 +99,24 @@ impl Engine {
         }
         let leg = self.order_gtt_leg(order)?;
         let id = self.gtts.book.next_id();
-        self.gtts.book.insert(Gtt {
+        let gtt = Gtt {
             id,
             instrument: placed.request.instrument,
             product: placed.request.product,
             side: placed.request.side,
             quantity_units: placed.quantity_units,
-            kind: GttKind::Single,
-            legs: vec![leg],
+            leg,
             purpose: GttPurpose::Order(order),
             status: GttStatus::Active,
             created_on: self.trade_day(stamp),
             eligible_from: self.fills_from(&placed),
             last_modified_slice: None,
-            fired: None,
-        })?;
+        };
+        if self.is_external() {
+            self.send_place_gtt(gtt, Some(order))?;
+            return Ok(());
+        }
+        self.gtts.book.insert(gtt)?;
         self.emit_gtt(stamp, GttEventName::Placed, id);
         Ok(())
     }
@@ -134,7 +141,7 @@ impl Engine {
         let (quantity, decided_at) = (replaced.quantity_units, self.fills_from(replaced));
         self.gtts.book.apply(id, GttAction::Modify)?;
         if let Some(gtt) = self.gtts.book.get_mut(id) {
-            gtt.legs = vec![leg];
+            gtt.leg = leg;
             gtt.quantity_units = quantity;
             gtt.eligible_from = decided_at;
             gtt.last_modified_slice = Some(stamp.slice);

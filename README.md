@@ -246,10 +246,11 @@ print(result.metrics["net_profit"], result.metrics["max_drawdown"])
 
 - **Strategies** as a class with `on_bar`, as entry and exit conditions, or as arrays;
   `bt.optimize` runs parameter sweeps in parallel.
-- **Orders and risk:** market, limit and stop orders, GTT (SINGLE and OCO) for
-  positional trades, stops, targets and trailing stops per leg, daily loss limit,
-  drawdown halt, cooldown, time exit, scale-in limits, `target()` positions and
-  position sizing (fixed, percent, risk-based, ATR, your own function).
+- **Orders and risk:** market, limit and stop orders, GTT stops for positional
+  trades (one SINGLE GTT per position, targets held by the engine), stops, targets
+  and trailing stops per leg, daily loss limit, drawdown halt, cooldown, time exit,
+  scale-in limits, `target()` positions and position sizing (fixed, percent,
+  risk-based, ATR, your own function).
 - **Futures** with automatic roll before expiry, a back-adjusted signal series,
   daily mark to market, and margin of 5x by default (set your own with `margin=`).
 - **Data** from OpenAlgo (broker history or Historify) or your own DataFrames and
