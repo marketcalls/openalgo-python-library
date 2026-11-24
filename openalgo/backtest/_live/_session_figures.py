@@ -47,7 +47,6 @@ from ..errors import LiveError
 from ._fill_comparison import DayRows
 from ._plan_catch_up import INSTRUMENT
 from ._session_slippage import Slippage
-from ._venue_requests import LIVE_PRODUCT
 
 #: The key of a strategy's saved state that holds its figures (`_session_saved`).
 FIGURES = "figures"
@@ -272,15 +271,17 @@ def _values(figures: Any) -> tuple[Any, ...]:
 
 
 def _earlier(name: str, state: Mapping[str, Any]) -> Earlier:
-    """Strategy `name`'s `Earlier` from its saved state: the instrument and the MIS
-    position its kernel session's live state held (none when it saved none). Raises
-    LiveError for a live state that cannot be read."""
+    """Strategy `name`'s `Earlier` from its saved state: the instrument and the position
+    its kernel session's live state held (none when it saved none). A strategy trades its
+    instrument in one product, and this start does not run it to say which, so its
+    position is the one its saved state holds of the instrument, in the product saved
+    with it. Raises LiveError for a live state that cannot be read."""
     live_state = state.get("live_state") or {}
     try:
         units = sum(
             float(position["quantity_units"])
             for position in live_state.get("positions", [])
-            if position.get("instrument") == INSTRUMENT and position.get("product") == LIVE_PRODUCT
+            if position.get("instrument") == INSTRUMENT
         )
         instruments = live_state.get("instruments") or [{}]
         symbol = str(instruments[INSTRUMENT].get("symbol", ""))

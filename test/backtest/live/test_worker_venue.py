@@ -32,6 +32,7 @@ class Session:
             self.engine,
             strategy=STRATEGY,
             instruments=[SBIN],
+            product="MIS",
             session=ready.session,
             request_ids=itertools.count(1),
             alerts=rig.alerts,

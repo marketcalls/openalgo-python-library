@@ -160,7 +160,7 @@ def test_the_books_of_one_leg_are_read_for_its_instrument_in_mis_only():
             }
         ],
     )
-    books = leg_books(positionbook, tradebook, orderbook, "SBIN", "NSE")
+    books = leg_books(positionbook, tradebook, orderbook, "SBIN", "NSE", product="MIS")
     assert books.units == 10
     assert books.trades == (Trade("1", "BUY", 10, 500.0),)
     [row] = books.rows
@@ -190,11 +190,62 @@ def test_a_book_with_a_row_that_cannot_be_read_is_unreadable_whole():
         ],
         [{"symbol": "SBIN", "exchange": "NSE", "orderid": "3", "order_status": "parked"}],
     )
-    books = leg_books(positionbook, tradebook, orderbook, "SBIN", "NSE")
+    books = leg_books(positionbook, tradebook, orderbook, "SBIN", "NSE", product="MIS")
     assert (books.units, books.trades, books.rows) == (None, None, None)
 
 
 def test_an_error_answer_reads_as_no_book():
     error = {"status": "error", "message": "broker down"}
-    books = leg_books(error, error, error, "SBIN", "NSE")
+    books = leg_books(error, error, error, "SBIN", "NSE", product="MIS")
     assert (books.units, books.trades, books.rows) == (None, None, None)
+
+
+def a_row(product, orderid, **fields):
+    """A trade-book or order-book row of SBIN on NSE in `product`."""
+    return {"symbol": "SBIN", "exchange": "NSE", "product": product, "orderid": orderid} | fields
+
+
+#: Books of an account that trades SBIN in MIS and CNC: 10 MIS units, 7 CNC bought today
+#: and 40 held from earlier days.
+MIS_AND_CNC = answers(
+    [
+        {"symbol": "SBIN", "exchange": "NSE", "product": "MIS", "quantity": 10},
+        {"symbol": "SBIN", "exchange": "NSE", "product": "CNC", "quantity": 7},
+    ],
+    [
+        a_row("MIS", "1", action="BUY", quantity=10, average_price=500.0),
+        a_row("CNC", "4", action="BUY", quantity=7, average_price=501.0),
+    ],
+    [
+        a_row("MIS", "3", order_status="trigger pending", quantity=10, pricetype="SL-M"),
+        a_row("CNC", "5", order_status="open", quantity=7, pricetype="LIMIT"),
+    ],
+)
+HELD_40 = {
+    "status": "success",
+    "data": {"holdings": [{"symbol": "SBIN", "exchange": "NSE", "quantity": 40}]},
+}
+
+
+@pytest.mark.parametrize(
+    ("product", "units", "trade", "row"),
+    [
+        ("MIS", 10, Trade("1", "BUY", 10, 500.0), "3"),
+        ("CNC", 47, Trade("4", "BUY", 7, 501.0), "5"),
+    ],
+    ids=["mis", "cnc"],
+)
+def test_the_books_of_a_leg_are_read_for_its_product(product, units, trade, row):
+    positionbook, tradebook, orderbook = MIS_AND_CNC
+
+    books = leg_books(
+        positionbook, tradebook, orderbook, "SBIN", "NSE", product=product, holdings=HELD_40
+    )
+
+    assert (books.units, books.trades, [r.order_id for r in books.rows]) == (units, (trade,), [row])
+
+
+def test_a_cnc_leg_whose_holdings_were_not_read_has_no_units_known():
+    books = leg_books(*MIS_AND_CNC, "SBIN", "NSE", product="CNC")
+
+    assert (books.units, books.trades) == (None, (Trade("4", "BUY", 7, 501.0),))

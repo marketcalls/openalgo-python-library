@@ -12,7 +12,8 @@ protect.
   always says 0 filled) holds the kernel's exit owner while the order is gone at the
   broker. After `HELD_CANCEL_DECIDE_AFTER_S`, when it is the only held word of its leg,
   the position book is read (`ReadPositions`), and every `POSITION_READ_EVERY_S` until it
-  decides: the broker's net units of the instrument (MIS) equal to the kernel's, the
+  decides: the broker's units of the leg in its product (`_broker_units`) equal to the
+  kernel's, the
   order filled nothing more and the cancel is released as reported; fewer on the same
   side by `d` at most the order's units left, it filled `d` before its cancel, released
   with them at the estimate (`release_cancel`); anything else, or a book that cannot be
@@ -33,19 +34,18 @@ nanoseconds, prices rupees, quantities units. Used by the loop only.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
+from ._broker_units import broker_units
 from ._order_state import HeldFill
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
 from ._stops_held_group import decide_shared, unheard
 from ._stops_kernel import order_of
 from ._types import LOGGER_NAME, AlertKind
-from ._venue_requests import LIVE_PRODUCT
 from ._worker_queue import ReadPositions, ReleaseCancel, ReleaseFill
 from .inbox import PositionRows
 
@@ -153,7 +153,13 @@ class HeldWords:
             trader, kernel_order = owner
             if not self._decidable(trader, word, message.read_ns):
                 continue
-            net = net_units(message.positionbook, trader.symbol, trader.exchange)
+            net = broker_units(
+                message.positionbook,
+                message.holdings,
+                trader.symbol,
+                trader.exchange,
+                trader.product,
+            )
             if self._session.groups.shared(trader):
                 if message.orderbook is None:
                     continue
@@ -291,35 +297,10 @@ def _key(word: HeldFill) -> tuple[str, int]:
     return word.order_id, word.held_since_ns
 
 
-def net_units(answer: Mapping[str, Any], symbol: str, exchange: str) -> int | None:
-    """The broker's net MIS units of an instrument in a position-book answer, signed; None
-    when the answer cannot be read. The one reading of the position book that the held
-    cancels and the kill switch (`_kill_switch`) share."""
-    rows = answer.get("data") if answer.get("status") == "success" else None
-    if not isinstance(rows, list):
-        return None
-    net = 0
-    for row in rows:
-        if not isinstance(row, Mapping):
-            return None
-        if (row.get("symbol"), row.get("exchange"), row.get("product")) != (
-            symbol,
-            exchange,
-            LIVE_PRODUCT,
-        ):
-            continue
-        try:
-            net += round(float(row.get("quantity", 0)))
-        except (TypeError, ValueError):
-            return None
-    return net
-
-
 __all__ = [
     "HELD_CANCEL_DECIDE_AFTER_S",
     "HELD_FILL_RELEASE_AFTER_S",
     "POSITION_READ_EVERY_S",
     "Estimate",
     "HeldWords",
-    "net_units",
 ]

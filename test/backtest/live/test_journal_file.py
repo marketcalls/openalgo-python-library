@@ -49,9 +49,9 @@ def read_pragma(path, name):
 # Opening the file
 
 
-def test_a_new_journal_has_schema_version_2_and_a_write_ahead_log(path):
+def test_a_new_journal_has_schema_version_3_and_a_write_ahead_log(path):
     open_journal(path).close()
-    assert (read_pragma(path, "user_version"), read_pragma(path, "journal_mode")) == (2, "wal")
+    assert (read_pragma(path, "user_version"), read_pragma(path, "journal_mode")) == (3, "wal")
 
 
 def test_every_table_is_strict(path):
@@ -62,7 +62,9 @@ def test_every_table_is_strict(path):
         "AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
     connection.close()
-    assert len(tables) == 8
+    # The 8 tables of version 2, and version 3's gtts, gtt_states, gtt_children,
+    # day_closes, kept_refusals and decided_bars.
+    assert len(tables) == 14
     assert {strict for _, strict in tables} == {1}
 
 
@@ -92,8 +94,9 @@ def test_opening_with_another_account_is_refused(path):
 
 def test_a_journal_from_a_newer_version_is_refused(path):
     open_journal(path).close()
-    run_sql(path, "PRAGMA user_version = 3")
-    with pytest.raises(JournalError, match="written by a newer openalgo.*pip install -U openalgo"):
+    run_sql(path, "PRAGMA user_version = 4")
+    newer = r"newer openalgo \(schema version 4; this one reads 3\).*pip install -U openalgo"
+    with pytest.raises(JournalError, match=newer):
         open_journal(path)
 
 

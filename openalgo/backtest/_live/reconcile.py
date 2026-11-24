@@ -4,8 +4,9 @@ on a schedule and compared, leg by leg, with what the engine knows, by the rules
 safe corrections; it never exits a position and never fires the kill switch).
 
 **Schedule** (5.1): when a read is due, and the reads the session asks for, are
-`_reconcile_schedule`'s. An instrument several strategies of the session share is compared
-as one group (`_reconcile_groups`, 18-multi-strategy 4.6).
+`_reconcile_schedule`'s. An instrument several strategies of the session share in one
+product is compared as one group (`_reconcile_groups`, 18-multi-strategy 4.6); each leg's
+broker units are its product's (`_broker_units`).
 
 **In flight** (`_reconcile_steps.in_flight`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
@@ -49,6 +50,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._group_rules import GroupFigure
+from ._groups import GroupKey
 from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
 from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
@@ -96,8 +98,9 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         self._orphans: set[str] = set()
         # By strategy: its shared instrument's group as the last comparison judged it.
         self._figures: dict[str, GroupFigure] = {}
-        # By shared instrument: its last read (the broker's net, the members' sum, late).
-        self._group_reads: dict[tuple[str, str], GroupRead] = {}
+        # By shared instrument and product: its last read (the broker's net, the members'
+        # sum, late).
+        self._group_reads: dict[GroupKey, GroupRead] = {}
         corrections = Corrections(session, self._adopted, self._orphans, self._figures)
         self._findings = Findings(session, corrections, RECONCILE_IN_FLIGHT_MAX_S)
         self.rows: list[Reconciliation] = self._findings.rows
@@ -206,7 +209,8 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         if message.generation != self._generation or session.locked:
             return
         self._answered = True
-        session.risk.positions(PositionRows(message.positionbook, message.started_ns))
+        rows = PositionRows(message.positionbook, message.started_ns, holdings=message.holdings)
+        session.risk.positions(rows)
         # The funds cap each strategy's sizing by the account's available cash (6.6, R18).
         available = available_cash(message.funds)
         polls = False
@@ -245,6 +249,8 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
             message.orderbook,
             trader.symbol,
             trader.exchange,
+            product=trader.product,
+            holdings=message.holdings,
         )
         own = own_orders(trader, self._earlier)
         late_or_unread = late or books.trades is None

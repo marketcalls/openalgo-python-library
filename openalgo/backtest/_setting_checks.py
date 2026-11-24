@@ -92,4 +92,4 @@ def unused_settings(
     return notes
 
 
-__all__ = ["class_leverage", "refuse_unusable", "unused_settings"]
+__all__ = ["INTRADAY_PRODUCT", "class_leverage", "refuse_unusable", "unused_settings"]

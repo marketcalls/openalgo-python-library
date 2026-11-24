@@ -52,13 +52,13 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._group_rules import GroupFigure, Share, group_kind
+from ._groups import GroupKey, InstrumentGroup
 from ._plan_catch_up import INSTRUMENT
 from ._reconcile_allocate import allocate
 from ._reconcile_findings import FILL_DURING_READ
 from ._reconcile_rules import GUARDED, Kind, LegBooks, Trade, leg_books, unexplained_by
 from ._reconcile_steps import Finding, attribute, in_flight, order_findings, own_orders
 from ._session_trader import Trader
-from ._venue_requests import LIVE_PRODUCT
 from .inbox import Books
 
 _NS = NANOS_PER_SECOND
@@ -91,16 +91,16 @@ class GroupComparison:
     _quiet: dict[str, int | None]
     _only: frozenset[str] | None
     _figures: dict[str, GroupFigure]
-    _group_reads: dict[tuple[str, str], GroupRead]
+    _group_reads: dict[GroupKey, GroupRead]
     adopted: Any
     _noted: Any
     _soon: Any
 
-    def group_read(self, symbol: str, exchange: str) -> GroupRead | None:
-        """The last read of the shared instrument `exchange:symbol` that a comparison of
-        its group took (`GroupRead`); None when no comparison of this start read its
-        position book."""
-        return self._group_reads.get((symbol, exchange))
+    def group_read(self, group: InstrumentGroup) -> GroupRead | None:
+        """The last read of the shared instrument and product of `group` that a
+        comparison of the group took (`GroupRead`); None when no comparison of this start
+        read its position book."""
+        return self._group_reads.get(group.key)
 
     def _compare_shared(self, message: Books, *, late_after_s: float, again_s: float) -> bool:
         """Compare each shared instrument's group with a read (`_compare_group`), in the
@@ -109,7 +109,7 @@ class GroupComparison:
         groups, polls = self._session.groups, False
         for group in groups.groups:
             if group.shared:
-                members = groups.of(group.symbol, group.exchange)
+                members = groups.of_group(group)
                 polls |= self._compare_group(
                     members, message, late_after_s=late_after_s, again_s=again_s
                 )
@@ -141,6 +141,8 @@ class GroupComparison:
             message.orderbook,
             members[0].symbol,
             members[0].exchange,
+            product=members[0].product,
+            holdings=message.holdings,
         )
         if not late and books.trades is not None and self._fills_landed(active, books, message):
             return False
@@ -221,7 +223,8 @@ class GroupComparison:
         if books.units is not None:
             held_now = sum(round(m.open_units()) for m in members)
             read = GroupRead(books.units, held_now, late)
-            self._group_reads[(members[0].symbol, members[0].exchange)] = read
+            first = members[0]
+            self._group_reads[(first.symbol, first.exchange, first.product)] = read
         return polls
 
 
@@ -241,7 +244,7 @@ def _shared_out(
 def _opened_ns(trader: Trader) -> int | None:
     """When `trader`'s current position opened, UTC nanoseconds: its oldest open
     tranche's opening; None when it holds none."""
-    position = call(trader.engine.position, INSTRUMENT, LIVE_PRODUCT)
+    position = call(trader.engine.position, INSTRUMENT, trader.product)
     tranches = () if position is None else position["tranches"]
     opened = [int(at) for _number, units, _price, at in tranches if units]
     return min(opened) if opened else None

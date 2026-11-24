@@ -55,8 +55,18 @@ EXPIRED_TOKEN = "Incorrect `api_key` or `access_token`."
 #: Where the broker's API stands in the client errors the server passes on: the real
 #: text names the reference broker's own API address.
 BROKER_API = "https://broker.invalid"
-#: The paths of the reference broker's books (broker/zerodha/api/order_api.py:93-102).
-BOOK_PATHS = {"orders": "/orders", "trades": "/trades", "positions": "/portfolio/positions"}
+#: The paths of the reference broker's books (broker/zerodha/api/order_api.py:93-106).
+BOOK_PATHS = {
+    "orders": "/orders",
+    "trades": "/trades",
+    "positions": "/portfolio/positions",
+    "holdings": "/portfolio/holdings",
+}
+#: services/gtt_orderbook_service.py (and the other GTT services): a broker that ships no
+#: GTT module, answered HTTP 501.
+GTT_NOT_SUPPORTED = "GTT orders are not supported for broker '{broker}' yet"
+#: restx_api/gtt_orderbook.py: the schema's refusal of a `status` other than these two.
+GTT_BOOK_STATUSES = ("active", "all")
 #: The reference broker's cancel refuses through its HTTP client's error, wrapped
 #: (broker/zerodha/api/order_api.py:520, 536); the server answers it HTTP 500.
 CANCEL_REFUSED = "Failed to cancel order: "
@@ -138,6 +148,8 @@ __all__ = [
     "DROPPED_WORDS",
     "EXPIRED_TOKEN",
     "GATEWAY_TIMEOUT_BODY",
+    "GTT_BOOK_STATUSES",
+    "GTT_NOT_SUPPORTED",
     "INVALID_KEY",
     "MODIFY_FAILED",
     "QUEUED_FOR_APPROVAL",

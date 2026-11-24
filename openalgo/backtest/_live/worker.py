@@ -108,7 +108,9 @@ class OrderWorker(WorkerThread):
     """The order worker (module docstring). `client` is the session's orders client,
     `guard` its mode guard (started on the main thread before the worker), `alerts` the
     shared alerts, `inbox` the loop's, `journal` where W is; `now` gives UTC nanoseconds
-    and `sleep` waits seconds; `orders_per_second` is the order rate (`_order_throttle`).
+    and `sleep` waits seconds; `orders_per_second` is the order rate (`_order_throttle`);
+    `read_holdings` reads the holdings with every book read, for a session with a CNC
+    strategy (`_broker_units`; an MIS session reads none).
 
     The loop calls `put` and `withdraw_put_back`, reads `busy_since_ns` and
     `raw_pending` and writes `locked_entries` from its thread, and the feed's order
@@ -127,8 +129,10 @@ class OrderWorker(WorkerThread):
         now: Now,
         sleep: Sleep,
         orders_per_second: int = DEFAULT_ORDERS_PER_SECOND,
+        read_holdings: bool = False,
     ) -> None:
         self._client = client
+        self._read_holdings = read_holdings
         self._guard = guard
         self._alerts = alerts
         # What the worker and its parts post goes on the loop's inbox.
@@ -248,6 +252,7 @@ class OrderWorker(WorkerThread):
             calling=self._calling,
             now=self._now,
             locked=self.locked_entries,
+            read_holdings=self._read_holdings,
         )
         self._started = _Started(journal, path, stops, sender)
         self._post(WorkerReady(session))

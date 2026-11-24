@@ -38,6 +38,7 @@ from .._margin_check import check_margin
 from .._messages import not_supported
 from .._risk_settings import rupees_amount
 from .._series import ist_time
+from .._setting_checks import INTRADAY_PRODUCT
 from .._settings import RunPlan, resolve
 from .._timeframes import _check_interval
 from .._warm_up import SeriesNeed
@@ -51,8 +52,6 @@ from ..strategy import Strategy
 from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
-#: The product of every live order in this release (16-session-design 1.1, Tier 1).
-LIVE_PRODUCT = "MIS"
 #: What a condition strategy declares in `init`, as messages name it.
 CONDITIONS = "entry_when, exit_when, short_when, cover_when"
 #: The currency derivatives exchanges, backtest-only in 2.4.1 (`refuse_currency`).
@@ -92,6 +91,13 @@ class StrategySpec:
         """The strategy's parameter values (None for its defaults)."""
         return self.arguments["params"]
 
+    @property
+    def product(self) -> str:
+        """The product the strategy trades ("MIS", "CNC" or "NRML"), as its settings
+        resolved it: every order of the strategy carries it, and its leg's units at the
+        broker are read by it (`_broker_units`)."""
+        return self.plan.product
+
 
 def refuse_unsupported(strategy: type[Strategy]) -> None:
     """Raise NotImplementedError for a strategy class 2.3.0 does not run live (module
@@ -122,11 +128,14 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
             f"a {strategy.interval} strategy interval in a live session",
             "trade an intraday interval, such as '5m'",
         )
-    if strategy.product is not None and strategy.product != LIVE_PRODUCT:
+    # Until positional live trading is built (20-positional-live, unit N3) a strategy trades
+    # the intraday product only: a CNC or NRML one is told to trade it.
+    if strategy.product is not None and strategy.product != INTRADAY_PRODUCT:
         raise not_supported(
             f"product {strategy.product} in a live session (positions held overnight need "
             "GTT orders)",
-            f"trade {LIVE_PRODUCT}: remove product from the class, or set it to '{LIVE_PRODUCT}'",
+            f"trade {INTRADAY_PRODUCT}: remove product from the class, or set it to "
+            f"'{INTRADAY_PRODUCT}'",
         )
     if strategy.interval:
         _check_interval(strategy.interval, DEFAULT_BASE)
@@ -240,7 +249,6 @@ def _live_daily_loss_limit(
 
 __all__ = [
     "CONDITIONS",
-    "LIVE_PRODUCT",
     "StrategySpec",
     "ist_day",
     "probe",

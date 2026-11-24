@@ -16,12 +16,13 @@ from .._series import ist_time
 from ..calendar import Calendar, IntradayTimes, SessionInfo
 from ..errors import CalendarError
 from ..report._format import indian_digits
+from ._broker_units import MIS
 from ._preflight_plan import WARNING, Check, positive_amount
 from ._types import AlertsLike, Mode
 
-#: The one product this release trades live: intraday MIS (Tier 1, 08-live-trading
-#: section 1). CNC and NRML wait for overnight stops and holdings reconciliation.
-LIVE_PRODUCT = "MIS"
+#: The one product the preflight passes until positional live trading is built
+#: (20-positional-live, unit N3): intraday MIS. CNC and NRML wait for overnight stops.
+PREFLIGHT_PRODUCT = MIS
 # The calendar's coverage levels of a date that need a note: no holiday list (the weekday
 # rule only), and holiday data not confirmed. The last level, "sourced", needs none.
 _TEMPLATE_COVERAGE, _UNVERIFIED_COVERAGE, _ = COVERAGE_LEVELS
@@ -45,7 +46,7 @@ def limit_checks(
 
 def product_check(product: Any) -> Check:
     """Passes for the MIS product only."""
-    if product == LIVE_PRODUCT:
+    if product == PREFLIGHT_PRODUCT:
         return Check("product", True, "the product is MIS (intraday)")
     return Check(
         "product",
@@ -191,7 +192,7 @@ def _ist_clock(ts_ns: int) -> str:
 
 
 __all__ = [
-    "LIVE_PRODUCT",
+    "PREFLIGHT_PRODUCT",
     "alerts_check",
     "limit_checks",
     "product_check",

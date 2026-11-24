@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The live journal moves to schema 3, which adds tables for GTT orders and the orders they place when they fire, a record of each strategy's state at each day's close, broker refusals kept across starts, and the last bar each strategy decided (for positions held overnight, coming in 2.5.0). Opening a live journal with this version upgrades it in place and keeps every row; openalgo 2.4.x then refuses that journal as written by a newer version.
+- A live session reads each position at the broker by its product: MIS and NRML from the position book's line for that product, CNC as the holdings quantity plus the CNC position line. A book that could not be read counts as unknown, never as zero. An MIS-only session reads the same books as before. An MIS and a CNC strategy on one symbol are two separate groups, as the broker keeps their positions on separate lines.
+- The start's refusal when OpenAlgo's books cannot be read now names the books that failed.
+
 ## [2.4.1] - 2026-11-24
 
 ### Added

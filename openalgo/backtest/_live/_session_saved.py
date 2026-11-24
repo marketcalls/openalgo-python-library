@@ -41,7 +41,6 @@ from ._session_exits import EXIT_FAILED_LOCK
 from ._session_figures import FIGURES, SESSION_KEY
 from ._session_news import RECONCILE_LOCK
 from ._session_trader import Trader
-from ._venue_requests import LIVE_PRODUCT
 from ._venue_saved import SavedOrder, read_records
 
 #: The roles of the kernel's saved orders that are leg stops (the binding's ORDER_ROLES).
@@ -55,17 +54,19 @@ DAY_LOCKS = frozenset({RECONCILE_LOCK, EXIT_FAILED_LOCK, ACCOUNT_LOSS, ACCOUNT_P
 @dataclass(frozen=True)
 class Saved:
     """A strategy's saved state, read back: the kernel's `live_state`, the venue map's
-    orders by saved kernel id, whether each saved working order was sent (`sent`), and the
-    units the reconciler had adopted."""
+    orders by saved kernel id, whether each saved working order was sent (`sent`), the
+    units the reconciler had adopted, and the product the strategy trades, whose position
+    the state is read for."""
 
     live_state: dict[str, Any]
     orders: dict[int, SavedOrder]
     sent: dict[int, bool]
     adopted: int
+    product: str
 
     @property
     def units(self) -> int:
-        """The saved position of the strategy's instrument in MIS, signed units."""
+        """The saved position of the strategy's instrument in its product, signed units."""
         position = self._position()
         return 0 if position is None else round(float(position["quantity_units"]))
 
@@ -79,9 +80,10 @@ class Saved:
         return min(opened) if opened else None
 
     def _position(self) -> dict[str, Any] | None:
-        """The saved position of the strategy's instrument in MIS, None when it has none."""
+        """The saved position of the strategy's instrument in its product, None when it
+        has none."""
         for position in self.live_state.get("positions", []):
-            if position.get("instrument") == INSTRUMENT and position.get("product") == LIVE_PRODUCT:
+            if position.get("instrument") == INSTRUMENT and position.get("product") == self.product:
                 return position
         return None
 
@@ -172,9 +174,10 @@ def save_released(session: Any, names: set[str]) -> None:
     save_session(session)
 
 
-def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
-    """A strategy's saved state from `rms_state` (None: nothing saved). Raises LiveError
-    for one that cannot be read, naming the strategy: a restart never guesses."""
+def read_saved(state: Mapping[str, Any] | None, strategy: str, product: str) -> Saved | None:
+    """A strategy's saved state from `rms_state` (None: nothing saved), read for the
+    position in `product`, the strategy's. Raises LiveError for one that cannot be read,
+    naming the strategy: a restart never guesses."""
     if state is None:
         return None
     try:
@@ -188,7 +191,7 @@ def read_saved(state: Mapping[str, Any] | None, strategy: str) -> Saved | None:
             "restart cannot resume it. Check its positions in OpenAlgo, then start under "
             "another account name (account=) once they are closed"
         ) from None
-    return Saved(live_state, orders, sent, adopted)
+    return Saved(live_state, orders, sent, adopted, product)
 
 
 def another_instrument(
