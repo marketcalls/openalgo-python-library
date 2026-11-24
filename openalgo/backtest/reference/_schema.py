@@ -285,12 +285,14 @@ _SPECS = (
         name="mcx_contracts",
         key=_UNDERLYING_EXCHANGE,
         span=("expiry_from", "expiry_to", SPAN_DATE),
-        columns=_CONTRACT_COLUMNS,
+        columns=(*_CONTRACT_COLUMNS, Column("tender_days", _positive_int, required=False)),
         description=(
             "MCX futures terms by trade date and contract expiry. lot_size is the trading "
             "unit in the unit OpenAlgo counts quantity in (CRUDEOIL 100 barrels, GOLD 1 kg); "
             "multiplier is the rupee value of a one-rupee move in the quoted price for one "
-            "unit of quantity"
+            "unit of quantity; tender_days, for a contract settled by delivery, the trading "
+            "days of its tender period at the end of the contract, the expiry day included "
+            "(empty when not known)"
         ),
     ),
     TableSpec(

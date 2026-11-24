@@ -58,6 +58,7 @@ from ._manifest import strategy_source_hash
 from ._market import MarketSettings, market_settings
 from ._messages import not_supported
 from ._pipeline_result import FinishedRun, finished_result
+from ._positional_exit import positional_exits
 from ._run_check import CheckedRun, check_run
 from ._run_corporate_actions import (
     UnadjustedEvent,
@@ -222,6 +223,7 @@ def load(checked: CheckedRun, client: Any, args: dict[str, Any]) -> PreparedRun:
     benchmark = load_benchmark(checked.benchmark, plan, args, client, calendar, frames)
     extra = [market.warnings, () if futures is None else futures.warnings]
     extra.append(() if benchmark is None else benchmark.warnings)
+    extra.append(positional_exits(instruments, plan.start, calendar).warnings)
     return PreparedRun(
         plan=plan,
         calendar=checked.calendar,
@@ -274,7 +276,8 @@ def _bound(
     before the run's bars)."""
     plan, calendar = prepared.plan, prepared.session_calendar()
     config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
-    engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames)
+    exits = positional_exits(prepared.instruments, plan.start, calendar)
+    engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames, exits.days)
     futures = None
     if prepared.futures is not None:
         futures = (prepared.futures, attach(engine, prepared.futures, list(plan.symbols)))

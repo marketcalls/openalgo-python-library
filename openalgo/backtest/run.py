@@ -98,6 +98,7 @@ def backtest(
     max_trades_per_day: int | None = None,
     daily_profit_target: float | Distance | None = None,
     max_order_value: float | Distance | None = None,
+    positional_stops: str | Mapping[str, str] = "gtt",
     round_levels: bool = True,
     strict_config: bool = True,
     roll: int | None = 1,
@@ -205,9 +206,25 @@ def backtest(
         worth more (units times its limit, an SL-M's trigger or the last close, times the
         multiplier) is rejected "order_value_limit", as is a MARKET entry of an instrument
         with no bar yet (no price to value it at); exits never are.
+    positional_stops: how the stop of a CNC or NRML position is held. "gtt" (the default):
+        one SINGLE GTT, which rests overnight and fires as a GTT does (a trigger, then a
+        LIMIT child that may not fill on a gap). "rearm_daily": a DAY stop order, as an MIS
+        position's stop is (SL-M for shares and futures, a stop-limit 5 percent beyond the
+        trigger for options), tested on the bars as an MIS stop is, and placed again at
+        each session's open: when a session opens at or beyond the stop, the position is
+        sold (or bought back) at that open plus slippage, flagged "stop_crossed", exit
+        reason "leg_sl". No GTT is placed for a position, and nothing protects it from a
+        session's close to the next open. Such a run carries one warning: it assumes the
+        engine was started before the open on every trading day a position was held, as
+        bt.live with this setting needs. Any other value raises ConfigError.
     roll: sessions before expiry at which a futures position rolls to the next contract
         (1, the session before the last trading day; 0 rolls on it), or None to hold it
-        to expiry and settle it there in cash (see `Result.settlements`). A futures
+        to expiry: an index future then settles there in cash (see `Result.settlements`);
+        a future the exchange settles by delivery (a stock future, an MCX delivery
+        contract) is sold or bought back at the square-off time of its last trading day
+        (an MCX one of the trading day before its tender period, where the reference
+        table gives that period, else it settles at expiry and the run warns), exit
+        reason "expiry_exit", as is an option held to its last trading day. A futures
         strategy names its underlying (`underlying`, or underlyings in `symbols`) and
         the contract rank in `expiry` ("current_month" or "next_month"); see `_futures`.
     params: parameter values for the strategy.
@@ -241,7 +258,8 @@ def backtest(
     These take one value for every strategy, or a dict by strategy class name that names
     every strategy: `capital`, `product`, `base`, `max_daily_loss`, `after_risk_exit`,
     `max_positions`, `drawdown_halt`, `cooldown`, `entry_from`, `entry_until`,
-    `square_off`, `max_trades_per_day`, `daily_profit_target` and `max_order_value`; a
+    `square_off`, `max_trades_per_day`, `daily_profit_target`, `max_order_value` and
+    `positional_stops`; a
     class attribute of the same name still wins. None for a strategy in such a dict leaves
     it without `max_positions`, `drawdown_halt`, `cooldown` or that daily limit (each off
     when None). `params` is a dict by strategy class name (one left out keeps its

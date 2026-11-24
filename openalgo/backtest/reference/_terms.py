@@ -282,6 +282,19 @@ def multiplier_on(sources: Sources, name: str, exchange: str, day: _dt.date, exp
     return sources.store.note_use(row, day).values["multiplier"]
 
 
+def tender_days_on(sources: Sources, name: str, day: _dt.date, expiry: _dt.date) -> int | None:
+    """Trading days of the tender period of the MCX contract of `name` expiring on
+    `expiry`, as traded on `day` (`ReferenceTables.tender_days`); None when its row gives
+    none, a row then not counted as used. Raises `ReferenceDataError` when no row covers
+    the contract."""
+    underlying, _ = split_contract(name, MCX)
+    row = contract_row(sources.store, MCX_TABLE, (underlying, MCX), day, expiry, "tender_days")
+    days = row.values["tender_days"]
+    if days is not None:
+        sources.store.note_use(row, day)
+    return days
+
+
 def freeze_qty_on(sources: Sources, name: str, exchange: str, day: _dt.date, kind=None) -> int:
     """Largest quantity in units the exchange accepts in one order.
 

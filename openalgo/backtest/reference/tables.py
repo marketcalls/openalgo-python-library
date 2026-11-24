@@ -165,6 +165,18 @@ class ReferenceTables:
         exchange, day = derivative_exchange(exchange), as_date(on_date)
         return _terms.freeze_qty_on(self._sources, underlying, exchange, day, kind)
 
+    def tender_days(self, underlying: str, on_date: DateLike, expiry: DateLike) -> int | None:
+        """Trading days of an MCX delivery contract's tender period at the end of the
+        contract, its expiry day included, from `mcx_contracts` on a trade date; None for a
+        contract settled in cash and for one the table gives no figure for.
+
+        `expiry` (the listed expiry) picks the contract. A figure from an unverified row
+        warns, as every use of one does. Raises `ReferenceDataError` when no row covers the
+        contract.
+        """
+        day, expiry_day = as_date(on_date), as_date(expiry, "expiry")
+        return _terms.tender_days_on(self._sources, underlying, day, expiry_day)
+
     def strike_step(self, underlying: str, exchange: str, on_date: DateLike) -> float:
         """Strike interval in rupees of the near contracts of an underlying.
 
