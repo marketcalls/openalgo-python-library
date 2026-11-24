@@ -50,6 +50,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._group_rules import GroupFigure
+from ._groups import GroupKey
 from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
 from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
@@ -97,8 +98,9 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         self._orphans: set[str] = set()
         # By strategy: its shared instrument's group as the last comparison judged it.
         self._figures: dict[str, GroupFigure] = {}
-        # By shared instrument: its last read (the broker's net, the members' sum, late).
-        self._group_reads: dict[tuple[str, str], GroupRead] = {}
+        # By shared instrument and product: its last read (the broker's net, the members'
+        # sum, late).
+        self._group_reads: dict[GroupKey, GroupRead] = {}
         corrections = Corrections(session, self._adopted, self._orphans, self._figures)
         self._findings = Findings(session, corrections, RECONCILE_IN_FLIGHT_MAX_S)
         self.rows: list[Reconciliation] = self._findings.rows

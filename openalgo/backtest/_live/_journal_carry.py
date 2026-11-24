@@ -177,6 +177,8 @@ class JournalCarry(JournalHandle):
         closed = whole_number("bar_ns", bar_ns)
         with self._sql("note the decided bar") as sql:
             last = _decided(sql, self._ledger, strategy)
+            if last == closed:
+                return
             if last is not None and closed < last:
                 raise JournalError(
                     f"{strategy} decided its bar closing at {last} already, after the bar "

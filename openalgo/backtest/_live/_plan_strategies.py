@@ -38,6 +38,7 @@ from .._margin_check import check_margin
 from .._messages import not_supported
 from .._risk_settings import rupees_amount
 from .._series import ist_time
+from .._setting_checks import INTRADAY_PRODUCT
 from .._settings import RunPlan, resolve
 from .._timeframes import _check_interval
 from .._warm_up import SeriesNeed
@@ -48,14 +49,9 @@ from ..errors import ConfigError
 from ..reference import Instrument
 from ..report._format import indian_digits
 from ..strategy import Strategy
-from ._broker_units import MIS
 from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
-#: The one product the plan lets a strategy trade live until positional live trading is
-#: built (20-positional-live, unit N3): a CNC or NRML strategy is refused, saying to trade
-#: this one (`refuse_unsupported`).
-INTRADAY_PRODUCT = MIS
 #: What a condition strategy declares in `init`, as messages name it.
 CONDITIONS = "entry_when, exit_when, short_when, cover_when"
 #: The currency derivatives exchanges, backtest-only in 2.4.1 (`refuse_currency`).
@@ -132,6 +128,8 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
             f"a {strategy.interval} strategy interval in a live session",
             "trade an intraday interval, such as '5m'",
         )
+    # Until positional live trading is built (20-positional-live, unit N3) a strategy trades
+    # the intraday product only: a CNC or NRML one is told to trade it.
     if strategy.product is not None and strategy.product != INTRADAY_PRODUCT:
         raise not_supported(
             f"product {strategy.product} in a live session (positions held overnight need "
@@ -251,7 +249,6 @@ def _live_daily_loss_limit(
 
 __all__ = [
     "CONDITIONS",
-    "INTRADAY_PRODUCT",
     "StrategySpec",
     "ist_day",
     "probe",

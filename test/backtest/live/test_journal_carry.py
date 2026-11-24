@@ -10,6 +10,7 @@ written.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 
 import pytest
@@ -177,6 +178,18 @@ def test_the_last_bar_each_strategy_decided_reads_back(path):
 
         assert (journal.decided_bar("daily"), journal.decided_bar("weekly")) == (DAY_NS, DAY_NS - 1)
         assert journal.decided_bar("swing") is None
+
+
+def test_the_same_bar_decided_again_changes_nothing_not_even_when_it_was_noted(path):
+    clock = ManualClock()
+    with started_journal(path, now=clock) as journal:
+        journal.put_decided_bar("daily", DAY_NS)
+        clock.ns += 5
+        journal.put_decided_bar("daily", DAY_NS)
+
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute("SELECT bar_ns, decided_ns FROM decided_bars").fetchall()
+    assert rows == [(DAY_NS, DAY_NS)]
 
 
 def test_a_bar_before_the_one_decided_is_refused(path):
