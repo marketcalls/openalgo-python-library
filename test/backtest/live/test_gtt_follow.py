@@ -42,6 +42,7 @@ from openalgo.backtest._live._gtt_types import (
     GttEvent,
     ReadGtts,
 )
+from openalgo.backtest._live._own_fills import POSITION_BOOK_LAG_S
 from openalgo.backtest._live._types import AlertKind, Purpose
 from openalgo.backtest._live.journal import GttState
 
@@ -576,6 +577,128 @@ def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(
     last = rig.step_for(2.0, every_s=2.0)
 
     assert (events(early), events(last)) == ([], [GttEvent.ENDED_OUTSIDE])
+    rig.worker.close()
+
+
+# ----- the session's own fills on the leg, not settled yet (16-session-design 5.3, F78) ---------
+
+
+def baseline(rig, seq):
+    with rig.journal() as journal:
+        return journal.gtt(seq).baseline_units
+
+
+def test_a_read_while_the_exits_word_is_on_its_way_counts_the_exit_once(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path)
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    fake.faults.hold_order_updates()
+    rig.run(rig.own_exit(5))
+    # The position book shows the exit's sale; the order path has not heard of it yet.
+    rig.send(ReadGtts())
+    fake.faults.release_order_updates()
+
+    rig.step_for(2.0)
+
+    assert baseline(rig, seq) == 5
+    rig.worker.close()
+
+
+def lagged_through_a_read(fake, rig, seq, *, on_the_clock=False):
+    """The stop modified to 5, then the session's exit sells 5 while the position book lags
+    it (16-session-design F78) through a read of the GTT book: one asked for 2 s later, or
+    the read on the clock 10 s after the modify's (a rig whose market is open); then the
+    position book catches up."""
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    fake.lag_positionbook()
+    rig.run(rig.own_exit(5))
+    if on_the_clock:
+        rig.step_for(GTT_BOOK_EVERY_S)
+    else:
+        rig.step_for(2.0)
+        rig.send(ReadGtts())
+    fake.catch_up_positionbook()
+    rig.step_for(4.0, every_s=2.0)
+
+
+@pytest.mark.parametrize("on_the_clock", [False, True], ids=["a read asked for", "on the clock"])
+def test_a_read_while_the_position_book_lags_the_exit_keeps_the_baseline_the_exit_moved(
+    make_fake_openalgo, tmp_path, on_the_clock
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, market_open=lambda now_ns: on_the_clock)
+    reads = gtt_reads(fake)
+
+    lagged_through_a_read(fake, rig, seq, on_the_clock=on_the_clock)
+
+    # The modify's read and the read during the lag (asked for, or on the clock).
+    assert gtt_reads(fake) - reads == 2
+
+    # 10 units less the exit's 5, never the 10 the lagging book still showed.
+    assert baseline(rig, seq) == 5
+    rig.worker.close()
+
+
+@pytest.mark.parametrize(
+    ("ending", "decided"),
+    [("cancelled", GttEvent.ENDED_OUTSIDE), ("fired", GttEvent.CHILD_MISSED)],
+    ids=["cancelled by hand", "fired, its child never listed"],
+)
+@SHAPES
+def test_a_gtt_that_ends_after_a_read_of_a_lagging_book_is_judged_by_the_baseline_the_exit_moved(
+    make_fake_openalgo, tmp_path, history, ending, decided
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
+    lagged_through_a_read(fake, rig, seq)
+    if ending == "cancelled":
+        fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    else:
+        # The stop fires and its child sells the 5 left at 789.00, but the order book
+        # never lists the child.
+        fake.trade("SBIN", "NSE", 789.0)
+        fake.hide_order(fake.orders()[-1].order_id, reads=1000)
+
+    news = rig.send(ReadGtts()) + until_settled(rig)
+
+    assert events(news)[-1] is decided
+    rig.worker.close()
+
+
+def test_a_gone_gtt_is_decided_once_the_sessions_own_fill_on_its_leg_has_settled(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    rig.send(ReadGtts())
+    rig.step_for(CHILD_SEARCH_S - 4.0, every_s=2.0)
+    # Just before the child search ends, the session's exit sells 5 while the position book
+    # lags it; the book catches up 10 s later.
+    fake.lag_positionbook()
+    rig.run(rig.own_exit(5))
+    early = rig.step_for(10.0, every_s=2.0)
+    fake.catch_up_positionbook()
+
+    later = rig.step_for(POSITION_BOOK_LAG_S, every_s=2.0)
+
+    assert (events(early), events(later)) == ([], [GttEvent.ENDED_OUTSIDE])
+    rig.worker.close()
+
+
+def test_a_gone_gtt_whose_leg_an_own_order_still_works_on_is_a_mismatch_after_the_wait(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    # The session's exit of 5 rests at a limit of 900.00, far above SBIN's 800.00: a fill of
+    # it could show in the position book before its word.
+    rig.run(rig.own_exit(5, price_type="LIMIT", price=900.0))
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+
+    searched = rig.send(ReadGtts()) + until_settled(rig)
+    waited = rig.step_for(POSITION_BOOK_LAG_S, every_s=2.0)
+
+    assert (events(searched), events(waited)) == ([GttEvent.IN_FLIGHT], [GttEvent.MISMATCH])
+    assert "not settled" in outcomes(waited)[-1].message
     rig.worker.close()
 
 

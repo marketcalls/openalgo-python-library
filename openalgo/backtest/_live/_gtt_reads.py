@@ -7,9 +7,11 @@ missed child's price is read from.
 holdings, when a leg trades CNC: `_broker_units`): a GTT the book shows resting had not
 fired when the positions were read, so those units are what its leg held before it
 could fire, the baseline a GTT that is later gone is judged against (3.3). With them goes
-what the session's own orders had filled on each leg by then, as the order path knows it
-(`OrderPath.filled_units`): a later move of the leg's units is the GTT's only net of the
-session's own fills since (an exit sold part of the leg while its stop rested).
+what the session's own orders had filled on each leg by then, as the order path knows it,
+and whether those fills had settled (`_own_fills`, `OrderPath.own_fills`): a later move of
+the leg's units is the GTT's only net of the session's own fills since (an exit sold part
+of the leg while its stop rested), and units read while they had not settled decide
+nothing (the position book and the order path's words may not agree in time).
 
 Every answer goes through the mode guard (the analyzer switch routes the books too) and
 is told to the order path's server watch (`note`: OpenAlgo's own answer lifts the hold of
@@ -34,10 +36,9 @@ from ._answers import server_answer
 from ._broker_units import broker_units
 from ._gtt_book import GttRow, gtt_rows
 from ._order_book import book_rows
+from ._own_fills import LegKey, OwnFills
 from ._types import GuardLike, Now
 
-#: A leg as the GTT parts key its units: (symbol, exchange, product).
-LegKey = tuple[str, str, str]
 #: The GTT book's status filter that lists the GTTs that ended too, where a broker keeps
 #: them (openalgo/gtt.py, `gttorderbook`).
 ALL_GTTS = "all"
@@ -47,21 +48,23 @@ ALL_GTTS = "all"
 class BookRead:
     """A read of the GTT book: its rows by trigger ID (None when it could not be read),
     the broker's units of each leg asked for as read just before it (None for a leg whose
-    books could not be read), when the GTT book's read began, and the units the session's
-    own orders had filled on each of those legs when the broker's were read."""
+    books could not be read), when the GTT book's read began, the units the session's own
+    orders had filled on each of those legs when the broker's were read, and the legs
+    whose own fills had settled then (`_own_fills`: only their units decide anything)."""
 
     rows: Mapping[str, GttRow] | None
     read_ns: int
     units: Mapping[LegKey, int | None] = field(default_factory=dict)
     own: Mapping[LegKey, int] = field(default_factory=dict)
+    settled: frozenset[LegKey] = frozenset()
 
 
 class GttReader:
     """The reads (module docstring) through `client` (the orders client), each answer
-    checked by `guard` and told to `note` (`OrderPath.note_answer`); `own(leg)` gives the
-    units the session's own orders have filled on a leg now (`OrderPath.filled_units`),
-    kept as the public `own` for the GTT parts; `calling` marks the worker busy for a
-    call, `now` gives UTC nanoseconds."""
+    checked by `guard` and told to `note` (`OrderPath.note_answer`); `own` is the order
+    path's view of the session's own fills on each leg (`OrderPath.own_fills`), kept as
+    the public `own` for the GTT parts; `calling` marks the worker busy for a call, `now`
+    gives UTC nanoseconds."""
 
     def __init__(
         self,
@@ -69,7 +72,7 @@ class GttReader:
         *,
         guard: GuardLike,
         note: Callable[[Mapping[str, Any]], None],
-        own: Callable[[LegKey], int],
+        own: OwnFills,
         now: Now,
         calling: Callable[[], AbstractContextManager[None]],
     ) -> None:
@@ -82,13 +85,18 @@ class GttReader:
 
     def gtt_book(self, legs: Iterable[LegKey]) -> BookRead:
         """The GTT book, with the units of `legs` read just before it and the session's
-        own on them then (module docstring)."""
+        own on them then, settled or not (module docstring). Raises JournalError when the
+        unbound intents cannot be read."""
         wanted = set(legs)
-        own = {leg: self.own(leg) for leg in wanted}
+        own = {leg: self.own.units(leg) for leg in wanted}
+        # Judged before the positions are read: a fill heard just within the lag is not
+        # settled for a book read a moment later.
+        settled = frozenset(leg for leg in wanted if self.own.settled(leg))
         units = self.units(wanted)
         read_ns = self._now()
         answer = self._read("gttorderbook", status=ALL_GTTS)
-        return BookRead(None if answer is None else gtt_rows(answer), read_ns, units, own)
+        rows = None if answer is None else gtt_rows(answer)
+        return BookRead(rows, read_ns, units, own, settled)
 
     def units(self, legs: Iterable[LegKey]) -> dict[LegKey, int | None]:
         """The broker's units of each of `legs` now (`_broker_units`), None for a leg

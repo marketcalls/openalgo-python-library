@@ -13,7 +13,8 @@ stream, with polling as the fallback and fills confirmed from the tradebook
 
 Reading answers, updates, the order book and one order's row lives in `_order_answers`,
 `_order_updates`, `_order_news`, `_order_book` and `_order_check`, the budget in
-`_order_rate`; their public names are exported here. Times are UTC nanoseconds, prices
+`_order_rate`; their public names are exported here. The session's own fills on a leg, as
+the GTT parts read them, are `_own_fills`' (`own_fills`). Times are UTC nanoseconds, prices
 rupees, quantities units. One loop owns an `OrderPath`: it is not thread-safe, and the
 feed's thread only queues the updates it receives.
 """
@@ -42,6 +43,7 @@ from ._order_state import ENTRY_PURPOSES, HeldFill
 from ._order_trades import UNSUPPORTED_BROKERS
 from ._order_updates import normalize_update
 from ._order_watch import WatchedPath
+from ._own_fills import OwnFills, OwnOrder
 from ._types import (
     LOGGER_NAME,
     AlertsLike,
@@ -107,6 +109,9 @@ class OrderPath(WatchedPath):
             watch=self._watch,
             now=now,
         )
+        #: The session's own fills on each leg and whether the broker's books show them
+        #: yet, which the GTT parts net out of a leg's broker units (20-positional-live 3.3).
+        self.own_fills = OwnFills(self._own_orders, journal=journal, now=now)
 
     def restore(self) -> None:
         """Take back the journal's bound orders after a restart: they can then be
@@ -278,21 +283,6 @@ class OrderPath(WatchedPath):
         of it has nothing left to change."""
         return self._follower.last_known(order_id)
 
-    def filled_units(self, symbol: str, exchange: str, product: str) -> int:
-        """The session's own units filled on a leg, as far as the order path knows them:
-        each of its orders on the leg by its latest word (`last_known`), bought units
-        positive and sold negative. The GTT parts net these out of a leg's broker units
-        (20-positional-live 3.3: only a GTT's own fill is its move)."""
-        filled = 0
-        for order_id in self._follower.order_ids():
-            intent = self._follower.intent_of(order_id)
-            word = self._follower.last_known(order_id)
-            if intent is None or word is None:
-                continue
-            if (intent.symbol, intent.exchange, intent.product) == (symbol, exchange, product):
-                filled += word.filled_quantity if intent.action == "BUY" else -word.filled_quantity
-        return filled
-
     def check_order(self, order_id: str) -> OrderCheck:
         """Read one order of this session with one `orderstatus` call, through the guard
         and the server watch (an answer in OpenAlgo's own JSON lifts the hold of a silent
@@ -360,6 +350,16 @@ class OrderPath(WatchedPath):
     def _wait_for_budget(self) -> None:
         while (wait := self._rate.wait_seconds()) > 0:
             self._sleep(wait)
+
+    def _own_orders(self) -> list[OwnOrder]:
+        """Every order the order path follows, terminal ones included, with its latest word."""
+        follower = self._follower
+        intents = {order_id: follower.intent_of(order_id) for order_id in follower.order_ids()}
+        return [
+            (intent, follower.last_known(order_id))
+            for order_id, intent in intents.items()
+            if intent is not None
+        ]
 
     def _intent_of(self, order_id: str) -> OrderIntent:
         intent = self._follower.intent_of(order_id)

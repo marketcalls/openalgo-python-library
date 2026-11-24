@@ -48,7 +48,7 @@ def gtt_parts(
         client,
         guard=guard,
         note=path.note_answer,
-        own=lambda leg: path.filled_units(*leg),
+        own=path.own_fills,
         now=now,
         calling=calling,
     )

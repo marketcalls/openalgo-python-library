@@ -155,10 +155,13 @@ class GttRig(WorkerRig):
             seq=seq,
         )
 
-    def own_exit(self, units: int, product: str = "CNC") -> PlaceRequest:
+    def own_exit(
+        self, units: int, product: str = "CNC", *, price_type: str = "MARKET", price: float = 0.0
+    ) -> PlaceRequest:
         """The session's own exit of the leg, as the venue map sends a strategy's exit:
-        sell `units` SBIN at the market in `product`."""
-        request = self.place(Purpose.EXIT, action="SELL", quantity=units)
+        sell `units` SBIN in `product`, at the market or at a limit of `price` rupees."""
+        fields = {"price_type": price_type, "price": price}
+        request = self.place(Purpose.EXIT, action="SELL", quantity=units, **fields)
         intent = dataclasses.replace(request.intent, product=product)
         return dataclasses.replace(request, intent=intent)
 

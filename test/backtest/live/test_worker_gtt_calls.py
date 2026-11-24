@@ -39,6 +39,7 @@ from openalgo.backtest._live._gtt_types import (
     GttAnswer,
     GttAnswerKind,
     GttEvent,
+    ReadGtts,
 )
 from openalgo.backtest._live._types import Purpose
 from openalgo.backtest._live.inbox import NotSent, NotSentReason
@@ -380,6 +381,25 @@ def test_an_unanswered_place_that_landed_late_and_fired_is_not_placed_again(rig,
     assert len(broker.log.calls("placegttorder")) == 1
 
 
+def test_an_unanswered_place_is_placed_again_after_an_exit_its_first_read_did_not_show(rig, broker):
+    bought(broker)
+    # The session's partial exit sells 5 while the position book lags it (16-session-design
+    # F78); the stop for the 5 left is placed, and its connection is refused.
+    broker.lag_positionbook()
+    rig.run(rig.own_exit(5))
+    broker.faults.refuse_connection("placegttorder")
+    first = answers(rig.send(rig.gtt(units=5)))
+    broker.catch_up_positionbook()
+
+    news = answers(rig.step_for(DECIDED_AFTER_FINISHED_S, 2.0))
+
+    # The leg fell by the place's 5 units since its first read, but by the session's own
+    # exit, which that read's position book did not show yet: nothing says it fired.
+    (answer,) = news
+    assert (first, answer.kind, answer.seq) == ([], GttAnswerKind.PLACED, 2)
+    assert len(broker.log.calls("placegttorder")) == 2
+
+
 def test_an_unanswered_place_is_placed_again_beside_a_row_of_another_symbol_it_cannot_read(
     rig, broker, monkeypatch
 ):
@@ -616,6 +636,52 @@ def test_a_cancel_soon_after_a_partial_exit_is_cancelled(rig, broker):
     assert (answer.kind, outcomes(news)) == (GttAnswerKind.CANCELLED, [])
     assert broker.position("SBIN", "NSE") == 5
     assert journal_gtt(rig, seq).state is GttState.CANCELLED
+
+
+def cut_for_a_partial_exit(rig, broker) -> int:
+    """The account's 10 SBIN CNC and its stop, modified to the 5 units a partial exit will
+    leave (20-positional-live 2); the exit is not sent yet. The stop's journal number."""
+    bought(broker)
+    seq = placed(rig)
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    return seq
+
+
+@SHAPES
+def test_a_cancel_sent_while_the_exits_word_is_on_its_way_is_cancelled(rig, broker):
+    seq = cut_for_a_partial_exit(rig, broker)
+    # The position book shows the exit's sale before the order path hears of it: the order
+    # stream holds its word, which the order path's poll 2 s after the send would bring.
+    broker.faults.hold_order_updates()
+    rig.run(rig.own_exit(5))
+
+    news = rig.send(rig.gtt(GttAction.CANCEL, seq=seq))
+    broker.faults.release_order_updates()
+    news += rig.step_for(CHILD_SEARCH_S, every_s=2.0)
+
+    (answer,) = answers(news)
+    assert (answer.kind, outcomes(news)) == (GttAnswerKind.CANCELLED, [])
+    assert journal_gtt(rig, seq).state is GttState.CANCELLED
+
+
+@SHAPES
+def test_a_cancel_after_the_position_book_caught_up_with_the_exit_is_cancelled(rig, broker):
+    seq = cut_for_a_partial_exit(rig, broker)
+    # The position book lags the exit's fill (16-session-design F78) through a read of the
+    # GTT book, then catches up.
+    broker.lag_positionbook()
+    rig.run(rig.own_exit(5))
+    rig.step_for(2.0)
+    rig.send(ReadGtts())
+    broker.catch_up_positionbook()
+    rig.step_for(4.0, every_s=2.0)
+
+    news = rig.send(rig.gtt(GttAction.CANCEL, seq=seq))
+    news += rig.step_for(CHILD_SEARCH_S, every_s=2.0)
+
+    (answer,) = answers(news)
+    assert (answer.kind, outcomes(news)) == (GttAnswerKind.CANCELLED, [])
+    assert broker.position("SBIN", "NSE") == 5
 
 
 # ----- refusals --------------------------------------------------------------------------------

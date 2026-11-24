@@ -26,7 +26,8 @@ the GTT cannot be read (`Seen.UNREADABLE`) is no miss: it says nothing of the GT
   have, since four of seven brokers list active GTTs only and a GTT that fired is simply
   gone from their books (3.1): a row of its shape no GTT of the journal holds has fired;
   the leg's units moved by its units on its side since the first read, net of the
-  session's own fills (`_gtt_child.move_of`); or the order book holds an order of its
+  session's own fills (`_gtt_child.move_of`; reads made while those fills had not settled,
+  `_own_fills`, count for neither); or the order book holds an order of its
   child's shape placed since its send (FIRED_CHECK: the sender reads the order book,
   `again_verdict`). A row on its symbol and exchange (or naming none) that no GTT of the
   journal holds and that cannot be read may be this place too: it is never placed again
@@ -45,8 +46,10 @@ the GTT cannot be read (`Seen.UNREADABLE`) is no miss: it says nothing of the GT
   is CANCEL_REFUSED; still resting once misses decide, CANCEL_REFUSED. A GTT gone from the
   book (not shown cancelled) may have fired just before the cancel: the leg's units moved
   by its units from its baseline (moved by the session's own fills since, `_gtt_followed`)
-  say it fired, and otherwise the order book is read `CHILD_READS_OF_A_GONE_GTT` times,
-  `READ_AGAIN_AFTER_S` apart, before the cancel is confirmed.
+  say it fired, unless they were read while those fills had not settled (`_own_fills`:
+  the position book may show an exit the order path has not heard of yet); otherwise the
+  order book is read `CHILD_READS_OF_A_GONE_GTT` times, `READ_AGAIN_AFTER_S` apart, before
+  the cancel is confirmed.
 
 Times are UTC nanoseconds, prices rupees, quantities whole units.
 """
@@ -174,7 +177,8 @@ def judge(pending: Pending, read: BookRead, bound: Callable[[str], bool]) -> Ver
 def child_verdict(pending: Pending, seen: Seen | None, found: Candidates, moved: bool) -> Verdict:
     """What the order book says of a cancelled GTT a read showed `seen` (GONE or ENDED):
     `found`, the orders that may be its child; `moved`, whether the leg's units moved by
-    the GTT's units since the last read that showed it resting (module docstring)."""
+    the GTT's units since the last read that showed it resting, read while the session's
+    own fills on the leg had settled (module docstring)."""
     if found.every:
         words = f"it fired: orders {', '.join(found.every)} may be its child"
         return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, seen=seen, message=words)
@@ -252,11 +256,12 @@ def _unanswered_place(
 def _fell_by_its_units(pending: Pending, read: BookRead) -> bool:
     """Whether the leg's units in `read` moved by the place's units on its side since the
     first read that read them, net of the session's own fills since; that first read is
-    kept on `pending`."""
+    kept on `pending`. A read made while the session's own fills on the leg had not
+    settled (`_own_fills`) is neither that first read nor a sign."""
     request = pending.request
     leg = (request.symbol, request.exchange, request.product)
     units, own = read.units.get(leg), read.own.get(leg)
-    if units is None or own is None:
+    if units is None or own is None or leg not in read.settled:
         return False
     if pending.first_units is None:
         pending.first_units = (units, own)
