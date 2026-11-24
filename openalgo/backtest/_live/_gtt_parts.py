@@ -56,7 +56,7 @@ def gtt_parts(
     )
     follower.restore()
     news.unknown_order = follower.order_seen
-    calls = GttCalls(client, path=path, guard=guard, budget=budget, sleep=sleep)
+    calls = GttCalls(client, path=path, guard=guard, budget=budget, sleep=sleep, now=now)
     return GttSender(
         calls,
         reader,

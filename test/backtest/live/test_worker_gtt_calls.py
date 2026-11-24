@@ -22,13 +22,20 @@ from gtt_samples import (
     UNITS,
     GttRig,
     answers,
+    bought,
     broker_with_sbin,
     calls,
 )
 from worker_samples import STRATEGY
 
 from openalgo.backtest._live._gtt_send import NOT_FOUND_NOTE, REPLACED_NOTE
-from openalgo.backtest._live._gtt_types import Direction, GttAction, GttAnswerKind
+from openalgo.backtest._live._gtt_types import (
+    Direction,
+    GttAction,
+    GttAnswer,
+    GttAnswerKind,
+    GttEvent,
+)
 from openalgo.backtest._live._types import Purpose
 from openalgo.backtest._live.inbox import NotSent, NotSentReason
 from openalgo.backtest._live.journal import GttState, GttTerms
@@ -190,13 +197,34 @@ def test_an_unanswered_place_found_by_its_shape_is_bound(rig, broker, fault):
     assert journal_gtt(rig, 1).trigger_id == FIRST_TRIGGER
 
 
-def test_an_unanswered_place_not_found_in_two_reads_2_seconds_apart_is_placed_again(rig, broker):
-    broker.faults.timeout("placegttorder")
+#: Seconds from an unanswered call's answer to its decision when the server may still be
+#: working on it: misses count from its send plus 150 s (the order path's BROKER_WINDOW_NS),
+#: 30 s after the client's 120 s timeout answered, and two reads 2 s apart decide.
+DECIDED_AFTER_TIMEOUT_S = 32.0
+#: The same when the server has finished with it (a refused connection): misses count from
+#: 5 s after the answer (NOT_PLACED_AFTER_NS), so the reads 6 s and 8 s after it decide.
+DECIDED_AFTER_FINISHED_S = 8.0
+UNANSWERED_PLACES = pytest.mark.parametrize(
+    ("fault", "decided_after_s"),
+    [
+        (lambda faults: faults.timeout("placegttorder"), DECIDED_AFTER_TIMEOUT_S),
+        (lambda faults: faults.refuse_connection("placegttorder"), DECIDED_AFTER_FINISHED_S),
+    ],
+    ids=["a timeout", "a refused connection"],
+)
+
+
+@UNANSWERED_PLACES
+def test_an_unanswered_place_not_found_once_misses_count_is_placed_again(
+    rig, broker, fault, decided_after_s
+):
+    fault(broker.faults)
 
     first = answers(rig.send(rig.gtt()))
-    later = answers(rig.step_for(2.0))
+    early = answers(rig.step_for(decided_after_s - 2.0, every_s=2.0))
+    later = answers(rig.step_for(2.0, every_s=2.0))
 
-    assert first == []
+    assert (first, early) == ([], [])
     (answer,) = later
     assert (answer.kind, answer.seq, answer.trigger_id) == (GttAnswerKind.PLACED, 2, FIRST_TRIGGER)
     assert len(broker.log.calls("placegttorder")) == 2
@@ -205,12 +233,26 @@ def test_an_unanswered_place_not_found_in_two_reads_2_seconds_apart_is_placed_ag
         assert journal.gtt_states(1)[-1][1] == NOT_FOUND_NOTE
 
 
+def test_an_unanswered_place_the_server_finishes_late_is_bound_and_never_placed_again(rig, broker):
+    # The server places it 20 s after the client's timeout: within the 150 s from its send
+    # in which it may still be working on it.
+    broker.faults.late_landing("placegttorder", seconds=20.0)
+
+    news = answers(rig.send(rig.gtt())) + answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S, 2.0))
+
+    (answer,) = news
+    assert (answer.kind, answer.seq, answer.trigger_id) == (GttAnswerKind.PLACED, 1, FIRST_TRIGGER)
+    assert len(broker.log.calls("placegttorder")) == 1
+    assert [gtt.trigger_id for gtt in broker.gtts()] == [FIRST_TRIGGER]
+
+
 def test_a_place_unanswered_twice_and_not_found_is_unresolved(rig, broker):
     broker.faults.timeout("placegttorder")
     broker.faults.timeout("placegttorder")
 
     rig.send(rig.gtt())
-    news = answers(rig.step_for(2.0)) + answers(rig.step_for(2.0))
+    news = answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S, 2.0))
+    news += answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S, 2.0))
 
     (answer,) = news
     assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
@@ -218,6 +260,81 @@ def test_a_place_unanswered_twice_and_not_found_is_unresolved(rig, broker):
     states = [journal_gtt(rig, seq).state for seq in (1, 2)]
     assert states == [GttState.NOT_PLACED, GttState.NOT_PLACED]
     assert broker.gtts() == []
+
+
+def a_gtt_by_hand(broker, status):
+    """Another client places a GTT of the stop's shape, which then ends with `status`
+    (or fires, for "triggered") with no child: FIRST_TRIGGER, unbound in the journal."""
+    hand = broker.client()
+    fields = {"symbol": "SBIN", "exchange": "NSE", "product": "CNC", "action": "SELL"}
+    terms = {"quantity": UNITS, "price": LIMIT, "triggerprice_sl": TRIGGER}
+    trigger_id = hand.placegttorder(strategy="manual", **fields, **terms)["trigger_id"]
+    broker.set_gtt_status(trigger_id, status)
+    return trigger_id
+
+
+@pytest.mark.parametrize("status", ["cancelled", "expired", "rejected"])
+def test_an_unanswered_place_is_not_bound_to_a_gtt_of_its_shape_that_ended(rig, broker, status):
+    a_gtt_by_hand(broker, status)
+    broker.faults.timeout("placegttorder")
+
+    news = answers(rig.send(rig.gtt())) + answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S, 2.0))
+
+    # Not found once misses count, it is placed again: the hand GTT is never the session's.
+    (answer,) = news
+    assert (answer.kind, answer.seq, answer.trigger_id) == (GttAnswerKind.PLACED, 2, SECOND_TRIGGER)
+    with rig.journal() as journal:
+        assert journal.gtt_by_trigger(FIRST_TRIGGER) is None
+
+
+def test_an_unanswered_place_is_not_placed_again_when_a_gtt_of_its_shape_fired(rig, broker):
+    fired = a_gtt_by_hand(broker, "triggered")
+    broker.faults.timeout("placegttorder")
+
+    news = answers(rig.send(rig.gtt())) + answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S, 2.0))
+
+    # It may be this place, landed and fired: placing it again could sell twice.
+    (answer,) = news
+    assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
+    assert fired in answer.message
+    assert [gtt.trigger_id for gtt in broker.gtts()] == [fired]
+
+
+def test_an_answered_place_a_lagging_book_shows_from_its_third_read_is_placed(rig, broker):
+    broker.hide_gtt(FIRST_TRIGGER, reads=2)
+
+    news = rig.send(rig.gtt()) + rig.step_for(4.0, every_s=2.0)
+
+    # A broker's book may show a new GTT a few seconds late: no read is a miss until 5 s
+    # after the answer, so the third read (4 s after it) confirms it.
+    (answer,) = news
+    assert (answer.kind, answer.trigger_id) == (GttAnswerKind.PLACED, FIRST_TRIGGER)
+    assert journal_gtt(rig, 1).state is GttState.ACTIVE
+
+
+@pytest.mark.parametrize("history", [True, False], ids=["history rows", "active only"])
+def test_a_place_that_fired_before_its_read_is_answered_before_the_followers_outcomes(
+    make_fake_openalgo, tmp_path, monkeypatch, history
+):
+    fake = broker_with_sbin(make_fake_openalgo(gtt_history=history))
+    bought(fake)
+    made = GttRig(fake, tmp_path)
+    made.messages()
+    original = made.orders._client.placegttorder
+
+    def fired_at_once(**fields):
+        answer = original(**fields)
+        fake.trade("SBIN", "NSE", 789.0)
+        return answer
+
+    monkeypatch.setattr(made.orders._client, "placegttorder", fired_at_once)
+
+    news = made.send(made.gtt()) + made.step_for(10.0, every_s=2.0)
+
+    # The session learns the GTT was placed before it learns it fired (GttNews' order).
+    found = [item.kind if isinstance(item, GttAnswer) else item.event for item in news]
+    assert found == [GttAnswerKind.PLACED, GttEvent.IN_FLIGHT, GttEvent.TRIGGERED]
+    made.worker.close()
 
 
 def test_nothing_more_is_sent_for_a_gtt_while_its_unanswered_place_is_looked_for(rig, broker):
@@ -238,14 +355,35 @@ def test_an_unanswered_modify_the_book_shows_made_is_modified(rig, broker):
     assert (answer.kind, journal_gtt(rig, seq).terms) == (GttAnswerKind.MODIFIED, MODIFIED_TERMS)
 
 
-def test_an_unanswered_modify_the_book_shows_not_made_in_two_reads_is_refused(rig, broker):
+def test_an_unanswered_modify_the_server_may_still_make_is_cancelled_and_placed_again(rig, broker):
     seq = placed(rig)
     broker.faults.timeout("modifygttorder")
 
     first = answers(rig.send(modify(rig, seq)))
     (answer,) = answers(rig.step_for(2.0))
 
+    # Two reads show the old terms while the server may still apply the modify: its
+    # result cannot be told, so the GTT is cancelled and placed again with its terms.
     assert first == []
+    assert (answer.kind, answer.seq, answer.trigger_id) == (
+        GttAnswerKind.MODIFIED,
+        2,
+        SECOND_TRIGGER,
+    )
+    assert [gtt.status for gtt in broker.gtts()] == ["cancelled", "active"]
+
+
+def test_an_unanswered_modify_that_never_reached_the_server_is_refused_once_misses_count(
+    rig, broker
+):
+    seq = placed(rig)
+    broker.faults.refuse_connection("modifygttorder")
+
+    first = answers(rig.send(modify(rig, seq)))
+    early = answers(rig.step_for(DECIDED_AFTER_FINISHED_S - 2.0, every_s=2.0))
+    (answer,) = answers(rig.step_for(2.0, every_s=2.0))
+
+    assert (first, early) == ([], [])
     assert answer.kind is GttAnswerKind.MODIFY_REFUSED
     gtt = journal_gtt(rig, seq)
     assert (gtt.terms, gtt.state) == (STOP_TERMS, GttState.ACTIVE)
@@ -278,15 +416,61 @@ def test_an_unanswered_cancel_whose_gtt_ended_with_no_child_is_cancelled(rig, br
     assert answer.kind is GttAnswerKind.CANCELLED
 
 
-def test_an_unanswered_cancel_whose_gtt_rests_in_two_reads_is_refused(rig, broker):
+def test_an_unanswered_cancel_whose_gtt_rests_once_misses_count_is_refused(rig, broker):
     seq = placed(rig)
     broker.faults.timeout("cancelgttorder")
 
     first = answers(rig.send(rig.gtt(GttAction.CANCEL, seq=seq)))
-    (answer,) = answers(rig.step_for(2.0))
+    early = answers(rig.step_for(DECIDED_AFTER_TIMEOUT_S - 2.0, every_s=2.0))
+    (answer,) = answers(rig.step_for(2.0, every_s=2.0))
+
+    # Until 150 s from its send the server may still cancel it: no read is a miss before.
+    assert (first, early, answer.kind) == ([], [], GttAnswerKind.CANCEL_REFUSED)
+    assert journal_gtt(rig, seq).state is GttState.ACTIVE
+
+
+@pytest.fixture
+def fired_unseen(make_fake_openalgo, tmp_path):
+    """An active-only book; the account's 10 SBIN CNC, its stop resting. A trade at
+    `price` fires the stop before its cancel, which times out (it never reached the
+    broker), and the order book leaves the child out of its next read (a broker's book
+    lists a new order late): (fake, rig, the stop's journal number, the child's order ID)."""
+
+    def made(price):
+        fake = broker_with_sbin(make_fake_openalgo(gtt_history=False))
+        bought(fake)
+        rig = GttRig(fake, tmp_path)
+        rig.messages()
+        (answer,) = answers(rig.send(rig.gtt()))
+        fake.trade("SBIN", "NSE", price)
+        child = fake.orders()[-1].order_id
+        fake.hide_order(child, reads=1)
+        fake.faults.timeout("cancelgttorder")
+        return fake, rig, answer.seq, child
+
+    return made
+
+
+def test_a_cancelled_gtt_gone_with_the_position_fallen_by_its_units_fired(fired_unseen):
+    # The child sells the 10 at once (789.00 is above its 780.00 limit).
+    fake, rig, seq, _ = fired_unseen(789.0)
+
+    (answer,) = answers(rig.send(rig.gtt(GttAction.CANCEL, seq=seq)))
+
+    assert (answer.kind, fake.position("SBIN", "NSE")) == (GttAnswerKind.CANCEL_REFUSED, 0)
+    rig.worker.close()
+
+
+def test_a_cancelled_gtt_gone_with_no_child_found_is_looked_for_once_more(fired_unseen):
+    # The price gaps through the child's 780.00 limit: the child rests unfilled.
+    fake, rig, seq, child = fired_unseen(775.0)
+
+    first = answers(rig.send(rig.gtt(GttAction.CANCEL, seq=seq)))
+    (answer,) = answers(rig.step_for(2.0, every_s=2.0))
 
     assert (first, answer.kind) == ([], GttAnswerKind.CANCEL_REFUSED)
-    assert journal_gtt(rig, seq).state is GttState.ACTIVE
+    assert child in answer.message
+    rig.worker.close()
 
 
 # ----- refusals --------------------------------------------------------------------------------

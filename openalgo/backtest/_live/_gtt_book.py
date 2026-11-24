@@ -7,8 +7,11 @@ The answer is read as the SDK returns it (openalgo/gtt.py, `gttorderbook`: `data
 of rows with `trigger_id`, `status`, `symbol`, `exchange`, `trigger_prices` and `legs`,
 the sandbox's legs naming `triggered_order_id`; services/gtt_orderbook_service.py). A
 SINGLE GTT has one trigger and one leg. A book that is not a success, or a row that
-cannot be read, makes the whole read unreadable: a failed read is never taken as a GTT
-gone (7.1).
+names no GTT, makes the whole read unreadable: a failed read is never taken as a GTT gone
+(7.1). A row that names its GTT but whose terms cannot be read (a broker that wrote no leg,
+or a leg with no units) is unreadable on its own (UNREADABLE): that read says nothing of
+that GTT, and the other rows stand, so one odd GTT of the user's does not blind the
+engine to its own.
 
 | Status | `Seen` | Meaning to the engine |
 |---|---|---|
@@ -19,6 +22,7 @@ gone (7.1).
 | expired | EXPIRED | ended by the broker's expiry |
 | rejected | REJECTED | refused by the broker after placement |
 | anything else | UNKNOWN | taken as resting, with an alert once per GTT |
+| (its terms cannot be read) | UNREADABLE | not known from this read |
 
 Prices are rupees, quantities whole units.
 """
@@ -45,6 +49,7 @@ class Seen(enum.Enum):
     EXPIRED = "expired"
     REJECTED = "rejected"
     UNKNOWN = "unknown"
+    UNREADABLE = "unreadable"
 
     @property
     def rests(self) -> bool:
@@ -70,7 +75,8 @@ class GttRow:
     """One row of the GTT book: its broker `trigger_id`, `status` word, instrument, its
     trigger prices (rupees, as the book lists them), its first leg's side, units, limit
     (rupees) and product, and in the sandbox the child order it placed (None before it
-    fired, and on a broker's book, which never names it)."""
+    fired, and on a broker's book, which never names it); `readable` False for a row whose
+    terms could not be read (no triggers, no units: it shows no terms and has no shape)."""
 
     trigger_id: str
     status: str
@@ -82,10 +88,13 @@ class GttRow:
     limit: float
     product: str
     child_order_id: str | None = None
+    readable: bool = True
 
     @property
     def seen(self) -> Seen:
         """What the row's status means (module docstring)."""
+        if not self.readable:
+            return Seen.UNREADABLE
         return STATUS_WORDS.get(self.status.strip().lower(), Seen.UNKNOWN)
 
     def shows(self, terms: GttTerms) -> bool:
@@ -111,22 +120,27 @@ def seen_of(rows: Mapping[str, GttRow], trigger_id: str) -> Seen:
 
 def gtt_rows(answer: Mapping[str, Any]) -> dict[str, GttRow] | None:
     """The rows of a `gttorderbook` answer by trigger ID, or None when it is not a
-    success or a row cannot be read (module docstring)."""
+    success or a row names no GTT (module docstring)."""
     data = answer.get("data") if answer.get("status") == "success" else None
     if not isinstance(data, list):
         return None
     rows: dict[str, GttRow] = {}
     for raw in data:
-        row = _row(raw)
-        if row is None:
+        trigger_id = str(raw.get("trigger_id") or "") if isinstance(raw, Mapping) else ""
+        if not trigger_id:
             return None
-        rows[row.trigger_id] = row
+        rows[trigger_id] = _row(raw, trigger_id) or _unreadable(raw, trigger_id)
     return rows
 
 
-def _row(raw: Any) -> GttRow | None:
-    if not isinstance(raw, Mapping):
-        return None
+def _unreadable(raw: Mapping[str, Any], trigger_id: str) -> GttRow:
+    """The row of GTT `trigger_id` whose terms cannot be read (module docstring)."""
+    symbol, exchange = str(raw.get("symbol") or ""), str(raw.get("exchange") or "")
+    status = str(raw.get("status") or "")
+    return GttRow(trigger_id, status, symbol, exchange, (), "", 0, 0.0, "", readable=False)
+
+
+def _row(raw: Mapping[str, Any], trigger_id: str) -> GttRow | None:
     legs, triggers = raw.get("legs"), raw.get("trigger_prices")
     if not isinstance(legs, list) or not legs or not isinstance(legs[0], Mapping):
         return None
@@ -139,9 +153,6 @@ def _row(raw: Any) -> GttRow | None:
     except (TypeError, ValueError):
         return None
     if not all(math.isfinite(x) for x in (*prices, quantity, limit)) or not quantity.is_integer():
-        return None
-    trigger_id = str(raw.get("trigger_id") or "")
-    if not trigger_id:
         return None
     child = leg.get("triggered_order_id")
     return GttRow(

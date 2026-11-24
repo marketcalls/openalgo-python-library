@@ -15,12 +15,25 @@ the GTT follower's findings come as `GttOutcome`s. Every GTT is a SINGLE GTT (P6
   refusal of an earlier day, 3.5), modified, modify refused, cancelled, cancel refused, or
   unresolved (the worker cannot tell, and says why). It names the journal's GTT that now
   holds the kernel's GTT: a modify that had to be cancelled and placed again names the new
-  one.
+  one. That place again can be refused: a MODIFY answered REFUSED (`seq` None) means the
+  old GTT was cancelled and nothing rests for the leg now.
 - **An outcome** of the follower (`GttEvent`): in flight (fired or gone, its child not
-  resolved yet: the leg is in flight for the reconciler), triggered (its child found),
-  child missed (the position moved by the GTT's units with no child found: the fill's
-  price, flagged when the trade book did not give it), ended outside the session, expired,
-  rejected after placement, or a mismatch the engine never guesses through.
+  resolved yet: the leg is in flight for the reconciler), resting again (a read showed a
+  GTT taken as gone resting: nothing fired), triggered (its child found), child missed
+  (the position moved by the GTT's units with no child found: the fill's price, flagged
+  when the trade book did not give it), ended outside the session, expired, rejected
+  after placement, or a mismatch the engine never guesses through.
+
+**Order.** The news reaches the loop in the order the order worker learned it: a call's
+answer comes before any outcome of the GTT it names (`GttNews`).
+
+**What the session must do with them (unit N3b).** Every outcome but IN_FLIGHT lets the
+leg's flight go (`_gtt_flight`), TRIGGERED included: the session binds the child
+(`BindGttChild`) in the same loop step it takes TRIGGERED, or the child's fill may be
+compared as an external one. A request the worker could not send is posted as
+`inbox.NotSent` naming it (OpenAlgo silent, the mode guard locked); the session hands it to
+the kernel as for an order request. The follower reads the GTT book on the clock only when
+the worker is given `market_open` (`worker.OrderWorker`).
 
 Prices are rupees, quantities whole units, times UTC nanoseconds.
 """
@@ -130,6 +143,8 @@ class GttEvent(enum.Enum):
     """What the GTT follower found of a GTT (module docstring)."""
 
     IN_FLIGHT = "in_flight"
+    #: A GTT taken as gone (a read that left it out) that a later read shows resting.
+    RESTING = "resting"
     TRIGGERED = "triggered"
     CHILD_MISSED = "child_missed"
     ENDED_OUTSIDE = "ended_outside"
@@ -218,8 +233,10 @@ def _problem(request: GttRequest) -> str:
         return f"its side is BUY or SELL, not {request.side!r}"
     if not all(isinstance(x, int | float) and math.isfinite(x) for x in numbers):
         return "its trigger and limit are finite prices"
-    if request.trigger_price <= 0 or request.limit_price < 0:
-        return "its trigger is above 0 rupees and its limit 0 rupees or more"
+    if request.trigger_price <= 0 or request.limit_price <= 0:
+        # Every child is a LIMIT order (`_gtt_calls.CHILD_PRICE_TYPE`): a limit of 0 would
+        # sell at any price, or be refused by the broker.
+        return "its trigger and limit are above 0 rupees"
     if isinstance(request.quantity, bool) or not isinstance(request.quantity, int):
         return f"its units are a whole number, not {request.quantity!r}"
     if request.quantity <= 0:

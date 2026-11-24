@@ -12,7 +12,10 @@ send) and checked by the mode guard, and read as what became of the call (`CallR
   is REFUSED with the broker's message; a timeout, a dropped connection, a 5xx (the
   server's "due to internal error": the broker may have acted) or a success that names no
   trigger is UNANSWERED; semi-auto's queue in the Action Center is QUEUED. The same reading
-  of an error as the order path's (`_order_answers.outcome_of`).
+  of an error as the order path's (`_order_answers.outcome_of`). Each result says when its
+  call was sent and whether the server has finished with it (`server_has_finished`): an
+  unanswered call the server may still be working on can still land at the broker, which
+  the confirmations wait for (`_gtt_confirm.misses_from_ns`).
 
 Prices are rupees, quantities units. Used by the worker's thread only.
 """
@@ -26,9 +29,9 @@ from typing import Any
 
 from ._answers import server_answer
 from ._gtt_types import Direction, GttRequest
-from ._order_answers import Outcome, outcome_of
+from ._order_answers import Outcome, outcome_of, server_has_finished
 from ._order_rate import RateBudget
-from ._types import GuardLike, Sleep
+from ._types import GuardLike, Now, Sleep
 from .orders import OrderPath
 
 #: OpenAlgo's trigger type of a GTT with one trigger and one child order (P6).
@@ -48,12 +51,17 @@ class CallKind(enum.Enum):
 
 @dataclass(frozen=True)
 class CallResult:
-    """A GTT call's result: its kind, the broker's trigger ID of an accepted place, and
-    the message of anything else (the broker's words of a refusal)."""
+    """A GTT call's result: its kind, the broker's trigger ID of an accepted place, the
+    message of anything else (the broker's words of a refusal), when the call was sent (UTC
+    nanoseconds, 0 when not known) and whether the server has finished with it (False only
+    for an UNANSWERED call the server may still be working on: a client timeout, a dropped
+    connection, a 5xx page)."""
 
     kind: CallKind
     trigger_id: str = ""
     message: str = ""
+    sent_ns: int = 0
+    finished: bool = True
 
 
 def place_fields(request: GttRequest) -> dict[str, Any]:
@@ -78,7 +86,7 @@ class GttCalls:
     """The GTT calls through `client` (the session's orders client), counted in `budget`
     (the order rate's window, `_order_throttle`), each answer told to `path`'s server watch
     and checked by `guard`; `sleep` waits for the budget when a call follows another within
-    one request (a place again after an unanswered one)."""
+    one request (a place again after an unanswered one); `now` gives UTC nanoseconds."""
 
     def __init__(
         self,
@@ -88,12 +96,14 @@ class GttCalls:
         guard: GuardLike,
         budget: RateBudget,
         sleep: Sleep,
+        now: Now,
     ) -> None:
         self._client = client
         self._path = path
         self._guard = guard
         self._budget = budget
         self._sleep = sleep
+        self._now = now
 
     def place(self, request: GttRequest) -> CallResult:
         """Place `request`'s GTT (module docstring)."""
@@ -114,26 +124,32 @@ class GttCalls:
         while (wait := self._budget.wait_seconds()) > 0:
             self._sleep(wait)
         self._budget.take()
+        sent_ns = self._now()
         answer = server_answer(method(**fields))
         self._path.note_answer(answer)
         self._guard.check_response(answer)
-        return call_result(answer, wants_trigger=wants_trigger)
+        return call_result(answer, wants_trigger=wants_trigger, sent_ns=sent_ns)
 
 
-def call_result(answer: Mapping[str, Any], *, wants_trigger: bool) -> CallResult:
-    """What `answer` (`server_answer`'s) says became of a GTT call; `wants_trigger` for a
-    place, whose success must name the broker's trigger ID (module docstring)."""
+def call_result(answer: Mapping[str, Any], *, wants_trigger: bool, sent_ns: int = 0) -> CallResult:
+    """What `answer` (`server_answer`'s) says became of a GTT call sent at `sent_ns` (UTC
+    nanoseconds); `wants_trigger` for a place, whose success must name the broker's
+    trigger ID (module docstring)."""
     outcome = outcome_of(answer)
     if outcome.kind is Outcome.QUEUED:
-        return CallResult(CallKind.QUEUED, message=outcome.reason)
+        return CallResult(CallKind.QUEUED, message=outcome.reason, sent_ns=sent_ns)
     if answer.get("status") == "success":
         trigger_id = str(answer.get("trigger_id") or "")
         if wants_trigger and not trigger_id:
-            return CallResult(CallKind.UNANSWERED, message="OpenAlgo answered success, no trigger")
-        return CallResult(CallKind.ACCEPTED, trigger_id=trigger_id)
+            words = "OpenAlgo answered success, no trigger"
+            return CallResult(CallKind.UNANSWERED, message=words, sent_ns=sent_ns)
+        return CallResult(CallKind.ACCEPTED, trigger_id=trigger_id, sent_ns=sent_ns)
     if outcome.kind is Outcome.REJECTED:
-        return CallResult(CallKind.REFUSED, message=outcome.reason)
-    return CallResult(CallKind.UNANSWERED, message=outcome.reason)
+        return CallResult(CallKind.REFUSED, message=outcome.reason, sent_ns=sent_ns)
+    finished = server_has_finished(answer)
+    return CallResult(
+        CallKind.UNANSWERED, message=outcome.reason, sent_ns=sent_ns, finished=finished
+    )
 
 
 __all__ = [

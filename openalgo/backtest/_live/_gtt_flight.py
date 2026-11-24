@@ -10,7 +10,9 @@ it; then its comparisons apply those rules as before. A leg in flight past the
 reconciler's limit is compared late, as any (16-session-design 5.1).
 
 Fed with the GTT news of the order worker in the order the loop takes it (`take`): an
-IN_FLIGHT outcome holds its GTT's leg, any outcome that resolves it lets it go. Legs are
+IN_FLIGHT outcome holds its GTT's leg, any outcome that resolves it lets it go, TRIGGERED
+too, before the child is bound to the kernel: the session binds it in the loop step that
+takes TRIGGERED (unit N3b, `_gtt_types`), or the child's fill is compared as external. Legs are
 named by their strategy: a strategy trades one symbol in one product. Used by the loop
 only.
 """

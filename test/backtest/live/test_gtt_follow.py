@@ -18,6 +18,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from gtt_samples import (
     FIRST_TRIGGER,
     LIMIT,
+    NEXT_DAY,
     PRICE,
     UNITS,
     GttRig,
@@ -134,6 +135,50 @@ def test_an_unknown_status_is_taken_as_resting_with_one_alert(make_fake_openalgo
     assert outcomes(news) == []
     (alert,) = [text for kind, text in rig.alerts.sent if kind is AlertKind.ERROR]
     assert "shows status 'paused', which the engine does not know" in alert
+    rig.worker.close()
+
+
+#: A row of the user's own GTT the engine cannot read: a broker wrote it with no leg.
+UNREADABLE_ROW = {"trigger_id": "990001", "status": "active", "symbol": "TCS", "legs": []}
+
+
+def with_rows(rig, monkeypatch, change):
+    """The GTT book's answers to the session, each changed by `change(rows)`."""
+    client = rig.orders._client
+    original = client.gttorderbook
+
+    def changed(**fields):
+        answer = original(**fields)
+        return {**answer, "data": change(list(answer["data"]))}
+
+    monkeypatch.setattr(client, "gttorderbook", changed)
+
+
+def test_a_row_the_engine_cannot_read_does_not_hide_the_rows_it_can(
+    make_fake_openalgo, tmp_path, monkeypatch
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path)
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    with_rows(rig, monkeypatch, lambda rows: [*rows, UNREADABLE_ROW])
+
+    news = rig.send(ReadGtts())
+
+    assert events(news) == [GttEvent.ENDED_OUTSIDE]
+    rig.worker.close()
+
+
+def test_a_gtt_whose_own_row_cannot_be_read_is_not_judged_by_that_read(
+    make_fake_openalgo, tmp_path, monkeypatch
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path)
+    blank = {"trigger_id": FIRST_TRIGGER, "status": "cancelled", "legs": []}
+    with_rows(rig, monkeypatch, lambda rows: [blank])
+
+    news = rig.send(ReadGtts())
+
+    assert outcomes(news) == []
+    with rig.journal() as journal:
+        assert journal.gtt(seq).state is GttState.ACTIVE
     rig.worker.close()
 
 
@@ -339,7 +384,13 @@ def test_a_gtt_gone_with_the_position_moved_by_other_units_is_a_mismatch(
 
 
 def test_a_gtt_first_seen_gone_with_no_baseline_cannot_be_told(make_fake_openalgo, tmp_path):
-    fake, rig, _ = world(make_fake_openalgo, tmp_path)
+    fake = broker_with_sbin(make_fake_openalgo())
+    bought(fake)
+    # The position book cannot be read when the place is confirmed: no baseline is kept.
+    fake.faults.gateway_error("positionbook", status=503)
+    rig = GttRig(fake, tmp_path)
+    rig.messages()
+    rig.send(rig.gtt())
     rig.worker.close()
     sell_by_hand(fake, (5, 795.0), (5, 793.0))
     fake.set_gtt_status(FIRST_TRIGGER, "triggered")
@@ -350,6 +401,62 @@ def test_a_gtt_first_seen_gone_with_no_baseline_cannot_be_told(make_fake_openalg
     assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
     assert "no read showed it resting with its position" in outcomes(news)[-1].message
     restarted.worker.close()
+
+
+def test_a_restart_judges_a_gtt_gone_unseen_by_the_baseline_the_journal_kept(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    rig.worker.close()
+    # After the session's close the stop fires and its child sells the 10 (789.00 is
+    # above its 780.00 limit); the next day the order and trade books hold neither.
+    fake.trade("SBIN", "NSE", 789.0)
+    fake.end_day()
+    fake.clock.advance(24 * 60 * 60)
+    restarted = GttRig(fake, tmp_path, day=NEXT_DAY)
+
+    news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
+
+    # The day-1 baseline (10) against the units now (0): it fired with its child missed,
+    # priced at the child's limit and flagged (20-positional-live 3.3, 4.3).
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.CHILD_MISSED]
+    missed = outcomes(news)[-1]
+    assert (missed.units, missed.price, missed.flags) == (UNITS, LIMIT, (PRICE_UNVERIFIED,))
+    with restarted.journal() as journal:
+        assert journal.gtt(seq).state is GttState.FIRED
+    restarted.worker.close()
+
+
+@SHAPES
+def test_a_gtt_one_read_left_out_rests_again_when_the_next_read_shows_it(
+    make_fake_openalgo, tmp_path, history
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
+    fake.hide_gtt(FIRST_TRIGGER, reads=1)
+
+    news = rig.send(ReadGtts()) + rig.send(ReadGtts())
+
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.RESTING]
+    with rig.journal() as journal:
+        assert journal.gtt(seq).state is GttState.ACTIVE
+    rig.worker.close()
+
+
+@SHAPES
+def test_a_gone_gtt_is_read_once_more_before_its_units_decide(
+    make_fake_openalgo, tmp_path, history
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
+    fake.hide_gtt(FIRST_TRIGGER, reads=1)
+
+    news = rig.send(ReadGtts()) + until_settled(rig)
+
+    # Its units unchanged would end it outside the session, and the session would place a
+    # second stop beside it: the read made before deciding shows it resting.
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.RESTING]
+    with rig.journal() as journal:
+        assert journal.gtt(seq).state is GttState.ACTIVE
+    rig.worker.close()
 
 
 def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(

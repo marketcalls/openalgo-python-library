@@ -243,21 +243,7 @@ class OrderWorker(WorkerThread):
                 rate=self._throttle.budget,
             )
             path.restore()
-            gtts = gtt_parts(
-                self._client,
-                journal=journal,
-                path=path,
-                guard=self._guard,
-                queue=self._queue,
-                budget=self._throttle.budget,
-                news=self._news,
-                post=self._post,
-                alerts=self._alerts,
-                now=self._now,
-                sleep=self._sleep,
-                calling=self._calling,
-                market_open=self._market_open,
-            )
+            gtts = self._gtt_parts(journal, path)
         except BaseException:
             journal.close()
             raise
@@ -282,6 +268,25 @@ class OrderWorker(WorkerThread):
         self._started = _Started(journal, path, stops, sender, gtts)
         self._post(WorkerReady(session))
         return session
+
+    def _gtt_parts(self, journal: Journal, path: OrderPath) -> GttSender:
+        """The GTT sender and follower on journal handle W and the order path, taking back
+        the journal's GTTs (`_gtt_parts`). Raises JournalError when they cannot be read."""
+        return gtt_parts(
+            self._client,
+            journal=journal,
+            path=path,
+            guard=self._guard,
+            queue=self._queue,
+            budget=self._throttle.budget,
+            news=self._news,
+            post=self._post,
+            alerts=self._alerts,
+            now=self._now,
+            sleep=self._sleep,
+            calling=self._calling,
+            market_open=self._market_open,
+        )
 
     def step(self) -> bool:
         """One iteration (module docstring); True when it took a request, so the thread

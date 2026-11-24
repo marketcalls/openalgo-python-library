@@ -18,8 +18,10 @@ nanoseconds.
   `_journal_carry`): what a position held overnight needs across days. `gtts`, each GTT
   the session placed, written before its place call (its `seq` is that request's number
   in the journal, `request_id` the order worker's), bound to the broker's `trigger_id`,
-  with its terms and state; `gtt_states`, each state a GTT took and when; `gtt_children`,
-  the child order a fired GTT placed, by its broker and kernel order IDs; `day_closes`,
+  with its terms, its state and its leg's units when a read last showed it resting
+  (`baseline_units`, NULL before: what a GTT gone later is judged by); `gtt_states`,
+  each state a GTT took and when; `gtt_children`, the child order a fired GTT placed, by
+  its broker and kernel order IDs; `day_closes`,
   one record per strategy and trading day of what the next day's session restores;
   `kept_refusals`, a broker's refusal of a stop GTT kept across starts; `decided_bars`,
   the last bar each strategy decided.
@@ -45,7 +47,7 @@ _POSITIONAL = (
         trigger_id TEXT, symbol TEXT NOT NULL, exchange TEXT NOT NULL, product TEXT NOT NULL,
         side TEXT NOT NULL, trigger_price REAL NOT NULL, limit_price REAL NOT NULL,
         quantity INTEGER NOT NULL, state TEXT NOT NULL, recorded_ns INTEGER NOT NULL,
-        changed_ns INTEGER NOT NULL) STRICT""",
+        changed_ns INTEGER NOT NULL, baseline_units INTEGER) STRICT""",
     "CREATE UNIQUE INDEX gtts_by_trigger ON gtts (ledger, trigger_id)",
     "CREATE INDEX gtts_by_state ON gtts (ledger, state, seq)",
     """CREATE TABLE gtt_states (

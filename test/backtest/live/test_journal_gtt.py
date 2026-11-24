@@ -160,6 +160,41 @@ def test_a_confirmed_modify_keeps_the_terms_the_broker_holds(path):
         assert journal.gtt_by_trigger("T-901").terms == trailed
 
 
+def test_a_gtts_baseline_is_none_until_a_read_shows_it_resting_with_its_position(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+
+        assert journal.gtt(seq).baseline_units is None
+
+
+def test_a_gtts_baseline_is_the_last_one_noted_and_read_back_on_a_later_day(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+        journal.set_gtt_baseline(seq, 10)
+        journal.set_gtt_baseline(seq, 6)
+    clock = ManualClock(ist_ns(NEXT_DAY, 9))
+    with started_journal(path, day=NEXT_DAY, now=clock) as journal:
+        assert [gtt.baseline_units for gtt in journal.open_gtts()] == [6]
+
+
+@pytest.mark.parametrize(("units", "words"), [(2.5, "whole number"), ("10", "whole number")])
+def test_a_baseline_that_is_not_whole_units_is_refused(path, units, words):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+        with pytest.raises(JournalError, match=words):
+            journal.set_gtt_baseline(seq, units)
+
+
+def test_a_gtt_not_at_the_broker_has_no_baseline(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        with pytest.raises(JournalError, match="only a GTT the broker holds has a baseline"):
+            journal.set_gtt_baseline(seq, 10)
+
+
 def test_a_gtt_not_at_the_broker_is_not_modified(path):
     with started_journal(path) as journal:
         seq = recorded(journal)

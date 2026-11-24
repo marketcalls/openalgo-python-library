@@ -104,7 +104,9 @@ class GttBinding:
     was recorded on; the `strategy` and the kernel's `gtt_id` of that day's session; the
     order worker's `request_id` of the place request; the broker's `trigger_id` (None until
     the place answered with one); its instrument and product; its `terms` as the broker
-    holds them; its `state`; and when it was recorded and last changed."""
+    holds them; its `state`; when it was recorded and last changed; and its leg's signed
+    units at the broker when a read last showed it resting (`baseline_units`, None before
+    any: 20-positional-live 3.3, what a GTT gone later is judged by, across days too)."""
 
     seq: int
     day: date
@@ -119,6 +121,7 @@ class GttBinding:
     state: GttState
     recorded_ns: int
     changed_ns: int
+    baseline_units: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,7 @@ def binding_from(row: sqlite3.Row) -> GttBinding:
             state=GttState(row["state"]),
             recorded_ns=row["recorded_ns"],
             changed_ns=row["changed_ns"],
+            baseline_units=row["baseline_units"],
         )
     except ValueError as error:
         raise JournalError(unreadable("a GTT", error)) from error
