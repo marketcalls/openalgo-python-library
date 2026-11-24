@@ -127,6 +127,7 @@ def test_an_order_is_handed_to_the_venue_as_a_place_command():
             "side": "BUY",
             "role": "entry",
             "reason": None,
+            "flags": [],
             "quantity_units": 100.0,
             "order_type": "LIMIT",
             "price": 499.5,

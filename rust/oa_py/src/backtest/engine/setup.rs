@@ -16,8 +16,8 @@ use oa_bt::market::margin::MarginModel;
 use oa_bt::market::slippage::SlippageSpec;
 use oa_bt::model::{InstrumentKind, Product};
 use oa_bt::rms::{
-    AfterRiskExit, Distance, PositionCap, RiskBasis, RiskCap, ScaleLimits, Spacing,
-    StrategyRiskConfig,
+    AfterRiskExit, Distance, PositionCap, PositionalStops, RiskBasis, RiskCap, ScaleLimits,
+    Spacing, StrategyRiskConfig,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -135,7 +135,18 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
         max_trades_per_day: optional(dict, "max_trades_per_day")?,
         daily_profit_target_rupees: optional(dict, "daily_profit_target")?,
         max_order_value_rupees: optional(dict, "max_order_value")?,
+        positional_stops: positional_stops(dict)?,
     })
+}
+
+/// How a CNC or NRML leg's stop is held, from the risk dict's "positional_stops" ("gtt" or
+/// "rearm_daily"; absent: "gtt", `openalgo/backtest/_positional_stops.py`).
+fn positional_stops(dict: &Bound<'_, PyDict>) -> PyResult<PositionalStops> {
+    let Some(code) = optional::<String>(dict, "positional_stops")? else {
+        return Ok(PositionalStops::default());
+    };
+    PositionalStops::from_code(&code)
+        .ok_or_else(|| unknown("positional_stops", &code, "gtt or rearm_daily"))
 }
 
 /// A scale-in limit as it crosses: (kind, amount).
@@ -283,6 +294,7 @@ pub(super) fn instrument(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentSpec> {
     let exchange: String = field(dict, "exchange")?;
     let kind: String = field(dict, "kind")?;
     let last_trading_day: Option<PyDay> = optional(dict, "last_trading_day")?;
+    let positional_exit_day: Option<PyDay> = optional(dict, "positional_exit_day")?;
     Ok(InstrumentSpec {
         symbol: field(dict, "symbol")?,
         exchange: parse_exchange(&exchange)?,
@@ -294,6 +306,7 @@ pub(super) fn instrument(dict: &Bound<'_, PyDict>) -> PyResult<InstrumentSpec> {
         freeze_quantity_units: optional(dict, "freeze_qty")?,
         cost_segment: None,
         last_trading_day: last_trading_day.map(|day| day.0),
+        positional_exit_day: positional_exit_day.map(|day| day.0),
     })
 }
 

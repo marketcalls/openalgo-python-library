@@ -46,12 +46,21 @@
 //!   leg's stop, which the next session cancels at once), "stop_gtt_rejections" (each open
 //!   leg's stop GTTs the broker rejected after placement), "risk" (the trading state, the
 //!   daily loss measure's totals, the drawdown peak and the slices each position has been
-//!   held) and the "open_trades". Before the close it raises `NativeEngineError`.
+//!   held), the "open_trades" and "last_closes" (each instrument's last close of the day,
+//!   by "instrument" index, in "close_rupees"). Before the close it raises
+//!   `NativeEngineError`.
 //! - `restore_carried_state(state)`: give it to the session of a later trading day, once,
 //!   after its catch-up and before any order. Returns `{"gtts": {saved id: new id},
-//!   "orders": {saved id: new id}}`. The daily loss measure and the trading state start the
-//!   session as a backtest's do at a session boundary; positions are marked at the
-//!   catch-up's last close; a stop GTT to cancel is cancelled at once ("cancel_gtt"). A
+//!   "orders": {saved id: new id}, "expired": [instrument index]}`. The daily loss measure
+//!   and the trading state start the session as a backtest's do at a session boundary;
+//!   positions are marked at the catch-up's last close; a stop GTT to cancel is cancelled
+//!   at once ("cancel_gtt"). A position on a contract whose last trading day is before the
+//!   session's day (an index future left to the exchange at its last close) is recorded
+//!   exited at its carried last close, reason "expiry", flagged "filled_at_last_close",
+//!   its instrument listed in "expired": the session never trades it (an order on it is
+//!   rejected "market_closed") and its stop GTTs are not restored. A rearm_daily leg
+//!   (`positional_stops="rearm_daily"`) gets its DAY stop placed once the session reaches
+//!   its open. A
 //!   state of the same or a later day, other instruments, another capital, an MIS
 //!   position, or parts that do not hold together raises `NativeEngineInputError` (the
 //!   message names the part of `carried_state`), and nothing of it is restored.
@@ -229,9 +238,15 @@ pub(super) fn restore_carried_state<'py>(
     for (saved, new) in carried.orders {
         orders.set_item(saved.0, new.0)?;
     }
+    let expired: Vec<u32> = carried
+        .expired
+        .iter()
+        .map(|instrument| instrument.0)
+        .collect();
     let ids = PyDict::new_bound(py);
     ids.set_item("gtts", gtts)?;
     ids.set_item("orders", orders)?;
+    ids.set_item("expired", expired)?;
     Ok(ids)
 }
 

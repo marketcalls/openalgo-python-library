@@ -278,7 +278,7 @@ def test_a_session_carried_through_json_restores_into_the_next_trading_day():
     assert carried["kind"] == "carried"
     tomorrow = new_session(NEXT_DAY)
     ids = tomorrow.restore_carried_state(carried)
-    assert ids == {"gtts": {G1: 1}, "orders": {}}
+    assert ids == {"gtts": {G1: 1}, "orders": {}, "expired": []}
     assert tomorrow.position(0, "CNC")["quantity_units"] == 10.0
     view = tomorrow.gtt(1)
     assert (view["state"], view["trigger_price"]) == ("Active", 497.0)
