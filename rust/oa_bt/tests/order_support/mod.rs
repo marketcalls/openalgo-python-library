@@ -60,11 +60,21 @@ pub fn run_daily(
     acts: Vec<(Day, Act)>,
     adjust: impl FnOnce(&mut RunConfig),
 ) -> (RunOutput, Vec<Gtt>, Script) {
+    run_daily_on(equity(), bars, acts, adjust)
+}
+
+/// `run_daily` on another instrument (registered as `SBIN`, the first and only one).
+pub fn run_daily_on(
+    instrument: InstrumentSpec,
+    bars: &[(Day, Ohlc)],
+    acts: Vec<(Day, Act)>,
+    adjust: impl FnOnce(&mut RunConfig),
+) -> (RunOutput, Vec<Gtt>, Script) {
     let first = bars.first().map_or(july_2025(1), |(day, _)| *day);
     let last = bars.last().map_or(first, |(day, _)| *day);
     let mut config = daily_config(first, last);
     adjust(&mut config);
-    let mut kernel = engine(config, equity(), daily_bars(bars));
+    let mut kernel = engine(config, instrument, daily_bars(bars));
     let acts = acts
         .into_iter()
         .map(|(day, act)| (day_close(day), act))
@@ -86,6 +96,19 @@ pub fn equity() -> InstrumentSpec {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: None,
+    }
+}
+
+/// An NFO future of the July 2025 series: lot 75, tick 0.05, multiplier 1, last
+/// trading day 2025-07-31.
+pub fn future() -> InstrumentSpec {
+    InstrumentSpec {
+        symbol: "NIFTY31JUL25FUT".to_string(),
+        exchange: Exchange::Nfo,
+        kind: InstrumentKind::Future,
+        lot_size_units: 75,
+        last_trading_day: Some(july_2025(31)),
+        ..equity()
     }
 }
 

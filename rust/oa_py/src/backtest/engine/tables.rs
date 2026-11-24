@@ -92,8 +92,10 @@ pub(super) fn event<'py>(py: Python<'py>, event: &Event) -> PyResult<Bound<'py, 
 }
 
 /// A GTT event: its name, the GTT's id (an integer, `g<n>` in Python), the instrument,
-/// the child's quantity, the triggers, the fired leg, the child's limit and fill price
-/// (rupees; `None` where the event does not carry the field).
+/// the child's quantity, the trigger (a position's stop, or a strategy GTT order's), the
+/// fired leg, the child's limit and fill price (rupees; `None` where the event does not
+/// carry the field). No GTT holds a target (design 20-positional-live P6), so the events
+/// table's `target_trigger_rupees` column, kept for the results' layout, stays empty.
 fn gtt_into(dict: &Bound<'_, PyDict>, event: &GttEvent) -> PyResult<()> {
     dict.set_item("type", "gtt")?;
     dict.set_item("name", event.name.code())?;
@@ -102,7 +104,6 @@ fn gtt_into(dict: &Bound<'_, PyDict>, event: &GttEvent) -> PyResult<()> {
     dict.set_item("product", event.product.code())?;
     dict.set_item("quantity_units", event.quantity_units)?;
     dict.set_item("stop_trigger_rupees", event.stop_trigger_rupees)?;
-    dict.set_item("target_trigger_rupees", event.target_trigger_rupees)?;
     dict.set_item("order_trigger_rupees", event.order_trigger_rupees)?;
     dict.set_item("fired_leg", event.fired_leg.map(|leg| leg.code()))?;
     dict.set_item("child_limit_rupees", event.child_limit_rupees)?;

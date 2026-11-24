@@ -1,16 +1,18 @@
 //! GTT (good till triggered) orders: the one kind of order that rests across sessions.
 //!
 //! Every ordinary order is a DAY order. Anything that must survive the session on a
-//! CNC or NRML position (a stop, a target, a resting entry) is a GTT: SINGLE for one
-//! trigger, OCO for a stop with a target (04-execution 4.4). MIS cannot hold a GTT.
+//! CNC or NRML position (its stop, a resting entry) is a GTT with one trigger, a SINGLE
+//! GTT (04-execution 4.4). A position's targets are held by the engine on the bars of
+//! every session, as an MIS leg's are: no OCO GTT is used, since OpenAlgo's OCO behaves
+//! differently from one broker to the next (design 20-positional-live P6). MIS cannot
+//! hold a GTT.
 //!
-//! A GTT has triggers and a child order. When a base bar reaches a trigger, or opens
+//! A GTT has a trigger and a child order. When a base bar reaches the trigger, or opens
 //! beyond it, the GTT fires (`GttAction::Fire`) and places its child: a LIMIT beyond the
 //! trigger by the segment buffer (`child_limit`). The child fills, or does not fill
 //! through its bar and is cancelled (`FillChild`, `CancelChild`); either way the GTT is
-//! spent. For an OCO, the leg that does not fire is cancelled with the one that does;
-//! with both triggers inside one base bar the stop fires. A modification is a full
-//! replacement of the triggers and quantity under the same id (`Modify`).
+//! spent. A modification is a full replacement of the trigger and quantity under the
+//! same id (`Modify`).
 //!
 //! The four decisions on GTTs (all reading A) are the defaults of `GttPolicy`: GTT-1 the
 //! child's limit buffer, GTT-2 re-creation after 360 days, GTT-3 at most one
@@ -42,38 +44,26 @@ impl fmt::Display for GttId {
     }
 }
 
-/// One trigger, or a stop and a target where the first to fire cancels the other.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GttKind {
-    /// One trigger.
-    Single,
-    /// One cancels the other: a stop leg and a target leg.
-    Oco,
-}
-
-/// What a GTT leg protects or opens.
+/// What a GTT's trigger is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GttLegRole {
-    /// A protective stop on a carried position.
+    /// The stop of a carried position, placed by the engine.
     Stop,
-    /// A profit target on a carried position.
-    Target,
     /// A strategy's own GTT (`validity="gtt"`): an entry, an add or a resting exit.
     Order,
 }
 
 impl GttLegRole {
-    /// The name used in events ("stop", "target", "order").
+    /// The name used in events ("stop", "order").
     pub fn code(self) -> &'static str {
         match self {
             GttLegRole::Stop => "stop",
-            GttLegRole::Target => "target",
             GttLegRole::Order => "order",
         }
     }
 }
 
-/// One trigger and the limit price of the child order it places.
+/// The trigger of a GTT and the limit price of the child order it places.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GttLeg {
     /// What the leg is for.
@@ -86,21 +76,11 @@ pub struct GttLeg {
     pub child_limit_rupees: f64,
 }
 
-/// What a protective GTT holds of its position's levels (decision GTT-11).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum GttSlot {
-    /// The target with this index, with a stop leg for the target's quantity when the
-    /// position has a stop.
-    Target(u16),
-    /// The stop for the units no working target covers.
-    Remainder,
-}
-
 /// Why a GTT exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GttPurpose {
-    /// Placed by the engine to hold a CNC or NRML position's stop and target.
-    Protect(GttSlot),
+    /// Placed by the engine to hold a CNC or NRML position's stop, for all its open units.
+    Protect,
     /// Placed by the strategy with `validity="gtt"`; the order in the book it belongs to.
     Order(OrderId),
 }
@@ -272,8 +252,8 @@ impl GttPolicy {
 /// The limit price of a GTT child order: beyond the trigger by `buffer_percent` in the
 /// direction of the child's side (above for a buy, below for a sell), computed from the
 /// trigger as rounded to the tick and rounded to the tick away from the trader, so the
-/// buffer is never smaller than asked, and never below one tick (`limit_beyond`). A
-/// target's child sits on the far side of its trigger like a stop's (decision GTT-6).
+/// buffer is never smaller than asked, and never below one tick (`limit_beyond`;
+/// decision GTT-6).
 ///
 /// Units: rupees and percent. Errors: `InvalidPrice` for an unusable trigger or a
 /// negative buffer, `InvalidTick` for an unusable tick.
@@ -299,10 +279,8 @@ pub struct Gtt {
     pub side: Side,
     /// Quantity of the child order in units.
     pub quantity_units: f64,
-    /// SINGLE or OCO.
-    pub kind: GttKind,
-    /// One leg for SINGLE, the stop then the target for OCO.
-    pub legs: Vec<GttLeg>,
+    /// Its trigger and the child's limit.
+    pub leg: GttLeg,
     /// Why it exists.
     pub purpose: GttPurpose,
     /// Where it stands.
@@ -313,19 +291,12 @@ pub struct Gtt {
     pub eligible_from: TsNanos,
     /// Grid slice of its last modification, for the once-per-base-bar rule (GTT-3).
     pub last_modified_slice: Option<u32>,
-    /// The leg that fired, once it has.
-    pub fired: Option<GttLegRole>,
 }
 
 impl Gtt {
-    /// The leg with a role, if the GTT has one.
-    pub fn leg(&self, role: GttLegRole) -> Option<&GttLeg> {
-        self.legs.iter().find(|leg| leg.role == role)
-    }
-
-    /// The trigger of a leg, rupees.
+    /// Its trigger, rupees, when it is for `role`.
     pub fn trigger(&self, role: GttLegRole) -> Option<f64> {
-        self.leg(role).map(|leg| leg.trigger_rupees)
+        (self.leg.role == role).then_some(self.leg.trigger_rupees)
     }
 
     /// True while its triggers are tested.

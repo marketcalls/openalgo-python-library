@@ -8,10 +8,11 @@ Slices in which the instrument has a fill at the open (an entry, an add, a squar
 roll) are left out: there the levels change in step 2 and the timeline, which records
 the end of each slice, does not show the levels step 3 used.
 
-On a CNC or NRML position the levels are a GTT's triggers (04-execution 4.4): a bar that
-reaches one fires the GTT, and its exit is either the child's fill in that slice or, when
-the child cannot fill, the engine's exit at the next bar open. The price of a GTT's exit
-is checked in `checks_gtt_children`, not here.
+On a CNC or NRML position the stop is a GTT's trigger and the targets are the engine's,
+tested by the same rule as an MIS leg's (04-execution 4.4, 20-positional-live P6): a bar
+that reaches the stop fires the GTT, and its exit is either the child's fill in that slice
+or, when the child cannot fill, the engine's exit at the next bar open. The price of a
+GTT's exit is checked in `checks_gtt_children`, not here.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ Violations = list[str]
 Trigger = tuple[str, int | None]
 
 LEVEL_REASONS = ("leg_sl", "leg_target")
-REASON_BY_GTT_LEG = {"stop": "leg_sl", "target": "leg_target"}
+REASON_BY_GTT_LEG = {"stop": "leg_sl"}
 
 
 def _carried_positions(case: Case) -> Iterator[tuple[str, str, Bar, LevelRow]]:
@@ -71,11 +72,9 @@ def _expected_triggers(bar: Bar, row: LevelRow) -> set[Trigger]:
     return {("leg_target", index) for index, level in targets if is_beyond(favourable, level, long)}
 
 
-def _gtt_fires_left_unfilled(
-    case: Case, instrument: str, slice_ist: str, row: LevelRow
-) -> set[Trigger]:
-    """Levels whose GTT fired in this slice but whose child was cancelled unfilled; the exit
-    then comes at the next bar open, so the slice has no fill for them."""
+def _gtt_fires_left_unfilled(case: Case, instrument: str, slice_ist: str) -> set[Trigger]:
+    """The stop whose GTT fired in this slice but whose child was cancelled unfilled; the
+    exit then comes at the next bar open, so the slice has no fill for it."""
     unfilled = {
         event["gtt_id"]
         for event in case["expected"]["events"]
@@ -88,9 +87,7 @@ def _gtt_fires_left_unfilled(
         fired = event["type"] == "gtt" and event["name"] == "GttTriggered"
         if not fired or event["gtt_id"] not in unfilled or event["instrument"] != instrument:
             continue
-        reason = REASON_BY_GTT_LEG[event["fired_leg"]]
-        index = None if reason == "leg_sl" else working_targets(row)[0]["index"]
-        triggers.add((reason, index))
+        triggers.add((REASON_BY_GTT_LEG[event["fired_leg"]], None))
     return triggers
 
 
@@ -105,7 +102,7 @@ def no_level_in_force_is_missed(case: Case) -> Violations:
             (fill["reason"], fill["target_index"])
             for fill in fills_at(case, instrument, slice_ist)
             if fill["reason"] in LEVEL_REASONS
-        } | _gtt_fires_left_unfilled(case, instrument, slice_ist, row)
+        } | _gtt_fires_left_unfilled(case, instrument, slice_ist)
         if expected != actual:
             problems.append(
                 f"{case['id']} {slice_ist}: {instrument} bar {bar.low} to {bar.high} against "
@@ -116,8 +113,9 @@ def no_level_in_force_is_missed(case: Case) -> Violations:
 
 
 def level_fills_are_priced_from_the_level_in_force(case: Case) -> Violations:
-    """Rule: an engine-held stop or target (MIS) fills at its level when the bar opens short
-    of it, and at the open when the open has already reached it."""
+    """Rule: an engine-held stop or target (an MIS leg's, and a CNC or NRML leg's target)
+    fills at its level when the bar opens short of it, and at the open when the open has
+    already reached it."""
     problems = []
     bars = bars_by_slice(case)
     for fill in case["expected"]["fills"]:

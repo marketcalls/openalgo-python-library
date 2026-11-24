@@ -249,11 +249,11 @@
     },
     {
       "id": "trace-06b-percent-levels-rounded",
-      "title": "Percent stop and target that do not land on the tick grid are rounded to the nearest tick and held as one OCO GTT; the stop leg fires and cancels the target leg",
+      "title": "Percent stop and target that do not land on the tick grid are rounded to the nearest tick; the stop is held as one SINGLE GTT and the target by the engine, and the stop GTT fires",
       "depends_on": ["GTT-1", "GTT-5", "GTT-6", "GTT-8", "SPEC-03", "SPEC-21", "SPEC-22"],
       "notes": [
-        "This case pins SPEC-03 (levels rounded to the nearest tick) and the OCO form of a positional stop and target.",
-        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). A stop with a target is one OCO GTT; when one leg fires the other is cancelled with it.",
+        "This case pins SPEC-03 (levels rounded to the nearest tick) and the form of a positional stop with a target: one SINGLE stop GTT, the target held by the engine.",
+        "Positional model (04-execution 4.4, 14-strategy-api 2.4): the stop of a CNC position is held as a GTT, placed as soon as the entry fills. When a bar reaches its trigger or opens beyond it, the GTT fires and places a child sell LIMIT 1 percent below the trigger (GTT-1). The GTT events and the fill field gtt_id are the fixture's vocabulary for a life cycle the documents describe but do not name (GTT-8). The stop is one SINGLE GTT for the whole position and the target is held by the engine on every session's bars, as an MIS leg's is (20-positional-live P6, decided 2026-11-24, which replaced the OCO GTT this case first pinned), so no GTT event carries a target trigger.",
         "The unrounded stop is 1504.00 x 0.98 = 1473.92, 0.4 of a tick above 1473.90: nearest gives 1473.90, rounding towards the entry (the tighter side) gives 1473.95, rounding down gives 1473.90. The unrounded target is 1504.00 x 1.035 = 1556.64, 0.8 of a tick above 1556.60: nearest gives 1556.65, rounding down gives 1556.60. The pair (1473.90, 1556.65) identifies nearest-tick rounding.",
         "The child limit 1473.90 x 0.99 = 1459.161 is not a whole number of ticks. Rounded away from the trader (down, for a sell) it is 1459.15, and the nearest tick is also 1459.15; only rounding towards the trader would give 1459.20 (GTT-6). The child is marketable at the trigger, so its limit does not change the fill.",
         "With the stop at 1473.95 the exit on 2025-07-09 would be at 1473.95 and the gross P&L -300.50."
@@ -357,7 +357,7 @@
           {"slice_ist": "2025-07-07T09:15:00+05:30", "step": 7, "type": "order", "name": "Submitted", "order_id": "o1", "quantity_units": null, "price_rupees": null, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "order", "name": "Filled", "order_id": "o1", "quantity_units": 10, "price_rupees": 1504.0, "reject_code": null},
           {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "position", "name": "PositionOpened", "instrument": "INFY", "position_quantity_units": 10},
-          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1473.9, "target_trigger_rupees": 1556.65, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "SPEC-03"]},
+          {"slice_ist": "2025-07-08T09:15:00+05:30", "step": 2, "type": "gtt", "name": "GttPlaced", "gtt_id": "g1", "instrument": "INFY", "quantity_units": 10, "stop_trigger_rupees": 1473.9, "target_trigger_rupees": null, "fired_leg": null, "child_limit_rupees": null, "price_rupees": null, "depends_on": ["GTT-8", "SPEC-03"]},
           {
             "slice_ist": "2025-07-09T09:15:00+05:30",
             "step": 3,
@@ -367,7 +367,7 @@
             "instrument": "INFY",
             "quantity_units": 10,
             "stop_trigger_rupees": 1473.9,
-            "target_trigger_rupees": 1556.65,
+            "target_trigger_rupees": null,
             "fired_leg": "stop",
             "child_limit_rupees": 1459.15,
             "price_rupees": null,
@@ -409,7 +409,7 @@
           "n": 2,
           "slice_ist": "2025-07-08T09:15:00+05:30",
           "step": 2,
-          "text": "BUY 10 at the open 1504.00. bt.pct is percent of the leg's fill average: stop distance 2 percent of 1504.00 = 30.08, level 1473.92; target distance 3.5 percent = 52.64, level 1556.64. Tick size 0.05; levels round to the nearest tick, an exact half tick up, on integer paise: 1473.92 / 0.05 = 29478.4, so 29478 ticks = 1473.90; 1556.64 / 0.05 = 31132.8, so 31133 ticks = 1556.65. A stop with a target on a CNC position is one OCO GTT: GttPlaced g1, stop trigger 1473.90, target trigger 1556.65, quantity 10.",
+          "text": "BUY 10 at the open 1504.00. bt.pct is percent of the leg's fill average: stop distance 2 percent of 1504.00 = 30.08, level 1473.92; target distance 3.5 percent = 52.64, level 1556.64. Tick size 0.05; levels round to the nearest tick, an exact half tick up, on integer paise: 1473.92 / 0.05 = 29478.4, so 29478 ticks = 1473.90; 1556.64 / 0.05 = 31132.8, so 31133 ticks = 1556.65. The stop of a CNC position is one SINGLE GTT for the whole position and the target is the engine's: GttPlaced g1, stop trigger 1473.90, no target trigger, quantity 10.",
           "cites": [
             "03-architecture 7",
             "05-risk-management 8",
@@ -418,6 +418,7 @@
             "03-architecture 4.2 step 2",
             "05-risk-management 3",
             "04-execution 4.4 item 2",
+            "20-positional-live P6",
             "14-strategy-api 2.4",
             "08-live-trading 6.2"
           ]
@@ -433,8 +434,8 @@
           "n": 4,
           "slice_ist": "2025-07-09T09:15:00+05:30",
           "step": 3,
-          "text": "The open 1498.00 lies between the triggers. The low 1473.90 touches the stop trigger exactly (a long stop is reached at price <= stop); the high 1502.00 is below the target trigger. g1 fires on its stop leg and, being an OCO, its target leg is cancelled with it. Child sell LIMIT 1473.90 x 0.99 = 1459.161, rounded to the tick: 1459.15 (GTT-6). The child is marketable at the trigger and fills there (GTT-5): SELL 10 at 1473.90, reason leg_sl. Realized (1473.90 - 1504.00) x 10 = -301.00.",
-          "cites": ["04-execution 4.4 items 3 and 4", "03-architecture 4.2 step 3", "03-architecture 4.5", "vectors: long_stop_exact_touch"]
+          "text": "The open 1498.00 lies between the stop 1473.90 and the target 1556.65. The low 1473.90 touches the stop trigger exactly (a long stop is reached at price <= stop); the high 1502.00 is below the target. g1 fires. Child sell LIMIT 1473.90 x 0.99 = 1459.161, rounded to the tick: 1459.15 (GTT-6). The child is marketable at the trigger and fills there (GTT-5): SELL 10 at 1473.90, reason leg_sl; the position is flat, so its target goes with it. Realized (1473.90 - 1504.00) x 10 = -301.00.",
+          "cites": ["04-execution 4.4 item 3", "20-positional-live P6", "03-architecture 4.2 step 3", "03-architecture 4.5", "vectors: long_stop_exact_touch"]
         }
       ]
     },

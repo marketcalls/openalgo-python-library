@@ -5,6 +5,9 @@
 //! instrument in the order their positions opened, so the events of one step follow
 //! 03-architecture 4.5 and no leg's result depends on another's.
 //!
+//! A CNC or NRML leg is tested here too, in the same order: its targets by the same rule
+//! as an MIS leg's, its stop by its GTT (`gtt_levels`).
+//!
 //! A level hit is an engine-held exit: it emits its risk event (`leg_sl_hit` or
 //! `leg_target_hit` with the level in force) and then fills through
 //! `fills::execute_fill` with no order, reason `leg_sl` or `leg_target` and the target
@@ -41,19 +44,20 @@ use super::kernel::Engine;
 use super::venue_owner::closing_side;
 
 impl Engine {
-    /// Step 3: every engine-held leg's levels against its instrument's bar in this
-    /// slice. Legs opened or added to in step 2 are tested with the levels step 2 set
-    /// (SPEC-02, SPEC-11). A CNC or NRML leg's levels are GTTs, tested by `gtt_fire`.
+    /// Step 3: every leg's levels against its instrument's bar in this slice. Legs opened
+    /// or added to in step 2 are tested with the levels step 2 set (SPEC-02, SPEC-11). A
+    /// CNC or NRML leg's stop is its GTT's trigger, which fires the GTT (`gtt_levels`).
     ///
     /// Errors: those of `execute_fill` and of the leg rules.
     pub(super) fn test_leg_levels(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         for key in self.leg_order() {
-            if held_as_gtt(key.product) {
-                continue;
-            }
             let Some(bar) = self.market.bar(key.instrument, slice.index) else {
                 continue;
             };
+            if held_as_gtt(key.product) {
+                self.test_positional_leg(slice, key, (&bar, &bar), Step::Levels)?;
+                continue;
+            }
             let hits = match self.leg_mut(key) {
                 Some(leg) => leg.test_bar(&bar),
                 None => continue,

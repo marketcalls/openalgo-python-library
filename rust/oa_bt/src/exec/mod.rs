@@ -10,7 +10,7 @@
 //! | `state` | `OrderStatus`, `OrderAction` and the table of legal transitions |
 //! | `segment` | The per-segment order table: the stop order a segment accepts (04-execution 4.1) |
 //! | `matching` | Where a LIMIT fills and a trigger is reached in one base bar |
-//! | `gtt` | GTT orders (SINGLE, OCO): types, transition table, the decided policy, child pricing |
+//! | `gtt` | GTT orders (SINGLE, one trigger each): types, transition table, the decided policy, child pricing |
 //! | `gtt_book` | `GttBook`: every GTT of a run |
 //! | `gtt_event` | The events of a GTT's life |
 //! | `fill` | `Fill`: quantity, price, where in the bar, why (`FillReason`), flags; `FillPricing` |
@@ -40,9 +40,7 @@ pub use book::OrderBook;
 pub use checks::{EntryWindow, RejectCode};
 pub use error::ExecError;
 pub use fill::{Fill, FillAt, FillFlags, FillPricing, FillReason};
-pub use gtt::{
-    Gtt, GttAction, GttId, GttKind, GttLeg, GttLegRole, GttPolicy, GttPurpose, GttSlot, GttStatus,
-};
+pub use gtt::{Gtt, GttAction, GttId, GttLeg, GttLegRole, GttPolicy, GttPurpose, GttStatus};
 pub use gtt_book::GttBook;
 pub use gtt_event::{GttEvent, GttEventName};
 pub use instrument::{InstrumentId, InstrumentSpec};

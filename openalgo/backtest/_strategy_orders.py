@@ -82,9 +82,11 @@ class OrderMethods:
         rounds down to no share skips the order (`result.skipped`). `leverage=` asks for
         intraday leverage, else the strategy's `leverage`, else 1x. Risk arguments
         attach to the position it opens
-        (an add may repeat them but not change them); on CNC and NRML they are
-        held as GTT orders. `validity="gtt"` rests it as a GTT until it fires or is
-        cancelled (CNC and NRML only; it needs `price`, its trigger)."""
+        (an add may repeat them but not change them); on CNC and NRML the stop is
+        held as one GTT order for the whole position (a trail or breakeven moves it, a
+        target's partial exit cuts it to the units left) and the targets by the engine
+        on every session's bars, as on MIS. `validity="gtt"` rests it as a GTT until it
+        fires or is cancelled (CNC and NRML only; it needs `price`, its trigger)."""
         return self._open("BUY", **locals_without_self(locals()))
 
     def sell(

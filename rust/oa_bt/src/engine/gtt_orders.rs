@@ -15,8 +15,8 @@
 use crate::exec::gtt::child_limit;
 use crate::exec::segment::venue_order_type;
 use crate::exec::{
-    ExecError, Gtt, GttAction, GttEventName, GttKind, GttLeg, GttLegRole, GttPurpose, GttStatus,
-    OrderId, OrderRequest, OrderType, TriggerDirection, Validity,
+    ExecError, Gtt, GttAction, GttEventName, GttLeg, GttLegRole, GttPurpose, GttStatus, OrderId,
+    OrderRequest, OrderType, TriggerDirection, Validity,
 };
 
 use super::error::KernelError;
@@ -40,7 +40,7 @@ impl Engine {
         })
     }
 
-    /// The single leg of a GTT order: its trigger, the side the price reaches it from
+    /// The trigger of a GTT order: its price, the side the price reaches it from
     /// (the decision price, the last close), and its child limit.
     ///
     /// Errors: `Exec` for a price that is unusable or an order with no last close to
@@ -101,14 +101,12 @@ impl Engine {
             product: placed.request.product,
             side: placed.request.side,
             quantity_units: placed.quantity_units,
-            kind: GttKind::Single,
-            legs: vec![leg],
+            leg,
             purpose: GttPurpose::Order(order),
             status: GttStatus::Active,
             created_on: self.trade_day(stamp),
             eligible_from: self.fills_from(&placed),
             last_modified_slice: None,
-            fired: None,
         })?;
         self.emit_gtt(stamp, GttEventName::Placed, id);
         Ok(())
@@ -134,7 +132,7 @@ impl Engine {
         let (quantity, decided_at) = (replaced.quantity_units, self.fills_from(replaced));
         self.gtts.book.apply(id, GttAction::Modify)?;
         if let Some(gtt) = self.gtts.book.get_mut(id) {
-            gtt.legs = vec![leg];
+            gtt.leg = leg;
             gtt.quantity_units = quantity;
             gtt.eligible_from = decided_at;
             gtt.last_modified_slice = Some(stamp.slice);

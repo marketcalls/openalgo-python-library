@@ -237,3 +237,20 @@ def test_a_stop_on_a_delivery_position_is_held_as_a_gtt():
     assert list(placed["name"]) == ["GttPlaced"]
     assert list(placed["stop_trigger_rupees"]) == [96.0]
     assert list(placed["time"]) == [at(3)]
+
+
+def test_a_delivery_target_is_held_by_the_engine_and_only_the_stop_by_a_gtt():
+    # Bought at the 09:18 open of 100.00 with a 4-point stop and a 2-point target: one GTT
+    # holds the stop at 96.00 and no target (20-positional-live P6). The 09:20 bar reaches
+    # 102.00: the engine exits at the target, the GTT cancelled first.
+    strategy = scripted(
+        {2: lambda s: s.buy(qty=10, stop=bt.points(4), target=bt.points(2), product="CNC")}
+    )
+    result = run(strategy, {5: (100.0, 102.5, 99.5, 102.0)})
+    gtts = result.events[result.events["type"] == "gtt"]
+    assert list(gtts["name"]) == ["GttPlaced", "GttCanceled"]
+    assert list(gtts["stop_trigger_rupees"]) == [96.0, 96.0]
+    assert gtts["target_trigger_rupees"].isna().all()
+    exit_fill = result.fills.iloc[1]
+    assert (exit_fill["reason"], exit_fill["price_rupees"]) == ("leg_target", 102.0)
+    assert pd.isna(exit_fill["gtt_id"])

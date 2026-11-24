@@ -154,11 +154,12 @@ def _gtt_event_violations(event: dict[str, Any], where: str) -> Violations:
     problems: Violations = []
     if event["gtt_id"] is None or event["instrument"] is None:
         problems.append(f"{where}: a GTT event names its GTT and its instrument")
-    triggers = (event["stop_trigger_rupees"], event["target_trigger_rupees"])
-    if ("triggers" in carried) == (triggers == (None, None)):
+    if ("triggers" in carried) == (event["stop_trigger_rupees"] is None):
         problems.append(
             f"{where}: the trigger prices are given exactly for {_names_with('triggers')}"
         )
+    if event["target_trigger_rupees"] is not None:
+        problems.append(f"{where}: no GTT holds a target (20-positional-live P6)")
     for field in ("quantity_units", "fired_leg", "child_limit_rupees", "price_rupees"):
         if (field in carried) == (event[field] is None):
             problems.append(f"{where}: {field} is given exactly for {_names_with(field)}")

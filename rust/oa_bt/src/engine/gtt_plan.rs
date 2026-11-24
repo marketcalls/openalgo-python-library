@@ -1,58 +1,41 @@
-//! Which GTTs hold a positional leg's levels, and when a GTT is modified.
+//! The GTT a positional leg needs, and when it is modified.
 //!
 //! The leg state (`rms::LegState`) stays the one source of a CNC or NRML position's
-//! levels: stop, targets, trail and breakeven are computed exactly as for an
-//! engine-held MIS leg. This module turns those levels into GTTs (decision GTT-11) and
-//! decides when a changed level is sent as a modification (decision GTT-3).
+//! levels: stop, targets, trail and breakeven are computed exactly as for an engine-held
+//! MIS leg. Only the stop is held at the broker, as one SINGLE GTT for all the leg's open
+//! units; the targets stay with the engine, tested on every session's bars as an MIS
+//! leg's are (design 20-positional-live P6: OpenAlgo's OCO GTT behaves differently from
+//! one broker to the next, so none is used). This module turns the leg's stop into that
+//! GTT and decides when a changed stop or quantity is sent as a modification (decision
+//! GTT-3).
 
 use crate::exec::gtt::child_limit;
 use crate::exec::price::{round_to_tick, tick_units, whole_units};
-use crate::exec::{Gtt, GttKind, GttLeg, GttLegRole, GttPolicy, GttSlot, TriggerDirection};
+use crate::exec::{Gtt, GttLeg, GttLegRole, GttPolicy, TriggerDirection};
 use crate::model::Side;
 use crate::rms::LegState;
 
 use super::error::KernelError;
 
-/// One GTT a positional leg needs: what it holds, its quantity and its levels (rupees,
-/// as the leg has them).
+/// The stop GTT a positional leg needs: its quantity and its level (rupees, as the leg
+/// has it).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PlannedGtt {
-    pub(super) slot: GttSlot,
+pub(super) struct PlannedStop {
     pub(super) quantity_units: f64,
-    pub(super) stop_rupees: Option<f64>,
-    pub(super) target_rupees: Option<f64>,
+    pub(super) stop_rupees: f64,
 }
 
-/// The GTTs a positional leg needs, by decision GTT-11 reading A: one GTT per working
-/// target with its own quantity (an OCO with a stop leg for that quantity when the leg
-/// has a stop, else a SINGLE target), plus a SINGLE stop GTT for the remainder the
-/// targets do not cover. A stop alone is one SINGLE GTT for the whole position; one
-/// target for the whole position with a stop is one OCO (04-execution 4.4 item 2).
-pub(super) fn protective_plan(leg: &LegState) -> Vec<PlannedGtt> {
-    let stop = leg.stop.map(|stop| stop.level_rupees);
-    let mut plan: Vec<PlannedGtt> = leg
-        .targets
-        .iter()
-        .filter(|target| target.is_working())
-        .map(|target| PlannedGtt {
-            slot: GttSlot::Target(target.index),
-            quantity_units: target.quantity_units,
-            stop_rupees: stop,
-            target_rupees: Some(target.level_rupees),
-        })
-        .collect();
-    if stop.is_some() && leg.remainder_units > 0.0 {
-        plan.push(PlannedGtt {
-            slot: GttSlot::Remainder,
-            quantity_units: leg.remainder_units,
-            stop_rupees: stop,
-            target_rupees: None,
-        });
-    }
-    plan
+/// The stop GTT a positional leg needs: one SINGLE GTT at the leg's stop for all its open
+/// units, so a target's partial exit cuts it to the units left (design 20-positional-live
+/// P6, 04-execution 4.4 item 2). None for a leg without a stop.
+pub(super) fn protective_plan(leg: &LegState) -> Option<PlannedStop> {
+    leg.stop.map(|stop| PlannedStop {
+        quantity_units: leg.held_units(),
+        stop_rupees: stop.level_rupees,
+    })
 }
 
-/// How the child orders of a position's GTTs are priced.
+/// How the child order of a position's stop GTT is priced.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ChildTerms {
     /// The protected position's side: `Buy` for a long.
@@ -64,7 +47,7 @@ pub(super) struct ChildTerms {
 }
 
 impl ChildTerms {
-    /// The side of every child order: the opposite of the position.
+    /// The side of the child order: the opposite of the position.
     pub(super) fn child_side(&self) -> Side {
         match self.position_side {
             Side::Buy => Side::Sell,
@@ -72,59 +55,35 @@ impl ChildTerms {
         }
     }
 
-    /// One leg: its trigger on the tick grid (a level is rounded to the nearest tick,
-    /// SPEC-03, so a GTT is a valid order even with `round_levels` off), reached from
-    /// the side the role implies, and its child limit beyond it.
-    fn leg(&self, role: GttLegRole, level_rupees: f64) -> Result<GttLeg, KernelError> {
-        let trigger = round_to_tick(level_rupees, self.tick_rupees)?;
-        let falls_to_it = (role == GttLegRole::Stop) == (self.position_side == Side::Buy);
-        let direction = if falls_to_it {
-            TriggerDirection::Falling
-        } else {
-            TriggerDirection::Rising
+    /// The stop's trigger on the tick grid (a level is rounded to the nearest tick,
+    /// SPEC-03, so a GTT is a valid order even with `round_levels` off), reached by a fall
+    /// for a long and a rise for a short, and its child limit beyond it.
+    ///
+    /// Errors: `Exec` for a level or tick that is not a usable price.
+    pub(super) fn stop(&self, stop_rupees: f64) -> Result<GttLeg, KernelError> {
+        let trigger = round_to_tick(stop_rupees, self.tick_rupees)?;
+        let direction = match self.position_side {
+            Side::Buy => TriggerDirection::Falling,
+            Side::Sell => TriggerDirection::Rising,
         };
         let child = self.child_side();
         Ok(GttLeg {
-            role,
+            role: GttLegRole::Stop,
             trigger_rupees: trigger,
             direction,
             child_limit_rupees: child_limit(trigger, child, self.buffer_percent, self.tick_rupees)?,
         })
     }
-
-    /// The legs of a planned GTT: the stop, then the target.
-    ///
-    /// Errors: `Exec` for a level or tick that is not a usable price.
-    pub(super) fn legs(&self, plan: &PlannedGtt) -> Result<Vec<GttLeg>, KernelError> {
-        let mut legs = Vec::with_capacity(2);
-        if let Some(stop) = plan.stop_rupees {
-            legs.push(self.leg(GttLegRole::Stop, stop)?);
-        }
-        if let Some(target) = plan.target_rupees {
-            legs.push(self.leg(GttLegRole::Target, target)?);
-        }
-        Ok(legs)
-    }
 }
 
-/// SINGLE for one leg, OCO for a stop with a target.
-pub(super) fn kind_of(legs: &[GttLeg]) -> GttKind {
-    if legs.len() > 1 {
-        GttKind::Oco
-    } else {
-        GttKind::Single
-    }
-}
-
-/// Whether the GTT in force must be modified to `legs` and `quantity_units` in base
-/// bar `slice`, by decision GTT-3 reading A: at most once per base bar, and only when
-/// the quantity changes or a trigger moves by at least `min_modify_ticks` ticks (a leg
-/// that appears or goes is a move).
+/// Whether the GTT in force must be modified to `leg` and `quantity_units` in base bar
+/// `slice`, by decision GTT-3 reading A: at most once per base bar, and only when the
+/// quantity changes or the trigger moves by at least `min_modify_ticks` ticks.
 ///
 /// Errors: `Exec` for an unusable tick.
 pub(super) fn needs_modification(
     gtt: &Gtt,
-    legs: &[GttLeg],
+    leg: &GttLeg,
     quantity_units: f64,
     slice: u32,
     policy: &GttPolicy,
@@ -137,19 +96,8 @@ pub(super) fn needs_modification(
         return Ok(true);
     }
     let least_move = i64::from(policy.min_modify_ticks) * tick_units(tick_rupees)?;
-    let roles = [GttLegRole::Stop, GttLegRole::Target];
-    Ok(roles.into_iter().any(|role| {
-        let now = gtt.trigger(role).map(whole_units);
-        let wanted = legs
-            .iter()
-            .find(|leg| leg.role == role)
-            .map(|leg| whole_units(leg.trigger_rupees));
-        match (now, wanted) {
-            (Some(now), Some(wanted)) => (wanted - now).abs() >= least_move,
-            (None, None) => false,
-            _ => true,
-        }
-    }))
+    let moved = whole_units(leg.trigger_rupees) - whole_units(gtt.leg.trigger_rupees);
+    Ok(moved.abs() >= least_move)
 }
 
 #[cfg(test)]
@@ -166,40 +114,26 @@ mod tests {
     };
 
     fn stop_gtt(trigger: f64, quantity: f64, last_modified: Option<u32>) -> Gtt {
-        let plan = PlannedGtt {
-            slot: GttSlot::Remainder,
-            quantity_units: quantity,
-            stop_rupees: Some(trigger),
-            target_rupees: None,
-        };
         Gtt {
             id: GttId(1),
             instrument: InstrumentId(0),
             product: Product::Nrml,
             side: Side::Sell,
             quantity_units: quantity,
-            kind: GttKind::Single,
-            legs: LONG_CASH.legs(&plan).unwrap_or_default(),
-            purpose: GttPurpose::Protect(GttSlot::Remainder),
+            leg: stop_leg(trigger),
+            purpose: GttPurpose::Protect,
             status: GttStatus::Active,
             created_on: 0,
             eligible_from: 0,
             last_modified_slice: last_modified,
-            fired: None,
         }
     }
 
-    fn stop_legs(trigger: f64) -> Vec<GttLeg> {
-        let plan = PlannedGtt {
-            slot: GttSlot::Remainder,
-            quantity_units: 75.0,
-            stop_rupees: Some(trigger),
-            target_rupees: None,
-        };
-        LONG_CASH.legs(&plan).unwrap_or_default()
+    fn stop_leg(trigger: f64) -> GttLeg {
+        LONG_CASH.stop(trigger).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// A long leg of `units` at 1500.00 with `rules`, venue quantities, tick 0.05.
+    /// A long leg of `units` at 1000.00 with `rules`, venue quantities, tick 0.05.
     fn leg(rules: LegRules, units: f64) -> LegState {
         let context = LegContext {
             side: Side::Buy,
@@ -209,107 +143,93 @@ mod tests {
             lot_size_units: 1,
             fractional: false,
         };
-        LegState::open(rules, context, 1500.0, units).unwrap_or_else(|e| panic!("{e}"))
+        LegState::open(rules, context, 1000.0, units).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    fn plan_of(rules: LegRules, units: f64) -> Vec<(GttSlot, f64, Option<f64>, Option<f64>)> {
-        protective_plan(&leg(rules, units))
-            .into_iter()
-            .map(|p| (p.slot, p.quantity_units, p.stop_rupees, p.target_rupees))
-            .collect()
+    fn plan_of(rules: LegRules) -> Option<(f64, f64)> {
+        protective_plan(&leg(rules, 100.0)).map(|p| (p.quantity_units, p.stop_rupees))
+    }
+
+    fn stop_50() -> LegRules {
+        LegRules {
+            stop: Some(Distance::Points(50.0)),
+            ..LegRules::default()
+        }
     }
 
     #[test]
     fn a_stop_alone_is_planned_as_one_stop_for_the_whole_position() {
-        let rules = LegRules {
-            stop: Some(Distance::Points(50.0)),
-            ..LegRules::default()
-        };
-        assert_eq!(
-            plan_of(rules, 10.0),
-            [(GttSlot::Remainder, 10.0, Some(1450.0), None)]
-        );
+        assert_eq!(plan_of(stop_50()), Some((100.0, 950.0)));
     }
 
     #[test]
-    fn a_stop_with_one_target_is_planned_as_one_oco_for_the_whole_position() {
+    fn a_stop_with_a_target_is_planned_as_the_stop_alone_for_the_whole_position() {
+        // 100 shares at 1000.00, stop 950.00, target 1100.00: the target is the engine's.
         let rules = LegRules {
-            stop: Some(Distance::Points(50.0)),
-            target: Some(Distance::Points(30.0)),
-            ..LegRules::default()
+            target: Some(Distance::Points(100.0)),
+            ..stop_50()
         };
-        assert_eq!(
-            plan_of(rules, 10.0),
-            [(GttSlot::Target(0), 10.0, Some(1450.0), Some(1530.0))]
-        );
+        assert_eq!(plan_of(rules), Some((100.0, 950.0)));
     }
 
     #[test]
-    fn several_targets_are_planned_one_each_with_a_stop_for_the_remainder() {
-        // 100 units: 50 to the first target, 30 to the second, 20 left for the stop.
-        let rules = LegRules {
-            stop: Some(Distance::Points(50.0)),
-            targets: vec![
-                TargetSpec {
-                    distance: Distance::Points(20.0),
-                    fraction: 0.5,
-                },
-                TargetSpec {
-                    distance: Distance::Points(40.0),
-                    fraction: 0.3,
-                },
-            ],
-            ..LegRules::default()
+    fn several_targets_leave_the_stop_for_every_open_unit() {
+        let half = |points| TargetSpec {
+            distance: Distance::Points(points),
+            fraction: 0.5,
         };
-        assert_eq!(
-            plan_of(rules, 100.0),
-            [
-                (GttSlot::Target(0), 50.0, Some(1450.0), Some(1520.0)),
-                (GttSlot::Target(1), 30.0, Some(1450.0), Some(1540.0)),
-                (GttSlot::Remainder, 20.0, Some(1450.0), None),
-            ]
-        );
+        let rules = LegRules {
+            targets: vec![half(100.0), half(150.0)],
+            ..stop_50()
+        };
+        assert_eq!(plan_of(rules), Some((100.0, 950.0)));
     }
 
     #[test]
-    fn a_target_without_a_stop_is_planned_as_a_single_target() {
+    fn after_a_target_fills_the_stop_is_planned_for_the_units_left() {
+        // Two targets of 50: once the first sells 50, the stop covers the 50 left.
+        let half = |points| TargetSpec {
+            distance: Distance::Points(points),
+            fraction: 0.5,
+        };
         let rules = LegRules {
-            target: Some(Distance::Points(30.0)),
+            targets: vec![half(100.0), half(150.0)],
+            ..stop_50()
+        };
+        let mut state = leg(rules, 100.0);
+        assert_eq!(state.on_reduce(50.0, Some(0)), Ok(()));
+        let plan = protective_plan(&state).map(|p| (p.quantity_units, p.stop_rupees));
+        assert_eq!(plan, Some((50.0, 950.0)));
+    }
+
+    #[test]
+    fn a_target_without_a_stop_needs_no_gtt() {
+        let rules = LegRules {
+            target: Some(Distance::Points(100.0)),
             ..LegRules::default()
         };
-        assert_eq!(
-            plan_of(rules, 10.0),
-            [(GttSlot::Target(0), 10.0, None, Some(1530.0))]
-        );
+        assert_eq!(plan_of(rules), None);
     }
 
     #[test]
     fn a_long_stop_falls_to_its_trigger_and_its_child_sells_below_it() {
         // Trace 08a: stop 25175.00 on a long future, child 1 percent below: 24923.25.
-        let legs = stop_legs(25_175.0);
-        assert_eq!(legs.len(), 1);
-        assert_eq!(legs[0].direction, TriggerDirection::Falling);
-        assert_eq!(legs[0].child_limit_rupees, 24_923.25);
+        let stop = stop_leg(25_175.0);
+        assert_eq!(stop.role, GttLegRole::Stop);
+        assert_eq!(stop.direction, TriggerDirection::Falling);
+        assert_eq!(stop.child_limit_rupees, 24_923.25);
     }
 
     #[test]
-    fn a_short_target_falls_to_its_trigger_and_its_child_buys_above_it() {
+    fn a_short_stop_rises_to_its_trigger_and_its_child_buys_above_it() {
         let short = ChildTerms {
             position_side: Side::Sell,
             ..LONG_CASH
         };
-        let plan = PlannedGtt {
-            slot: GttSlot::Target(0),
-            quantity_units: 10.0,
-            stop_rupees: Some(110.0),
-            target_rupees: Some(90.0),
-        };
-        let legs = short.legs(&plan).unwrap_or_default();
-        let target = legs[1];
-        assert_eq!(legs[0].direction, TriggerDirection::Rising);
-        assert_eq!(target.direction, TriggerDirection::Falling);
-        // 1 percent above 90.00 is 90.90.
-        assert_eq!(target.child_limit_rupees, 90.9);
+        let stop = short.stop(1050.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(stop.direction, TriggerDirection::Rising);
+        // 1 percent above 1050.00 is 1060.50.
+        assert_eq!(stop.child_limit_rupees, 1060.5);
     }
 
     #[test]
@@ -317,9 +237,9 @@ mod tests {
         // Trace 08a: the trail moves the stop from 24860.00 to 25080.00.
         let policy = GttPolicy::default();
         let gtt = stop_gtt(24_860.0, 75.0, None);
-        let moved = needs_modification(&gtt, &stop_legs(25_080.0), 75.0, 2, &policy, 0.05);
+        let moved = needs_modification(&gtt, &stop_leg(25_080.0), 75.0, 2, &policy, 0.05);
         assert_eq!(moved, Ok(true));
-        let one_tick = needs_modification(&gtt, &stop_legs(24_860.05), 75.0, 2, &policy, 0.05);
+        let one_tick = needs_modification(&gtt, &stop_leg(24_860.05), 75.0, 2, &policy, 0.05);
         assert_eq!(one_tick, Ok(true));
     }
 
@@ -327,7 +247,7 @@ mod tests {
     fn an_unchanged_level_and_quantity_send_no_modification() {
         let policy = GttPolicy::default();
         let gtt = stop_gtt(24_860.0, 75.0, None);
-        let same = needs_modification(&gtt, &stop_legs(24_860.0), 75.0, 2, &policy, 0.05);
+        let same = needs_modification(&gtt, &stop_leg(24_860.0), 75.0, 2, &policy, 0.05);
         assert_eq!(same, Ok(false));
     }
 
@@ -335,15 +255,17 @@ mod tests {
     fn a_gtt_is_modified_at_most_once_per_base_bar() {
         let policy = GttPolicy::default();
         let gtt = stop_gtt(24_860.0, 75.0, Some(2));
-        let again = needs_modification(&gtt, &stop_legs(25_080.0), 75.0, 2, &policy, 0.05);
+        let again = needs_modification(&gtt, &stop_leg(25_080.0), 75.0, 2, &policy, 0.05);
         assert_eq!(again, Ok(false));
     }
 
     #[test]
-    fn a_new_quantity_modifies_the_gtt_whatever_the_levels() {
+    fn a_new_quantity_modifies_the_gtt_whatever_the_level() {
         let policy = GttPolicy::default();
         let gtt = stop_gtt(24_860.0, 75.0, None);
-        let added = needs_modification(&gtt, &stop_legs(24_860.0), 150.0, 2, &policy, 0.05);
+        let added = needs_modification(&gtt, &stop_leg(24_860.0), 150.0, 2, &policy, 0.05);
         assert_eq!(added, Ok(true));
+        let cut = needs_modification(&gtt, &stop_leg(24_860.0), 25.0, 2, &policy, 0.05);
+        assert_eq!(cut, Ok(true));
     }
 }

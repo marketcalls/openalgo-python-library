@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | `LegState::open` | 2, after an entry fill | Levels from the fill average; the favourable extreme seeded from it (SPEC-01) |
 //! | `LegState::on_add` | 2, after an add | Stop and unfilled targets recomputed from the new average, in force for step 3 of the same slice (SPEC-08 to SPEC-12) |
-//! | `LegState::test_bar` | 3 | Levels against the base bar: a level crossed at the open fills at the open; otherwise the stop beats a target inside the range; every target reached fills, nearest first (SPEC-28, SPEC-33). Legs opened in step 2 are tested (SPEC-02) |
+//! | `LegState::test_bar` | 3 | Levels against the base bar: a level crossed at the open fills at the open; otherwise the stop beats a target inside the range; every target reached fills, nearest first (SPEC-28, SPEC-33). Legs opened in step 2 are tested (SPEC-02). `test_bar_against` tests a CNC or NRML leg with its stop at its GTT's trigger |
 //! | `LegState::on_reduce` | 2 or 3, after a partial exit | Stop quantity shrinks to the position; a filled target is marked; a signal exit shrinks the working targets in proportion |
 //! | `LegState::after_target_fill` | 3, after a target fill | `after_first_target="breakeven"` |
 //! | `LegState::ratchet` | 4 | Trail and breakeven from this bar's extreme, in force from the next slice; the entry bar's extreme counts (SPEC-01) |

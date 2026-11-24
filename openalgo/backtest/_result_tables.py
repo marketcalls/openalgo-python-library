@@ -17,7 +17,9 @@ from ._series import IST
 
 # The keys an event can carry, in order: those of every kind of event the binding writes
 # (`rust/oa_py/src/backtest/engine/tables.rs`, `event`), so the events table has the
-# same columns whatever events a run had.
+# same columns whatever events a run had. `target_trigger_rupees` stays, always empty,
+# so the table keeps its columns: since 2.5.0 no GTT holds a target (a CNC or NRML
+# position's targets are held by the engine, design 20-positional-live P6).
 EVENT_COLUMNS = (
     "slice",
     "slice_ts",

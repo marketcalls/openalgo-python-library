@@ -1,9 +1,11 @@
-"""Consistency rules for the GTTs that hold positional stops and targets. One per rule.
+"""Consistency rules for the GTT that holds a positional stop. One per rule.
 
-04-execution 4.4: on a CNC or NRML position a stop or target is a GTT, MIS holds none, a
-trail or breakeven modifies the GTT at most once per base bar, and every exit the engine
-makes itself cancels the GTT first (cancel-then-exit, 08-live-trading 6.2). The child
-order a fired GTT places is checked in `checks_gtt_children`.
+04-execution 4.4 as amended by 20-positional-live P6: on a CNC or NRML position the stop
+is one SINGLE GTT for all the open units and the targets are held by the engine, as an
+MIS leg's are; MIS holds no GTT; a trail, a breakeven, an add or a target's partial exit
+modifies the GTT at most once per base bar; and every other exit the engine makes itself
+cancels the GTT first (cancel-then-exit, 08-live-trading 6.2). The child order a fired GTT
+places is checked in `checks_gtt_children`.
 
 Every rule takes a case and returns its violations; each violation names the fixture,
 the slice and the rule that is broken.
@@ -15,7 +17,7 @@ import re
 
 from . import ledger
 from . import vocabulary as vocab
-from .bars import rupees, tick_size_of
+from .bars import tick_size_of
 from .gtt_state import (
     Event,
     active_gtts,
@@ -27,7 +29,7 @@ from .gtt_state import (
     trigger_of,
 )
 from .timegrid import Case
-from .timeline import LevelRow, stop_level, working_targets
+from .timeline import stop_level
 
 Violations = list[str]
 
@@ -97,8 +99,9 @@ def gtt_life_cycles_are_complete(case: Case) -> Violations:
 
 
 def gtt_modifications_follow_the_rules(case: Case) -> Violations:
-    """Rule: a GTT is modified at most once per base bar and only when a trigger moves by at
-    least one tick (decision GTT-3)."""
+    """Rule: a GTT is modified at most once per base bar and only when its quantity changes
+    (an add, a target's partial exit) or its trigger moves by at least one tick (decision
+    GTT-3)."""
     problems = []
     for gtt_id in dict.fromkeys(event["gtt_id"] for event in gtt_events(case)):
         events = [e for e in events_of(case, gtt_id) if e["name"] in ("GttPlaced", "GttModified")]
@@ -112,8 +115,11 @@ def gtt_modifications_follow_the_rules(case: Case) -> Violations:
                 for leg in vocab.GTT_LEGS
                 if trigger_of(later, leg) is not None and trigger_of(earlier, leg) is not None
             ]
-            if not moves or max(moves) < tick:
-                problems.append(f"{where} does not move a trigger by at least one tick")
+            resized = later["quantity_units"] != earlier["quantity_units"]
+            if not resized and (not moves or max(moves) < tick):
+                problems.append(
+                    f"{where} neither changes the quantity nor moves the trigger by a tick"
+                )
     return problems
 
 
@@ -139,19 +145,11 @@ def gtts_are_placed_with_the_fill_that_opens_the_position(case: Case) -> Violati
     return problems
 
 
-def _held_levels(row: LevelRow) -> tuple[object, object] | None:
-    """(stop, target) a GTT must hold for a level row, or None when the row needs several
-    target GTTs, which no trace models."""
-    targets = working_targets(row)
-    if len(targets) > 1:
-        return None
-    target = rupees(targets[0]["level_rupees"]) if targets else None
-    return stop_level(row), target
-
-
-def positional_levels_are_held_by_gtts(case: Case) -> Violations:
-    """Rule: at the end of every slice with a level row, a CNC or NRML position's stop and
-    target are exactly the triggers of the GTT in force, and a flat position holds none."""
+def positional_stops_are_held_by_gtts(case: Case) -> Violations:
+    """Rule: at the end of every slice with a level row, a CNC or NRML position's stop is
+    exactly the trigger of the GTT in force, which is for the whole position; a position
+    without a stop, and a flat one, hold none. Its targets are held by the engine
+    (20-positional-live P6), so no GTT holds a target trigger."""
     problems = []
     for row in case["expected"]["levels"]:
         instrument = row["instrument"]
@@ -159,19 +157,16 @@ def positional_levels_are_held_by_gtts(case: Case) -> Violations:
             continue
         where = f"{case['id']} {row['slice_ist']}: {instrument}"
         active = active_gtts(case, end_of_slice(row["slice_ist"])).get(instrument)
-        held = None if row["position_quantity_units"] == 0 else _held_levels(row)
-        if row["position_quantity_units"] != 0 and held is None:
-            problems.append(f"{where} has several targets, which one OCO GTT cannot hold")
-            continue
-        if held in (None, (None, None)):
+        stop = None if row["position_quantity_units"] == 0 else stop_level(row)
+        if stop is None:
             if active is not None:
-                problems.append(f"{where} holds no levels but GTT {active['gtt_id']} is in force")
+                problems.append(f"{where} holds no stop but GTT {active['gtt_id']} is in force")
             continue
         triggers = (
             None if active is None else tuple(trigger_of(active, leg) for leg in vocab.GTT_LEGS)
         )
-        if triggers != held:
-            problems.append(f"{where}: the levels {held} are not the triggers in force {triggers}")
+        if triggers != (stop,):
+            problems.append(f"{where}: the stop {stop} is not the trigger in force {triggers}")
         elif active["quantity_units"] != abs(row["position_quantity_units"]):
             problems.append(f"{where}: GTT {active['gtt_id']} is not for the whole position")
     return problems
@@ -179,8 +174,10 @@ def positional_levels_are_held_by_gtts(case: Case) -> Violations:
 
 def engine_exits_cancel_the_gtt_first(case: Case) -> Violations:
     """Rule: before the engine closes or reduces a CNC or NRML position itself (any exit that
-    is not a GTT's own: the roll, the daily loss limit, a signal), the GTT in force on it is
-    cancelled in the same step, before the exit's position event."""
+    is not a GTT's own: the roll, the daily loss limit, a signal, a target that closes the
+    position), the GTT in force on it is cancelled in the same step, before the exit's
+    position event. A target's exit that leaves units keeps the GTT, which step 4 cuts to
+    the units left."""
     problems = []
     events = case["expected"]["events"]
     held: dict[str, int] = {}
@@ -189,6 +186,8 @@ def engine_exits_cancel_the_gtt_first(case: Case) -> Violations:
         before, held[instrument] = held.get(instrument, 0), after.quantity_units
         reduces = abs(after.quantity_units) < abs(before)
         if not reduces or fill["gtt_id"] is not None or not is_positional(case, instrument):
+            continue
+        if fill["reason"] == "leg_target" and after.quantity_units != 0:
             continue
         active = active_gtts(case, moment(fill)).get(instrument)
         if active is None:
