@@ -332,6 +332,9 @@ impl Engine {
         if self.held_units(key) == 0.0 || self.exit_closes_leg(key)? {
             return Ok(());
         }
+        if self.rearm_stop_expired(&at, key, how) {
+            return Ok(());
+        }
         let reason = match (how, stop.replaced) {
             (StopEnd::Canceled { requested: true } | StopEnd::MarginRejected, _) => return Ok(()),
             (StopEnd::Canceled { requested: false }, false) => {

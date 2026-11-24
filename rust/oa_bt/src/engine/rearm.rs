@@ -13,6 +13,13 @@
 //! | The close | the stop is a DAY order: it ends with the session, and nothing protects the position until the next open | the close's cancellation of the DAY orders ends it (`venue_clock`), an expected end: the leg is neither protected again nor exited |
 //! | The next open | at the instrument's first base bar of the session the stop is in force again, unless the open is at or beyond it: then the leg exits at that open plus the run's slippage, flagged `stop_crossed`, reason `leg_sl` (`rearm_stops_at_open`) | the stop is placed again for the units open at the leg's stop once the session has reached its open, unless the session's last price is then at or beyond it: then the leg is exited at market, flagged `stop_crossed` (`rearm_waits_or_crosses`) |
 //!
+//! The broker ends a DAY order at its session's close by itself, and may report that
+//! before the session runs its closing slice: a rearm_daily leg's stop ended by the venue
+//! without a cancellation the kernel sent, once the session stands at its closing slice, is
+//! that expiry (`rearm_stop_expired`), not a stop lost, so it is neither placed again (a
+//! stop sent after the close would be refused, or held by a broker for the next day) nor is
+//! the leg exited.
+//!
 //! A backtest of it assumes the engine was started before the open on every trading day
 //! the position was held; the result says so (`bt.backtest`). A live session started
 //! before the open waits for the open to place the stop: `protect` on such a leg then
@@ -30,6 +37,7 @@ use super::fills::FillRequest;
 use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue::SendAt;
+use super::venue_legs::StopEnd;
 use super::venue_roles::{EngineExit, RiskExitReason};
 
 /// The live exit of a rearm_daily leg whose stop the price had crossed when the stop was
@@ -112,6 +120,14 @@ impl Engine {
             self.execute_fill(stamp, exit)?;
         }
         Ok(())
+    }
+
+    /// True when `key`'s rearm_daily stop ended at the venue, cancelled with no request of
+    /// the kernel, while the session stands at its closing slice (`at`, module docs): the
+    /// DAY order's expiry.
+    pub(super) fn rearm_stop_expired(&self, at: &SendAt, key: PositionKey, how: StopEnd) -> bool {
+        let unasked = how == StopEnd::Canceled { requested: false };
+        unasked && at.slice.closes_session && self.rearms_daily(key)
     }
 
     /// In a live session, before a rearm_daily leg's stop is placed for `key` at

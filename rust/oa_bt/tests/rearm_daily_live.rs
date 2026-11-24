@@ -222,6 +222,31 @@ fn a_carried_leg_sends_nothing_before_the_open_and_protect_waits_for_it() {
 }
 
 #[test]
+fn the_broker_ending_the_days_stop_in_the_closing_minute_is_its_expiry_not_a_loss_of_protection() {
+    // The broker reports the day's stop cancelled before the session runs its closing
+    // slice (15:29 to 15:30): that is the DAY order's end, so the stop is neither placed
+    // again (a stop sent after the close would be refused, or kept by a broker for the
+    // next day) nor the leg exited, and the close has nothing left to cancel.
+    let (carried, _) = carried_day_1();
+    let mut kernel = restored(day(2), &carried);
+    kernel
+        .push_tick(SBIN, 1001.0, minute_on(day(2), 0) + SECOND / 2)
+        .expect("the first tick of the session");
+    let (stop, ..) = places(&kernel.take_commands())[0];
+    run_until(
+        &mut kernel,
+        day(2),
+        &mut Script::new(Vec::new()),
+        SLICES - 1,
+    );
+    kernel.take_commands();
+    kernel.apply_cancel(stop).expect("the broker ended it");
+    assert_eq!(kernel.take_commands(), Vec::new());
+    assert_eq!(close_day(&mut kernel, day(2)), Vec::new());
+    assert!(kernel.carried_state().is_ok());
+}
+
+#[test]
 fn the_days_stop_is_placed_again_at_each_open_and_ended_at_each_close() {
     let (carried, _) = carried_day_1();
     let mut carried = carried;
