@@ -25,11 +25,8 @@ a request"), split from `worker` so each module keeps one job.
   ever settle it) is settled with no row at once, taken as refused: its one ERROR alert
   was its refusal's.
 - A release of a held fill or cancel hands its news over (`_worker_news`, counted in hand
-  from before the word leaves the order path's hold); the book reads go to the guard
-  answer by answer and are posted as `Books` or `PositionRows`, or `NotSent(locked)` once
-  the guard locks; a probe asks OpenAlgo whether it answers; a stream gap asks for polls.
-  A session with a CNC strategy reads the holdings with every book read, right after the
-  position book (`_broker_units`: a CNC leg's units are in both).
+  from before the word leaves the order path's hold); the book reads are `_worker_books`';
+  a probe asks OpenAlgo whether it answers; a stream gap asks for polls.
 - A restart's `Settle` makes a restored order's modify or cancel unsettled, so a read
   settles it as an unanswered one (3.6); `CancelOrphan` cancels an order of the journal
   the engine does not hold (5.3), with an ERROR alert when it cannot be cancelled.
@@ -49,7 +46,6 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
-from ._answers import server_answer
 from ._gtt_send import GttSender
 from ._gtt_types import BindGttChild, GttRequest, ReadGtts
 from ._locked_entries import LockedEntries, locked_words
@@ -59,6 +55,7 @@ from ._order_resolve import same_leg
 from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
+from ._worker_books import BookReads
 from ._worker_news import NewsHandover
 from ._worker_queue import (
     CancelOrphan,
@@ -84,7 +81,7 @@ from ._worker_settle import (
 )
 from ._worker_stops import StopBook
 from .guard import ModeGuard
-from .inbox import Books, Message, NotSent, NotSentReason, PositionRows, SendResult, Settled
+from .inbox import Message, NotSent, NotSentReason, SendResult, Settled
 from .journal import Journal
 from .orders import OrderPath
 
@@ -99,26 +96,17 @@ _REQUEUE_NS = round(REQUEUE_AFTER_S * NANOS_PER_SECOND)
 _NOTICE_NS = round(HELD_NOTICE_EVERY_S * NANOS_PER_SECOND)
 #: How an alert names a protective request that is not a placement.
 _CHANGE_WORDS = {ModifyRequest: "modify", CancelRequest: "cancel"}
-#: The books a reconciliation reads, as `inbox.Books` names them (5.2).
-_BOOKS = ("positionbook", "orderbook", "tradebook", "funds")
-#: The books of a held cancel's read, in order: the position book, then the order book
-#: when asked for (`ReadPositions.orders`).
-_HELD_CANCEL_BOOKS = ("positionbook", "orderbook")
-#: The holdings, read right after the position book when the session reads them: before
-#: the trade book, so a fill that lands during a read shows in the trade book as it would
-#: in the position book (16-session-design 5.4, round 9).
-_HOLDINGS = "holdings"
 
 
 class Sender:
     """Executes the requests the worker takes (module docstring), through `path` and, for
-    the book reads, `client` (the orders client); `journal` is handle W (its unbound
-    intents tell a hold), `alerts` the session's; `guard`, `queue`, `settle`, `stops` and
-    `news` are the worker's; `post` puts a message on the loop's inbox, `calling` marks the
-    worker busy for a call that may reach the server, `now` gives UTC nanoseconds, and
-    `locked` is the record of the strategies whose entries the loop has locked;
-    `read_holdings` is True for a session with a CNC strategy; `gtts` sends the GTT
-    requests and holds the GTT follower."""
+    the book reads (`_worker_books`, whose answers `guard` checks), `client` (the orders
+    client); `journal` is handle W (its unbound intents tell a hold), `alerts` the
+    session's; `guard`, `queue`, `settle`, `stops` and `news` are the worker's; `post`
+    puts a message on the loop's inbox, `calling` marks the worker busy for a call that
+    may reach the server, `now` gives UTC nanoseconds, and `locked` is the record of the
+    strategies whose entries the loop has locked; `read_holdings` is True for a session
+    with a CNC strategy; `gtts` sends the GTT requests and holds the GTT follower."""
 
     def __init__(
         self,
@@ -139,13 +127,13 @@ class Sender:
         read_holdings: bool,
         gtts: GttSender,
     ) -> None:
-        self._client = client
-        self._read_holdings = read_holdings
+        self._books = BookReads(
+            client, guard=guard, post=post, calling=calling, now=now, read_holdings=read_holdings
+        )
         self._gtts = gtts
         self._path = path
         self._journal = journal
         self._alerts = alerts
-        self._guard = guard
         self._queue = queue
         self._settle = settle
         self._stops = stops
@@ -167,7 +155,7 @@ class Sender:
         elif isinstance(request, ReleaseFill | ReleaseCancel):
             self._release(request)
         elif isinstance(request, ReadBooks | ReadPositions):
-            self._read(request)
+            self._books.read(request)
         elif isinstance(request, Probe):
             with self._calling():
                 self._path.probe()
@@ -367,34 +355,6 @@ class Sender:
         text += f"({reason}): cancel it by hand in OpenAlgo"
         logger.error(text)
         self._alerts.send(AlertKind.ERROR, text)
-
-    def _read(self, request: ReadBooks | ReadPositions) -> None:
-        """The books of a reconciliation, or the position book for a held cancel (and the
-        order book after it when asked for), with the holdings after the position book in
-        a session that reads them, each answer checked by the guard (the analyzer switch
-        routes them too)."""
-        started = self._now()
-        names = _BOOKS
-        if isinstance(request, ReadPositions):
-            names = _HELD_CANCEL_BOOKS if request.orders else _HELD_CANCEL_BOOKS[:1]
-        if self._read_holdings:
-            names = (names[0], _HOLDINGS, *names[1:])
-        answers = {}
-        for name in names:
-            if self._guard.locked:
-                break
-            with self._calling():
-                answers[name] = server_answer(getattr(self._client, name)())
-            self._guard.check_response(answers[name])
-        if self._guard.locked:
-            why = "the mode guard is locked: the books answer from the other mode"
-            self._post(NotSent(request, NotSentReason.LOCKED, why))
-        elif isinstance(request, ReadBooks):
-            ended = self._now()
-            self._post(Books(request.generation, **answers, started_ns=started, ended_ns=ended))
-        else:
-            positions, orders = answers["positionbook"], answers.get("orderbook")
-            self._post(PositionRows(positions, started, orders, answers.get(_HOLDINGS)))
 
 
 __all__ = ["HELD_NOTICE_EVERY_S", "REQUEUE_AFTER_S", "Sender"]

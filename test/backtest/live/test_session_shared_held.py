@@ -1,5 +1,5 @@
 """A held cancel beside another member's unheard fill, on the fake OpenAlgo
-(`_live/_stops_held.py`, `_live/_stops_held_group.py`, `_live/_worker_send.py`;
+(`_live/_stops_held.py`, `_live/_stops_held_group.py`, `_live/_worker_books.py`;
 18-multi-strategy 4.5 and row F103 of 5.2, the lead's decision M1, unit M7).
 
 A's target cancels its stop to exit; the broker cancels it with nothing filled, but the

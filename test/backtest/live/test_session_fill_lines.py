@@ -1,5 +1,5 @@
 """The ENTRY and EXIT lines of a live session's fills, on the console and in the alerts
-(`_live/_session_news.py`; 2.4.0 item P5-1): in a session of more than one strategy each
+(`_live/_session_fills.py`; 2.4.0 item P5-1): in a session of more than one strategy each
 line names the strategy whose order filled, right after its kind, so a trader reading the
 screen or a phone can tell which strategy bought or sold; a session of one strategy keeps
 its lines as they were.
