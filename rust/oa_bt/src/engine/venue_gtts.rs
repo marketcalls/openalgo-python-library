@@ -19,9 +19,11 @@
 //! - **A stop GTT no leg holds** (`Engine::loose_stop_gtts`): one whose leg opened again
 //!   from flat, or that was carried to be cancelled (`venue_state::carry`), while the venue
 //!   had not taken its cancellation. It is cancelled, again in every later slice until the
-//!   venue takes it; meanwhile it keeps the position's entries out (`venue_gates`) and a
-//!   new stop GTT on its side waits for it (`venue_gtt_sync`): the broker never holds two
-//!   stop GTTs that sell or buy one position.
+//!   venue takes it; meanwhile it keeps the position's entries out (`venue_gates`), a
+//!   new stop GTT on its side waits for it (`venue_gtt_sync`), its units take their room
+//!   on the position's closing side (`venue_cover`), and an exit of the whole position
+//!   waits for its cancellation (`venue_owner`): the broker never holds two stop GTTs, or a
+//!   stop GTT and an exit, that sell or buy one position.
 //!
 //! Every command carries the GTT's id, its instrument and product, the side of its child,
 //! its trigger and child limit in rupees (rounded to the tick as `gtt_plan` rounds them),
@@ -39,6 +41,7 @@ use crate::portfolio::PositionKey;
 use super::error::KernelError;
 use super::kernel::Engine;
 use super::venue::VenueCommand;
+use super::venue_owner::closing_side;
 
 /// A SINGLE GTT's terms as a live session sends them (module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,7 +100,8 @@ pub(super) struct GttFollow {
     pub(super) pending: Option<GttTerms>,
     /// When its last modification was sent, by the session's clock, UTC nanoseconds.
     pub(super) modified_at: Option<TsNanos>,
-    /// The venue refused its last modification.
+    /// The venue refused its last modification, a units cut on the resting trigger: the
+    /// next cut waits for the minute (`venue_gtt_sync`).
     pub(super) refused: bool,
     /// A cancellation is wanted: sent once the request that waits is answered.
     pub(super) cancel_wanted: bool,
@@ -246,6 +250,27 @@ impl Engine {
             .filter(|gtt| gtt.purpose == GttPurpose::Protect && gtt.status.at_venue())
             .filter(|gtt| !legs.iter().any(|leg| leg.gtt == Some(gtt.id)))
             .map(|gtt| gtt.id)
+            .collect()
+    }
+
+    /// The stop GTTs no leg holds (`loose_stop_gtts`) that sell or buy `key`'s position on
+    /// its closing side, in id order; none for a flat position. Until the venue takes
+    /// their cancellation they cover its units at the broker as its leg's own would.
+    pub(super) fn loose_closing_stop_gtts(&self, key: PositionKey) -> Vec<GttId> {
+        let held = self.held_units(key);
+        if held == 0.0 {
+            return Vec::new();
+        }
+        let side = closing_side(held);
+        self.loose_stop_gtts()
+            .into_iter()
+            .filter(|id| {
+                self.gtts.book.get(*id).is_some_and(|gtt| {
+                    gtt.instrument == key.instrument
+                        && gtt.product == key.product
+                        && gtt.side == side
+                })
+            })
             .collect()
     }
 

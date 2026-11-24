@@ -17,8 +17,10 @@
 //! leg's stop: an exit of the whole position asks for its cancellation and is sent once
 //! the venue has confirmed it (or the GTT has ended or fired: its child then holds the
 //! position, `venue_gtt_child`), and a partial exit waits for it to be cut to what stays
-//! open (`venue_gtt_sync`). An engine exit flagged `stop_crossed` (`venue_gtt_protect`)
-//! made before the session's open waits for the open.
+//! open (`venue_gtt_sync`). A stop GTT an earlier leg left on the closing side
+//! (`Engine::loose_closing_stop_gtts`) blocks both the same way until the venue takes its
+//! cancellation. An engine exit flagged `stop_crossed` (`venue_gtt_protect`) made before
+//! the session's open waits for the open.
 //!
 //! A partial exit beside a leg's broker-held stop is the exception (16-session-design
 //! 4.5, requirement R4): a strategy exit that asks for part of the position keeps the
@@ -48,7 +50,7 @@
 //! How an exit goes out when nothing blocks it (its units, the freeze quantity, a closed
 //! market) is `venue_exit_orders`.
 
-use crate::exec::{FillFlags, OrderAction, OrderId};
+use crate::exec::{FillFlags, GttId, OrderAction, OrderId};
 use crate::model::Side;
 use crate::portfolio::PositionKey;
 
@@ -239,9 +241,10 @@ impl Engine {
         Ok(false)
     }
 
-    /// True while `key`'s stop GTT blocks an exit of it that does not keep the stop (an
-    /// exit of the whole position, module docs): its cancellation is asked for now, and
-    /// the exit waits while the GTT is at the venue.
+    /// True while a stop GTT of `key` blocks an exit of it that does not keep the stop (an
+    /// exit of the whole position, module docs): the leg's, or one an earlier leg left on
+    /// the closing side (`loose_closing_stop_gtts`). Their cancellation is asked for now,
+    /// and the exit waits while one is at the venue.
     ///
     /// Errors: those of `ask_cancel_gtt`.
     fn stop_gtt_blocks_exit(
@@ -253,11 +256,15 @@ impl Engine {
         if keeps_stop {
             return Ok(false);
         }
-        let Some(id) = self.stop_gtt_at_venue(key).map(|gtt| gtt.id) else {
-            return Ok(false);
-        };
-        self.ask_cancel_gtt(at.stamp().slice, id)?;
-        Ok(true)
+        let own = self.stop_gtt_at_venue(key).map(|gtt| gtt.id);
+        let blocking: Vec<GttId> = own
+            .into_iter()
+            .chain(self.loose_closing_stop_gtts(key))
+            .collect();
+        for id in &blocking {
+            self.ask_cancel_gtt(at.stamp().slice, *id)?;
+        }
+        Ok(!blocking.is_empty())
     }
 
     /// The working orders of `exit`'s position on `side` that it cancels first: all but

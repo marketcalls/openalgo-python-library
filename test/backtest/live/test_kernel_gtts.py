@@ -223,6 +223,18 @@ def test_a_gtt_order_against_the_position_held_is_not_built_in_a_session():
     assert engine.take_commands() == []
 
 
+def test_a_cnc_stop_loss_sale_beside_the_stop_gtt_is_refused_exit_cover():
+    # An SL-M sale of the 10 at 497.00 beside g1, not reduce-only: once g1 fires, it would
+    # sell 10 more than the strategy holds. Delivery cannot be shorted, so it only closes,
+    # and the closing side has no room left beside g1.
+    engine = protected()
+    assert release_minute(engine, 1)[0] == "bar_close"
+    sale = {**cnc_buy({}), "side": "SELL", "order_type": "SL-M", "trigger": 497.0}
+    outcome, _, code = engine.submit(sale)
+    assert (outcome, code) == ("rejected", "exit_cover")
+    assert placed(engine) == []
+
+
 def test_a_stop_gtt_left_resting_on_a_flat_position_keeps_entries_out_and_is_cancelled_again():
     # The broker sells the 10 by itself and refuses g1's cancellation: a new CNC buy is
     # rejected live_in_flight, and the cancellation goes again once the session reaches

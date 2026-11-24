@@ -10,7 +10,8 @@
 //! |---|---|
 //! | A GTT order that only reduces, or any GTT order against the position held | not built for a live session: a resting GTT exit beside the leg's stop GTT would be a second exit at the broker, and both could fire (a backtest cancels the stop GTT before such an exit fills; the broker does not); use `stop=` and `target=` |
 //! | `rebalance()` | not built for a live session |
-//! | Modifying a partly filled order, or a GTT order | not built: cancel it and place a new one |
+//! | Modifying a partly filled order | not built: cancel it and place a new one |
+//! | Modifying a GTT order | not built: cancel it and place a new one. The venue holds only its GTT, whose answers carry the GTT's terms and not the order's request (its leg rules, tag, units), and a GTT is modified at most once a minute in live (04-execution 4.4 item 5): the replacement would wait up to a minute, with no answer path to apply it to the order |
 //! | Modifying an order whose last modification waits, or an exit not sent yet | one modification at a time; an exit waiting for its cancels has nothing at the venue |
 //! | A replacement left with no units | the venue takes no order of none: cancel it |
 

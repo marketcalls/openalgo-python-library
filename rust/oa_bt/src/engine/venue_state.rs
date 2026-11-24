@@ -105,7 +105,7 @@ use checks::{check_parts, Parts};
 use desk::{read_desk, write_desk, SavedDesk};
 use gtts::{read_gtt_book, write_gtt};
 use legs::{read_leg, write_leg};
-use orders::{read_command, read_order, write_command, write_order, Ids, SavedOrder};
+use orders::{read_command, read_orders, write_command, write_order, Ids, SavedOrder};
 use risk::{read_risk, write_risk};
 use value::{list, map, Read};
 
@@ -222,20 +222,7 @@ impl Engine {
         self.check_session(read)?;
         let count = self.instruments.len();
         let saved_orders = read.items_of("orders")?;
-        let first = self.book.next_id().0;
-        let mut ids = Ids { pairs: Vec::new() };
-        for (offset, order) in (0u64..).zip(&saved_orders) {
-            let saved = OrderId(order.whole_of("order")?);
-            if ids.pairs.last().is_some_and(|(last, _)| *last >= saved) {
-                return Err(order.malformed("is not in id order after the order before it"));
-            }
-            ids.pairs.push((saved, OrderId(first + offset)));
-        }
-        let orders = saved_orders
-            .iter()
-            .zip(&ids.pairs)
-            .map(|(order, (_, id))| read_order(order, *id, count))
-            .collect::<Result<Vec<_>, _>>()?;
+        let (orders, ids) = read_orders(&saved_orders, self.book.next_id(), count)?;
         let positions = read
             .items_of("positions")?
             .iter()

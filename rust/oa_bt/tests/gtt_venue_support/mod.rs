@@ -7,12 +7,12 @@
 #![allow(dead_code)]
 
 use oa_bt::engine::{Engine, GttTerms, VenueCommand};
-use oa_bt::exec::{GttId, OrderId, OrderRequest, OrderType};
-use oa_bt::model::{Product, Side};
+use oa_bt::exec::{GttId, InstrumentSpec, OrderId, OrderRequest, OrderType};
+use oa_bt::model::{days_from_civil, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::{Distance, LegRules, TargetSpec, TrailSpec};
 
 use super::venue_support::{
-    at_close, bars, config, minute, order, session, wait_before, Act, Script, SBIN,
+    at_close, bars, config, minute, order, sbin, session, wait_before, Act, Script, SBIN,
 };
 
 /// The price the entry fills at, rupees.
@@ -95,6 +95,18 @@ pub fn cnc_long_protected(rules: LegRules) -> Engine {
     kernel.apply_gtt_placed(G1).expect("the venue confirms g1");
     kernel.take_commands();
     kernel
+}
+
+/// A NIFTY future: NFO, lot 75, tick 0.05.
+pub fn nifty_future() -> InstrumentSpec {
+    InstrumentSpec {
+        symbol: "NIFTY31JUL25FUT".to_string(),
+        exchange: Exchange::Nfo,
+        kind: InstrumentKind::Future,
+        lot_size_units: 75,
+        last_trading_day: Some(days_from_civil(2025, 7, 31)),
+        ..sbin()
+    }
 }
 
 /// The terms of a CNC long's stop GTT of `units` at `trigger` with its child at `limit`.

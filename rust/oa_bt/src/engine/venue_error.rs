@@ -183,12 +183,54 @@ impl VenueError {
 impl fmt::Display for VenueError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            VenueError::NotExternal | VenueError::AtBarClose | VenueError::SessionOver => {
+                self.fmt_session_refusal(f)
+            }
+            VenueError::OrderEnded { .. }
+            | VenueError::NotSent { .. }
+            | VenueError::TooManyUnits { .. }
+            | VenueError::InvalidFill { .. }
+            | VenueError::NotPending { .. }
+            | VenueError::ModifyBelowFilled { .. } => self.fmt_order_refusal(f),
+            VenueError::WouldReverse { .. } | VenueError::BeyondPosition { .. } => {
+                self.fmt_position_refusal(f)
+            }
+            VenueError::UnknownGtt { .. }
+            | VenueError::GttState { .. }
+            | VenueError::GttResting { .. } => self.fmt_gtt_refusal(f),
+        }
+    }
+}
+
+// Each helper writes one group of `Display`'s dispatch; a variant of another group, which
+// the dispatch never hands it, is written as its kind.
+impl VenueError {
+    /// A result the session cannot take now: a backtest, a bar close, a finished session.
+    fn fmt_session_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::NotExternal => write!(
                 f,
                 "this run fills its own orders (a backtest): a venue's fills, rejections \
                  and cancellations, and a session's controls, go to a live session \
                  (Engine::new_session)"
             ),
+            VenueError::AtBarClose => write!(
+                f,
+                "the engine is paused at a bar close: call advance first, then pass the \
+                 venue's results while it waits"
+            ),
+            VenueError::SessionOver => write!(
+                f,
+                "the session has finished: a result from the venue can no longer be \
+                 recorded"
+            ),
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// A result its order cannot take: ended, not sent, too many units, nothing pending.
+    fn fmt_order_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::OrderEnded { order, status } => write!(
                 f,
                 "order {order} is {} and takes no more results from the venue",
@@ -224,6 +266,13 @@ impl fmt::Display for VenueError {
                  {filled_units} units it has filled: the venue refuses it \
                  (apply_modify_refused)"
             ),
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// A fill beyond the position the session holds.
+    fn fmt_position_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::WouldReverse {
                 order,
                 excess_units,
@@ -248,16 +297,13 @@ impl fmt::Display for VenueError {
                 key.instrument.0,
                 key.product.code()
             ),
-            VenueError::AtBarClose => write!(
-                f,
-                "the engine is paused at a bar close: call advance first, then pass the \
-                 venue's results while it waits"
-            ),
-            VenueError::SessionOver => write!(
-                f,
-                "the session has finished: a result from the venue can no longer be \
-                 recorded"
-            ),
+            other => write!(f, "{}", other.kind()),
+        }
+    }
+
+    /// An answer about a GTT the session does not have or that takes no such answer.
+    fn fmt_gtt_refusal(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             VenueError::UnknownGtt { gtt } => write!(
                 f,
                 "the session has no GTT {gtt}: pass the GTT id of a place_gtt command"
@@ -278,6 +324,7 @@ impl fmt::Display for VenueError {
                 "order {order} rests as GTT {gtt}, which the venue has not fired: pass \
                  apply_gtt_triggered first, then the results of its child order"
             ),
+            other => write!(f, "{}", other.kind()),
         }
     }
 }

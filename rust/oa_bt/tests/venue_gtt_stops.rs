@@ -12,18 +12,18 @@ mod gtt_venue_support;
 mod venue_support;
 
 use gtt_venue_support::{
-    at, cnc_buy, cnc_long, cnc_long_protected, gtt_commands, long_stop, order_commands, stop_4,
-    stop_and_target, stop_and_trail, stop_and_two_targets, BUY, ENTRY, G1, UNITS,
+    at, cnc_buy, cnc_long, cnc_long_protected, gtt_commands, long_stop, nifty_future,
+    order_commands, stop_4, stop_and_target, stop_and_trail, stop_and_two_targets, BUY, ENTRY, G1,
+    UNITS,
 };
 use oa_bt::engine::{Engine, GttTerms, KernelError, OrderRole, Submission, VenueCommand};
 use oa_bt::exec::{
-    GttId, GttStatus, InstrumentSpec, OrderId, OrderRequest, OrderStatus, OrderType, RejectCode,
-    Validity,
+    GttId, GttStatus, OrderId, OrderRequest, OrderStatus, OrderType, RejectCode, Validity,
 };
-use oa_bt::model::{days_from_civil, Exchange, InstrumentKind, Product, Side};
+use oa_bt::model::{Product, Side};
 use oa_bt::rms::LegRules;
 use venue_support::{
-    at_close, bars, config, limit, minute, order, pause_at_close, placed_roles, run_to_end, sbin,
+    at_close, bars, config, limit, minute, order, pause_at_close, placed_roles, run_to_end,
     session, session_of, wait_before, Act, Script, SBIN,
 };
 
@@ -160,18 +160,6 @@ fn a_strategy_partial_exit_cuts_the_stop_gtt_first() {
     assert!(kernel.apply_gtt_modified(G1).is_ok());
     let sold = (OrderId(2), Side::Sell, 40.0, OrderRole::Exit);
     assert_eq!(placed_roles(&kernel.take_commands()), [sold]);
-}
-
-/// A NIFTY future: NFO, lot 75, tick 0.05.
-fn nifty_future() -> InstrumentSpec {
-    InstrumentSpec {
-        symbol: "NIFTY31JUL25FUT".to_string(),
-        exchange: Exchange::Nfo,
-        kind: InstrumentKind::Future,
-        lot_size_units: 75,
-        last_trading_day: Some(days_from_civil(2025, 7, 31)),
-        ..sbin()
-    }
 }
 
 #[test]
@@ -369,7 +357,13 @@ fn a_stop_gtt_left_resting_on_a_flat_position_keeps_entries_out() {
 /// 100 by itself, the venue refuses g1's cancellation, and at 09:17:20 o2 fills and opens
 /// a new leg from flat; the commands of that fill are left.
 fn new_leg_beside_g1(rules: LegRules) -> Engine {
-    let mut kernel = cnc_long_protected(stop_4());
+    new_leg_of_beside_g1(stop_4(), rules)
+}
+
+/// `new_leg_beside_g1` with the first long bought with `first` (a stop of 4 points, so
+/// that g1 is the same) and o2 placed with `rules`.
+fn new_leg_of_beside_g1(first: LegRules, rules: LegRules) -> Engine {
+    let mut kernel = cnc_long_protected(first);
     let add = OrderRequest {
         leg_rules: rules,
         ..order(Side::Buy, 10.0, limit(495.0), Product::Cnc)
@@ -441,6 +435,49 @@ fn a_new_legs_stop_gtt_waits_for_the_cancellation_of_the_one_its_earlier_leg_lef
     assert_eq!(gtt_commands(&kernel.take_commands()), [placed]);
 }
 
+#[test]
+fn a_resting_exit_of_a_new_leg_beside_the_stop_gtt_its_earlier_leg_left_is_refused_exit_cover() {
+    // g1 still sells 100 at 496.10 at the broker until the venue takes its cancellation:
+    // a reduce-only LIMIT sale of the new leg's 10 at 505.00 at the 09:17 close would sell
+    // them a second time, as beside the leg's own stop GTT (exit_cover).
+    let mut kernel = new_leg_beside_g1(LegRules::default());
+    kernel.take_commands();
+    let sale = OrderRequest {
+        reduce_only: true,
+        ..order(Side::Sell, 10.0, limit(505.0), Product::Cnc)
+    };
+    let mut script = Script::new(vec![at_close(2, Act::Submit(sale))]);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 3);
+    let refused = Submission::Rejected(OrderId(3), RejectCode::ExitCover);
+    assert_eq!(script.submissions, [refused]);
+}
+
+#[test]
+fn a_target_exit_of_a_new_leg_waits_for_the_cancellation_of_the_stop_gtt_its_earlier_leg_left() {
+    // The new leg (10 bought at 495.00) has its stop at 491.00, whose GTT waits for g1's
+    // cancellation, and its target 6 points up, 501.00. The target is reached at
+    // 09:17:30: the exit of the 10 waits while g1 rests, g1's cancellation goes again in
+    // minute 3 (the venue refused it in minute 2), and the exit goes once the venue has
+    // taken it, with no stop GTT for the leg it closes.
+    let mut kernel = new_leg_of_beside_g1(stop_and_target(), stop_and_target());
+    kernel.take_commands();
+    assert!(kernel.push_tick(SBIN, 501.0, at(2, 30)).is_ok());
+    assert!(placed_roles(&kernel.take_commands()).is_empty());
+    let mut script = Script::new(Vec::new());
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 3);
+    let commands = kernel.take_commands();
+    assert!(placed_roles(&commands).is_empty());
+    assert!(matches!(
+        gtt_commands(&commands)[..],
+        [VenueCommand::CancelGtt { gtt: G1, .. }]
+    ));
+    assert!(kernel.apply_gtt_cancelled(G1).is_ok());
+    let commands = kernel.take_commands();
+    let exit = (OrderId(3), Side::Sell, 10.0, OrderRole::Exit);
+    assert_eq!(placed_roles(&commands), [exit]);
+    assert!(gtt_commands(&commands).is_empty());
+}
+
 // ---------------------------------------------------------------- GTT orders against it
 
 #[test]
@@ -500,4 +537,46 @@ fn a_cut_within_a_minute_of_a_trail_keeps_the_resting_trigger_until_the_minute_p
         terms: long_stop(50.0, 504.1, 499.05),
     };
     assert_eq!(kernel.take_commands(), [trailed]);
+}
+
+#[test]
+fn a_cut_goes_at_once_after_the_venue_refused_a_trigger_move() {
+    // 503.00 at 09:16:10 trails the stop to 501.00, and the venue refuses that. 506.10 at
+    // 09:16:20 reaches the first target (half): the cut to 50 on the resting trigger
+    // 496.10 is not the request refused, and the target's exit waits for it, so it goes
+    // at once; the trigger (504.10 by now) waits for the minute since 09:16:10.
+    let rules = LegRules {
+        trail: stop_and_trail().trail,
+        ..stop_and_two_targets()
+    };
+    let mut kernel = cnc_long_protected(rules);
+    assert!(kernel.push_tick(SBIN, 503.0, at(1, 10)).is_ok());
+    kernel.take_commands();
+    assert!(kernel.apply_gtt_modify_refused(G1).is_ok());
+    assert!(kernel.take_commands().is_empty());
+    assert!(kernel.push_tick(SBIN, 506.1, at(1, 20)).is_ok());
+    let cut = VenueCommand::ModifyGtt {
+        gtt: G1,
+        terms: long_stop(50.0, 496.1, 491.1),
+    };
+    assert_eq!(kernel.take_commands(), [cut]);
+}
+
+#[test]
+fn a_cut_the_venue_refused_is_sent_again_only_once_the_minute_has_passed() {
+    // The first target's cut to 50 (09:16:20) is refused. The same cut sent again at once
+    // would be refused again, in a loop with the venue: it goes again a minute after it was
+    // sent, with the next tick from 09:17:20.
+    let mut kernel = cnc_long_protected(stop_and_two_targets());
+    assert!(kernel.push_tick(SBIN, 506.1, at(1, 20)).is_ok());
+    kernel.take_commands();
+    assert!(kernel.apply_gtt_modify_refused(G1).is_ok());
+    assert!(kernel.push_tick(SBIN, 506.0, at(1, 50)).is_ok());
+    assert!(kernel.take_commands().is_empty());
+    assert!(kernel.push_tick(SBIN, 506.0, at(2, 25)).is_ok());
+    let cut = VenueCommand::ModifyGtt {
+        gtt: G1,
+        terms: long_stop(50.0, 496.1, 491.1),
+    };
+    assert_eq!(kernel.take_commands(), [cut]);
 }

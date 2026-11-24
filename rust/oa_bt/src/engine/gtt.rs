@@ -19,7 +19,9 @@
 //! (`venue_gtts`): none of the rules of this table acts in a session. Its renewal at a
 //! session open cancels a leg's old stop GTT and places the new one once the venue has
 //! taken the cancellation (`venue_gtt_sync`); a strategy GTT order is not renewed in a
-//! session (the broker's expiry ends it, `venue_gtt_answers`).
+//! session (not built): the broker's expiry ends it `Expired` (`venue_gtt_answers`), which
+//! the strategy sees, where a backtest renews it, a difference only for an order resting
+//! more than 360 days.
 
 use crate::exec::{
     Gtt, GttAction, GttBook, GttEvent, GttEventName, GttId, GttPolicy, GttPurpose, GttStatus,

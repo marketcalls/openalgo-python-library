@@ -5,7 +5,7 @@
 //! GTT to cancel asked to be cancelled at once), and the risk bookkeeping started as a
 //! backtest's next session starts it.
 
-use crate::exec::{GttId, GttPurpose, GttStatus, OrderId};
+use crate::exec::{GttId, GttPurpose, GttStatus};
 use crate::model::Day;
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::{
@@ -24,7 +24,7 @@ use super::checks::{check_parts, Parts};
 use super::error::LiveStateError;
 use super::gtts::read_gtt;
 use super::legs::read_leg;
-use super::orders::{read_order, Ids, SavedOrder};
+use super::orders::{read_orders, Ids, SavedOrder};
 use super::requests::read_key;
 use super::value::Read;
 use super::LIVE_STATE_LAYOUT;
@@ -120,19 +120,8 @@ impl Engine {
         &self,
         read: &Read<'_>,
     ) -> Result<(Vec<SavedOrder>, Ids), LiveStateError> {
-        let first = self.book.next_id().0;
         let saved_orders = read.items_of("orders")?;
-        let mut ids = Ids { pairs: Vec::new() };
-        for (offset, order) in (0u64..).zip(&saved_orders) {
-            ids.pairs
-                .push((OrderId(order.whole_of("order")?), OrderId(first + offset)));
-        }
-        let orders = saved_orders
-            .iter()
-            .zip(&ids.pairs)
-            .map(|(order, (_, id))| read_order(order, *id, self.instruments.len()))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((orders, ids))
+        read_orders(&saved_orders, self.book.next_id(), self.instruments.len())
     }
 
     /// Check the state's layout, kind, day, instruments, capital and products (module

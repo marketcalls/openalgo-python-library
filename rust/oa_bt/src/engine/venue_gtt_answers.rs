@@ -8,7 +8,7 @@
 //! | `apply_gtt_placed` | `Requested` to `Active` (`GttPlaced`) | a cancellation wanted meanwhile is sent; the leg's newest terms follow (`venue_gtt_sync`) |
 //! | `apply_gtt_refused` | `Requested` to `Rejected` (`GttRejected`) | a leg's stop: the leg is exited at market at once (`stop_rejected`) and entries are locked for the session (`gtt_refused`, decision 11.7); a strategy's GTT order ends `Rejected` |
 //! | `apply_gtt_modified` | `ModifyPending` to `Active` with the terms sent (`GttModified`) | a partial exit waiting for the cut is sent |
-//! | `apply_gtt_modify_refused` | `ModifyPending` to `Active`, the old terms standing | a level that still differs is sent again a minute after the last (`GTT_MODIFY_EVERY_NS`) |
+//! | `apply_gtt_modify_refused` | `ModifyPending` to `Active`, the old terms standing | a level that still differs is sent again a minute after the last (`GTT_MODIFY_EVERY_NS`); a units cut on the resting trigger goes at once after a refused trigger move, and a minute after the last when the cut itself was refused (the same cut at once would be refused again) |
 //! | `apply_gtt_cancelled` | asked: `CancelPending` to `Canceled` (`GttCanceled`), and an exit that waited for it is sent; not asked: `VenueEnded` (`GttEnded`), the GTT ended outside the session | not asked: the leg is protected again (`venue_gtt_protect`); a strategy's GTT order ends `Canceled` |
 //! | `apply_gtt_cancel_refused` | `CancelPending` to `Active` | it works on; the cancellation is sent again in a later slice |
 //! | `apply_gtt_ended(how)` | `VenueEnded` (`GttEnded`): expired, or rejected by the broker after its placement | a leg's stop not being cancelled is protected again, but a leg whose stop GTT is rejected a second time is exited at market (`stop_rejected`); a strategy's GTT order ends `Expired` or `Rejected` |
@@ -17,6 +17,7 @@
 //! (`UnknownGtt`) and for a GTT whose state takes no such answer (`GttState`): none of
 //! that request waits, as for a second answer to the same request.
 
+use crate::exec::price::whole_units;
 use crate::exec::{FillFlags, RejectCode};
 use crate::exec::{Gtt, GttAction, GttEventName, GttId, GttPurpose, GttStatus, OrderAction};
 use crate::portfolio::PositionKey;
@@ -175,9 +176,20 @@ impl Engine {
         let (slice, at) = self.gtt_answer_at()?;
         self.gtt_answered(gtt, "modify_refused", &[GttStatus::ModifyPending])?;
         self.gtts.book.apply(gtt, GttAction::RefuseModify)?;
+        let resting = self
+            .gtts
+            .book
+            .get(gtt)
+            .map(|rests| whole_units(rests.leg.trigger_rupees));
         let follow = self.gtt_follow_mut(gtt);
+        // Only a refused cut on the resting trigger holds the next cut for the minute: sent
+        // again at once it would be refused again. After a refused trigger move a cut is
+        // another request, and a partial exit waits for it (`venue_gtt_sync`).
+        let cut = follow
+            .pending
+            .is_some_and(|terms| Some(whole_units(terms.trigger_rupees)) == resting);
         follow.pending = None;
-        follow.refused = true;
+        follow.refused = cut;
         self.send_wanted_cancel(at.stamp().slice, gtt)?;
         self.after_result(&slice)
     }

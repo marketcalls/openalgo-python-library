@@ -8,13 +8,24 @@
 //! | `Entry` | `entry` | opens a position from flat, reverses one (`reverse=True` beyond it: the rest opens the other side), or goes against it beyond the room its closing side has (`venue_cover::closing_room`): the other orders working on that side could leave the position flat, and this one would then open the other side |
 //! | `Add` | `add` | adds to an open position on its side |
 //! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31, `venue_legs`) |
-//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, and the further orders of such an exit above the freeze quantity |
+//! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, every CNC sale of a long (below), and the further orders of such an exit above the freeze quantity |
+//!
+//! A CNC sale of a long only closes, whatever its reduce-only flag says: delivery cannot
+//! be shorted (04-execution 2), and the strategy only ever sells its own units (design
+//! 20-positional-live 7.2, decision 11.3). So it is never an entry that could open the
+//! other side: beyond the room its closing side has (beside the leg's stop GTT for the
+//! whole position, or another sale) it is rejected `exit_cover` as a reduce-only order is
+//! (`venue_cover`), its fills are never recorded beyond the position, and it is fitted to
+//! the position, or cancelled, when that shrinks. A backtest takes such a sale and
+//! rejects it `product_rule` at its fill once the long is gone; the trades are the same.
 //! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
 //! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
 //!
-//! A MARKET order against a position whose leg's stop rests is judged in the room the stop
-//! makes for it: the position's exit owner sends it once the stop is cut down to what stays
-//! open, or cancelled for a sale of the whole position or a reversal (`venue_owner`), so
+//! A MARKET order against a position whose leg's stop rests (its stop order, its stop GTT,
+//! or a stop GTT an earlier leg left at the venue: `Engine::stop_gtt_units`) is judged in
+//! the room the stop makes for it: the position's exit owner sends it once the stop is cut
+//! down to what stays open, or cancelled for a sale of the whole position or a reversal
+//! (`venue_owner`), so
 //! the order and the stop never both fill at the broker (16-session-design 4.5). A reversal
 //! whose stop fills before its cancellation ends canceled and opens nothing; the strategy
 //! decides again at its next bar. A resting order against it (LIMIT, SL, SL-M) is judged
@@ -46,7 +57,7 @@
 //! | `unprotected`, `stop_rejected`, `kill_switch`, `operator_stop` | `manual`: neither the strategy nor a kernel rule made it |
 
 use crate::exec::{ExecError, Order, OrderId, OrderRequest, OrderType};
-use crate::model::Side;
+use crate::model::{Product, Side};
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 
@@ -260,7 +271,8 @@ impl Engine {
         let held = self.held_units(key);
         let against = goes_against(held, request.side);
         let room = || self.closing_room(key, except) + self.room_the_stop_makes(request, except);
-        match (request.reduce_only, against) {
+        let only_closes = request.reduce_only || self.delivery_sale(request);
+        match (only_closes, against) {
             (true, _) => OrderRole::Exit,
             (false, true) if units <= room() => OrderRole::Exit,
             (false, true) => OrderRole::Entry,
@@ -269,7 +281,19 @@ impl Engine {
         }
     }
 
-    /// The units of the leg's resting stop of `request`'s position, or of its stop GTT
+    /// True for a CNC sale of a long (module docs): delivery cannot be shorted
+    /// (04-execution 2), and the strategy only ever sells its own units (design
+    /// 20-positional-live 7.2, decision 11.3), so it only closes, whatever its reduce-only
+    /// flag says.
+    pub(super) fn delivery_sale(&self, request: &OrderRequest) -> bool {
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        request.product == Product::Cnc && request.side == Side::Sell && self.held_units(key) > 0.0
+    }
+
+    /// The units of the leg's resting stop of `request`'s position, or of its stop GTTs
     /// (`venue_gtts`), when `request` is a MARKET order against the position that the exit
     /// owner sends (module docs); 0 for any other order, and for the stop itself
     /// (`except`).
@@ -300,8 +324,7 @@ impl Engine {
             instrument: request.instrument,
             product: request.product,
         };
-        let stop_rests =
-            self.resting_leg_stop(key).is_some() || self.stop_gtt_at_venue(key).is_some();
+        let stop_rests = self.resting_leg_stop(key).is_some() || self.stop_gtt_units(key) > 0.0;
         request.order_type == OrderType::Market
             && goes_against(self.held_units(key), request.side)
             && stop_rests

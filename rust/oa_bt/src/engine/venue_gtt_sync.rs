@@ -13,12 +13,14 @@
 //!   position less what its exits still have to fill, and less a partial exit waiting for
 //!   the cut), at once; its trigger follows a trail or a breakeven when it moves by at
 //!   least one tick (GTT-3) and at most once every `GTT_MODIFY_EVERY_NS` (04-execution 4.4
-//!   item 5: in live at most once a minute). A modification the venue refused is sent
+//!   item 5: in live at most once a minute). A trigger move the venue refused is sent
 //!   again once that minute has passed. One waits for the venue's answer at a time; the
 //!   newest terms are the leg's and go out with the answer, or once the minute allows. A
 //!   unit change is not held for the minute, since a partial exit waits for the cut: a cut
 //!   made within the minute keeps the resting trigger, and the trigger follows a minute
-//!   after the cut, so the trigger moves at most once a minute.
+//!   after the cut, so the trigger moves at most once a minute. A cut goes at once after
+//!   a refused trigger move too; only a refused cut waits for the minute before it goes
+//!   again, since the same cut sent at once would be refused again, in a loop.
 //! - **Cancelled** when it has nothing left to cover (the position closed at the broker,
 //!   a stop level removed), and before an exit of the whole position (`venue_owner`).
 //! - **Placed only beside no other**: while a stop GTT an earlier leg left rests on its
@@ -44,7 +46,6 @@ use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue::SendAt;
 use super::venue_gtts::{GttLegStop, GttTerms};
-use super::venue_owner::closing_side;
 
 /// The least time between two trigger modifications of one GTT in a live session, UTC
 /// nanoseconds: one minute (04-execution 4.4 item 5).
@@ -143,12 +144,7 @@ impl Engine {
         trigger_rupees: f64,
         wanted: f64,
     ) -> Result<(), KernelError> {
-        let side = closing_side(self.held_units(key));
-        let beside_loose = self.loose_stop_gtts().into_iter().any(|id| {
-            self.gtts.book.get(id).is_some_and(|gtt| {
-                gtt.instrument == key.instrument && gtt.product == key.product && gtt.side == side
-            })
-        });
+        let beside_loose = !self.loose_closing_stop_gtts(key).is_empty();
         if beside_loose || self.venue.group.holds(key) || self.exit_closes_leg(key)? {
             return Ok(());
         }
@@ -305,18 +301,27 @@ impl Engine {
         Ok(id)
     }
 
-    /// The units `key`'s stop GTT may still sell or buy at the venue: what it rests for,
-    /// or what a modification waiting for the venue's answer would give it, the larger; 0
-    /// with no stop GTT at the venue. A GTT's place that waits counts at its units.
+    /// The units the stop GTTs of `key`'s position may still sell or buy at the venue: its
+    /// leg's, and up to the position those an earlier leg left on its closing side
+    /// (`loose_closing_stop_gtts`), each at what it rests for or what a modification
+    /// waiting for the venue's answer would give it, the larger; 0 with none at the venue.
+    /// A GTT's place that waits counts at its units.
     pub(super) fn stop_gtt_units(&self, key: PositionKey) -> f64 {
-        let Some(gtt) = self.stop_gtt_at_venue(key) else {
-            return 0.0;
+        let reach = |gtt: &Gtt| {
+            let pending = self
+                .gtt_follow(gtt.id)
+                .and_then(|follow| follow.pending)
+                .map_or(0.0, |terms| terms.units);
+            gtt.quantity_units.max(pending)
         };
-        let pending = self
-            .gtt_follow(gtt.id)
-            .and_then(|follow| follow.pending)
-            .map_or(0.0, |terms| terms.units);
-        gtt.quantity_units.max(pending)
+        let own = self.stop_gtt_at_venue(key).map_or(0.0, reach);
+        let loose: f64 = self
+            .loose_closing_stop_gtts(key)
+            .into_iter()
+            .filter_map(|id| self.gtts.book.get(id))
+            .map(reach)
+            .sum();
+        own + loose.min(self.held_units(key).abs())
     }
 
     /// True when `key` is a position whose stop a live session holds as a GTT.

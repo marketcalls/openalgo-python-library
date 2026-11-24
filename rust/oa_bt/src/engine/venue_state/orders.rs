@@ -174,6 +174,32 @@ pub(super) struct SavedOrder {
     pub(super) charged: Vec<(ChargePart, OrderCharges)>,
 }
 
+/// The saved working orders of `orders` (a state's "orders" list) and their new ids, from
+/// `first` in the order of their saved ids (module docs).
+///
+/// Errors: `Malformed` for an order that cannot be read, or is not in id order after the
+/// one before it.
+pub(super) fn read_orders(
+    orders: &[Read<'_>],
+    first: OrderId,
+    instruments: usize,
+) -> Result<(Vec<SavedOrder>, Ids), LiveStateError> {
+    let mut ids = Ids { pairs: Vec::new() };
+    for (offset, order) in (0u64..).zip(orders) {
+        let saved = OrderId(order.whole_of("order")?);
+        if ids.pairs.last().is_some_and(|(last, _)| *last >= saved) {
+            return Err(order.malformed("is not in id order after the order before it"));
+        }
+        ids.pairs.push((saved, OrderId(first.0 + offset)));
+    }
+    let read = orders
+        .iter()
+        .zip(&ids.pairs)
+        .map(|(order, (_, id))| read_order(order, *id, instruments))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((read, ids))
+}
+
 /// A working order as `write_order` wrote it, under its new id `id`.
 ///
 /// Errors: `Malformed` for a field missing or unusable, a status that does not work, or
