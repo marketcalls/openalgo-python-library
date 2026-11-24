@@ -9,6 +9,8 @@
 //! | `Add` | `add` | adds to an open position on its side |
 //! | `LegStop` | `leg_stop` | a leg's broker-held stop (decision D31, `venue_legs`) |
 //! | `Exit` | `exit` | the strategy's order that only reduces: `exit()`, `reduce()`, a reduce-only order resting to close, an order against the position within the room its closing side has, every CNC sale of a long (below), and the further orders of such an exit above the freeze quantity |
+//! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
+//! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
 //!
 //! A CNC sale of a long only closes, whatever its reduce-only flag says: delivery cannot
 //! be shorted (04-execution 2), and the strategy only ever sells its own units (design
@@ -16,10 +18,11 @@
 //! other side: beyond the room its closing side has (beside the leg's stop GTT for the
 //! whole position, or another sale) it is rejected `exit_cover` as a reduce-only order is
 //! (`venue_cover`), its fills are never recorded beyond the position, and it is fitted to
-//! the position, or cancelled, when that shrinks. A backtest takes such a sale and
-//! rejects it `product_rule` at its fill once the long is gone; the trades are the same.
-//! | `RiskExit(reason)` | `risk_exit` | the engine's exit of the whole position for a risk reason |
-//! | `SquareOff` | `square_off` | the engine's exit at the square-off time |
+//! the position, or cancelled, when that shrinks. A backtest takes such a resting sale
+//! beside the stop GTT: when the stop fires first it rejects the sale `product_rule` at
+//! its fill once the long is gone, and the trades are the same; when the sale's price
+//! comes first the backtest fills it, where a live session refused it at submission. This
+//! difference is recorded in the CHANGELOG; a strategy uses `target=` for such an exit.
 //!
 //! A MARKET order against a position whose leg's stop rests (its stop order, its stop GTT,
 //! or a stop GTT an earlier leg left at the venue: `Engine::stop_gtt_units`) is judged in
