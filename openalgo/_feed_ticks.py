@@ -4,9 +4,9 @@
 import time
 from typing import Any
 
-# The quote fields a callback and get_quotes() see, in this order, each with the names
-# the server may send it under (the first one present wins). A field the server leaves
-# out is 0. The server's broker adapters send the average traded price as
+# The quote fields a quote or depth callback and get_quotes() see, in this order, each
+# with the names the server may send it under (the first one present wins). A field the
+# server leaves out is 0. The server's broker adapters send the average traded price as
 # average_price and the last traded quantity as last_quantity; the SDK's own names
 # are still read for a server that sends them.
 QUOTE_SOURCES = {
@@ -60,12 +60,12 @@ def quote_update(market_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def depth_update(market_data: dict[str, Any]) -> dict[str, Any]:
-    """The "data" of a depth update: price, timestamp and the two sides of the book."""
-    return {
-        "ltp": market_data.get("ltp", 0),
-        "timestamp": _timestamp(market_data),
-        "depth": market_data.get("depth", {"buy": [], "sell": []}),
-    }
+    """The "data" of a depth update: the quote fields, the timestamp and the two sides
+    of the book. The server's depth ticks carry the quote fields too (OHLC, volume and
+    OI among them), read here as quote_update reads them."""
+    update = quote_update(market_data)
+    update["depth"] = market_data.get("depth", {"buy": [], "sell": []})
+    return update
 
 
 def callback_message(message: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:

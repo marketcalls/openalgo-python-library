@@ -110,13 +110,31 @@ def test_quote_update_ignores_a_field_that_is_not_a_quote_field():
     assert "bid" not in ticks.quote_update({"bid": 6.9, "timestamp": STAMP})
 
 
-def test_depth_update_holds_price_timestamp_and_both_sides():
+def test_depth_update_holds_the_quote_fields_then_the_timestamp_and_both_sides():
     book = {"buy": [{"price": 6.0}], "sell": [{"price": 8.0}]}
-    assert ticks.depth_update({"ltp": 7.0, "timestamp": STAMP, "depth": book}) == {
+    update = ticks.depth_update({"ltp": 7.0, "timestamp": STAMP, "depth": book})
+    assert list(update) == [*ticks.QUOTE_FIELDS, "timestamp", "depth"]
+    assert (update["ltp"], update["timestamp"], update["depth"]) == (7.0, STAMP, book)
+
+
+def test_depth_update_reads_the_quote_fields_as_a_quote_update_does():
+    market_data = {
         "ltp": 7.0,
         "timestamp": STAMP,
-        "depth": book,
+        "open": 6.5,
+        "volume": 40,
+        "oi": 1200,
+        "average_price": 6.9,
+        "last_quantity": 3,
+        "depth": {"buy": [], "sell": []},
     }
+    update = ticks.depth_update(market_data)
+    del update["depth"]
+    assert update == ticks.quote_update(market_data)
+
+
+def test_depth_update_without_a_book_has_two_empty_sides():
+    assert ticks.depth_update({"ltp": 7.0, "timestamp": STAMP})["depth"] == {"buy": [], "sell": []}
 
 
 def test_callback_message_names_the_instrument_and_the_mode():

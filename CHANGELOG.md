@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Feed: a depth callback now receives the quote fields with the book: open, high, low, close, volume, OI, the average traded price, the last traded quantity and time, and the book totals, under the same keys and with the same 0 for a field the server leaves out as a quote callback. The server's depth ticks carry these fields, and a depth subscriber received only the last price, the timestamp and the book. `get_depth()` keeps its shape.
+
 ## [2.4.1] - 2026-11-24
 
 ### Added

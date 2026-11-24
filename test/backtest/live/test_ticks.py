@@ -2,8 +2,8 @@
 
 The messages are shaped as the SDK's data callbacks receive them (openalgo/feed.py and
 openalgo/_feed_ticks.py: LTP data holds ltp, timestamp and the ltt the server sent; quote
-data every quote field, 0 for one the server left out; depth data ltp, timestamp and the
-book), and the last trade times as the OpenAlgo server's broker adapters send them
+data every quote field, 0 for one the server left out; depth data the same quote fields
+and the book), and the last trade times as the OpenAlgo server's broker adapters send them
 (broker/*/streaming/: epoch milliseconds, epoch seconds, seconds as a string of digits,
 seconds counted from 1980, clock times and dates as text).
 """
