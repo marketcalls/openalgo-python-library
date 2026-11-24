@@ -45,8 +45,10 @@ fn holds_entries(legs_stop: bool, stop_busy: bool) -> bool {
 
 impl Engine {
     /// The checks of an external session after the backtest's, for `request` of `units`
-    /// decided in `slice`: the gates of a shared instrument (`venue_group`), its entry
-    /// gates (module docs), then what the fill path could not record (`venue_checks`).
+    /// decided in `slice`: a contract that expired before the session's day is never
+    /// traded (`market_closed`: the session holds one only to record its exit at expiry,
+    /// `expiry`), then the gates of a shared instrument (`venue_group`), its entry gates
+    /// (module docs), then what the fill path could not record (`venue_checks`).
     /// `replacing` is the order a modification replaces. A backtest checks nothing here;
     /// `Ok(Err(code))` rejects the order.
     ///
@@ -58,6 +60,9 @@ impl Engine {
         slice: &SliceInfo,
         replacing: Option<OrderId>,
     ) -> Result<Result<(), RejectCode>, KernelError> {
+        if self.contract_expired_before(request.instrument, slice.day) {
+            return Ok(Err(RejectCode::MarketClosed));
+        }
         if let Err(code) = self.group_gates(request, units, replacing) {
             return Ok(Err(code));
         }

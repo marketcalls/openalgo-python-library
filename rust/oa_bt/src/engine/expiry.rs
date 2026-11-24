@@ -134,6 +134,15 @@ impl Engine {
         day.is_some_and(|day| day > last)
     }
 
+    /// True when `instrument`'s contract had its last trading day before `day`: a live
+    /// session holds it only to record its exit at expiry (`venue_state::carry_expired`).
+    pub(super) fn contract_expired_before(&self, instrument: InstrumentId, day: Day) -> bool {
+        self.instruments
+            .get(instrument.index())
+            .and_then(|spec| spec.last_trading_day)
+            .is_some_and(|last| last < day)
+    }
+
     /// At a live session's close: the stop GTT of every position on a contract whose last
     /// trading day this session is, is cancelled, and no other is placed (module docs):
     /// the exchange settles what is left.

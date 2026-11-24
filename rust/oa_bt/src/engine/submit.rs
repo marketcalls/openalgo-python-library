@@ -262,12 +262,6 @@ impl Engine {
         let Some(spec) = self.instruments.get(request.instrument.index()) else {
             return Ok(Err(RejectCode::InstrumentUnknown));
         };
-        // A live session never trades a contract that expired before its day: it holds one
-        // only to record its exit at expiry (`venue_state::carry_expired`).
-        let expired = spec.last_trading_day.is_some_and(|last| last < slice.day);
-        if self.is_external() && expired {
-            return Ok(Err(RejectCode::MarketClosed));
-        }
         let key = PositionKey {
             instrument: request.instrument,
             product: request.product,
