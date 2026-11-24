@@ -7,7 +7,8 @@ ERROR alert names them after `UNBOUND_AT_START_ALERT_S`, and an intent the book 
 tell from another order refuses the start (LiveError: the user checks the order book).
 **Step 10**: the worker reads the position, order and trade books (`ReadBooks`; with the
 holdings in a session with a CNC strategy), again every `START_BOOKS_RETRY_S` while one
-cannot be read, for at most `START_BOOKS_WAIT_S` (then LiveError). The messages the worker
+cannot be read, for at most `START_BOOKS_WAIT_S` (then LiveError naming the books that
+failed). The messages the worker
 posts meanwhile are kept for the loop (`StartBooks.deferred`), but the resolutions, which
 the journal holds already.
 
@@ -135,25 +136,33 @@ def read_start(
             )
         _turn(worker, inbox, settings, deferred)
     until_ns = settings.now() + round(START_BOOKS_WAIT_S * _NS)
+    last: Books | None = None
     while True:
         worker.put(ReadBooks(_START_GENERATION))
         asked_ns = settings.now()
         while (books := _turn(worker, inbox, settings, deferred)) is None:
             if settings.now() >= until_ns:
-                raise LiveError(_UNREAD)
-        if _readable(books):
+                raise LiveError(_unread(last))
+        if not _failed(books):
             return StartBooks(books, tuple(deferred))
+        last = books
         while settings.now() < asked_ns + round(START_BOOKS_RETRY_S * _NS):
             _turn(worker, inbox, settings, deferred)
         if settings.now() >= until_ns:
-            raise LiveError(_UNREAD)
+            raise LiveError(_unread(last))
 
 
-_UNREAD = (
-    "OpenAlgo's position, order and trade books could not be read at the start, so the "
-    "session cannot tell what the broker holds: check OpenAlgo and the broker's login, "
-    "then start again"
-)
+def _unread(books: Books | None) -> str:
+    """The refusal of a start whose books could not be read, naming those of the last read
+    (`books`) that failed; with none failed or none read, every book the start judges by."""
+    failed = [] if books is None else _failed(books)
+    named = and_join(failed) or (
+        "position, order and trade books (and the holdings, for a CNC strategy)"
+    )
+    return (
+        f"OpenAlgo's {named} could not be read at the start, so the session cannot tell what "
+        "the broker holds: check OpenAlgo and the broker's login, then start again"
+    )
 
 
 def _turn(worker: Any, inbox: Any, settings: Any, deferred: list[Envelope]) -> Books | None:
@@ -199,13 +208,17 @@ def _ambiguous(message: Resolutions) -> None:
             )
 
 
-def _readable(books: Books) -> bool:
-    """Whether every book the start judges by was read: the position, order and trade
-    books, and the holdings when the session reads them (a CNC strategy)."""
-    read = (books.positionbook, books.orderbook, books.tradebook)
-    if books.holdings is not None:
-        read += (books.holdings,)
-    return all(answer.get("status") == "success" for answer in read)
+def _failed(books: Books) -> list[str]:
+    """The books the start judges by that a read failed, by name: of the position, order
+    and trade books, and the holdings when the session reads them (a CNC strategy)."""
+    answers = (
+        ("position book", books.positionbook),
+        ("holdings", books.holdings),
+        ("order book", books.orderbook),
+        ("trade book", books.tradebook),
+    )
+    read = [(name, answer) for name, answer in answers if answer is not None]
+    return [name for name, answer in read if answer.get("status") != "success"]
 
 
 def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Restart:
@@ -233,7 +246,7 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
             holdings=books.holdings,
         )
         if leg.units is None or leg.trades is None:
-            raise LiveError(_UNREAD)
+            raise LiveError(_unread(books))
         units = _journal_units(saved, journal, day, leg)
         found[each.name] = _Found(each, saved, leg, leg.units, units)
     legs: dict[str, LegStart] = {}

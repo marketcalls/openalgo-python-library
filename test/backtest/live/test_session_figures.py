@@ -359,7 +359,7 @@ def test_a_start_names_the_position_a_strategy_it_does_not_run_saved():
     assert figures.earlier_open
 
 
-def test_a_strategy_not_run_is_named_with_its_position_in_the_product_it_saved():
+def test_a_strategy_not_run_is_named_with_the_position_it_saved_whatever_its_product():
     saved = saved_position(0.0)
     saved["live_state"]["positions"] = [{"instrument": 0, "product": "CNC", "quantity_units": 25}]
 

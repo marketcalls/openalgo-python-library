@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from types import SimpleNamespace
 
 import pytest
 from plan_samples import DAY, LIMITS, EmaTrend, ist, specify
@@ -145,6 +146,22 @@ def test_several_strategies_run_as_a_list_each_on_its_own_symbol():
     spec = specify([EmaTrend, subclass("OnInfy", symbol="INFY")])
     assert spec.instruments == (("SBIN", "NSE"), ("INFY", "NSE"))
     assert [each.name for each in spec.strategies] == ["EmaTrend", "OnInfy"]
+
+
+@pytest.mark.parametrize(
+    ("products", "named"),
+    [
+        (("MIS", "MIS"), "MIS"),
+        (("CNC", "MIS", "CNC", "NRML"), "CNC, MIS, NRML"),
+    ],
+    ids=["one product", "mixed products"],
+)
+def test_the_product_the_preflight_checks_names_each_product_once_in_call_order(products, named):
+    strategies = tuple(SimpleNamespace(product=product) for product in products)
+
+    spec = plan_module.SessionSpec(SimpleNamespace(), DAY, strategies)
+
+    assert spec.product == named
 
 
 def test_capital_and_the_daily_loss_limit_may_be_given_by_strategy_name():
