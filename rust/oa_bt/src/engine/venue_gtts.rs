@@ -16,6 +16,12 @@
 //! - **A cancellation** waits as `CancelPending`. One wanted while the place or a
 //!   modification waits is sent once that is answered; one the venue refused is sent
 //!   again in a later slice, as the engine's own withdrawal of an order is.
+//! - **A stop GTT no leg holds** (`Engine::loose_stop_gtts`): one whose leg opened again
+//!   from flat, or that was carried to be cancelled (`venue_state::carry`), while the venue
+//!   had not taken its cancellation. It is cancelled, again in every later slice until the
+//!   venue takes it; meanwhile it keeps the position's entries out (`venue_gates`) and a
+//!   new stop GTT on its side waits for it (`venue_gtt_sync`): the broker never holds two
+//!   stop GTTs that sell or buy one position.
 //!
 //! Every command carries the GTT's id, its instrument and product, the side of its child,
 //! its trigger and child limit in rupees (rounded to the tick as `gtt_plan` rounds them),
@@ -133,8 +139,6 @@ pub(super) struct GttChild {
     pub(super) order: OrderId,
     /// When the venue fired the GTT, UTC nanoseconds.
     pub(super) triggered_at: TsNanos,
-    /// Its cancellation for not filling through one base bar was sent.
-    pub(super) unfilled: bool,
 }
 
 /// The GTT part of a live session's venue desk (module docs).
@@ -229,6 +233,20 @@ impl Engine {
     pub(super) fn stop_gtt_at_venue(&self, key: PositionKey) -> Option<&Gtt> {
         let id = self.leg_gtt_of(key)?.gtt?;
         self.gtts.book.get(id).filter(|gtt| gtt.status.at_venue())
+    }
+
+    /// The stop GTTs at the venue (or asked for there) that no leg holds, in id order
+    /// (module docs).
+    pub(super) fn loose_stop_gtts(&self) -> Vec<GttId> {
+        let legs = &self.venue.gtts.legs;
+        self.gtts
+            .book
+            .gtts()
+            .iter()
+            .filter(|gtt| gtt.purpose == GttPurpose::Protect && gtt.status.at_venue())
+            .filter(|gtt| !legs.iter().any(|leg| leg.gtt == Some(gtt.id)))
+            .map(|gtt| gtt.id)
+            .collect()
     }
 
     /// The GTT strategy order `order` rests as, while the venue has not fired it.

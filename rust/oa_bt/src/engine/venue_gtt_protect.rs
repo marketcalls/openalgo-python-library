@@ -9,8 +9,9 @@
 //! hours, so a session started before the open protects a carried leg at once. When the
 //! session's last price of the instrument (the position's mark: the latest tick, or the
 //! catch-up's last close) is already at or beyond the stop, no GTT is placed (the broker
-//! would fire it at once, or refuse it): the leg is exited at market, its fills flagged
-//! `stop_crossed`, reason `leg_sl` (`Protect::StopCrossed`). Before the session's open
+//! would fire it at once, or refuse it): the leg is exited at market, its order's role
+//! `risk_exit` with the reason `stop_crossed`, its fills flagged `stop_crossed`, the
+//! trade's exit reason `leg_sl` (`Protect::StopCrossed`). Before the session's open
 //! that exit waits for the open (`venue_owner`); at the session close no exit can go, and
 //! the outcome is `MarketClosed`. The other outcomes keep their meaning: `StopWorks` while
 //! a stop GTT of the leg is at the venue (asked for, resting, or with a request waiting),
@@ -30,7 +31,7 @@ use super::venue_roles::{EngineExit, RiskExitReason};
 
 /// The exit of a leg whose stop the price has crossed with no stop at the broker: the
 /// leg's stop level was reached (`leg_sl`).
-const CROSSED_EXIT: EngineExit = EngineExit::Risk(RiskExitReason::StopUnfilled);
+const CROSSED_EXIT: EngineExit = EngineExit::Risk(RiskExitReason::StopCrossed);
 
 impl Engine {
     /// Protect `key`'s leg, whose stop is a GTT, again (module docs), decided as `at`

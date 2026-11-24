@@ -212,6 +212,34 @@ def test_answers_that_do_not_fit_are_refused_by_kind_and_change_nothing():
     assert engine.take_commands() == []
 
 
+def test_a_gtt_order_against_the_position_held_is_not_built_in_a_session():
+    # A GTT sale of 10 at 495.00 beside g1, not reduce-only: both GTTs could fire at the
+    # broker and sell 20 against the 10 held.
+    engine = protected()
+    assert release_minute(engine, 1)[0] == "bar_close"
+    sale = {**cnc_buy({}), "side": "SELL", "order_type": "LIMIT", "price": 495.0}
+    with pytest.raises(NotImplementedError, match="GTT order against the position held"):
+        engine.submit({**sale, "validity": "GTT"})
+    assert engine.take_commands() == []
+
+
+def test_a_stop_gtt_left_resting_on_a_flat_position_keeps_entries_out_and_is_cancelled_again():
+    # The broker sells the 10 by itself and refuses g1's cancellation: a new CNC buy is
+    # rejected live_in_flight, and the cancellation goes again once the session reaches
+    # the next minute.
+    engine = protected()
+    engine.apply_external_fill(0, "CNC", "SELL", 10.0, 499.0, at(1, 40), "manual")
+    (cancel,) = engine.take_commands()
+    assert (cancel["command"], cancel["gtt_id"]) == ("cancel_gtt", G1)
+    engine.apply_gtt_cancel_refused(G1)
+    assert release_minute(engine, 1)[0] == "bar_close"
+    outcome, _, code = engine.submit(cnc_buy(STOP_3))
+    assert (outcome, code) == ("rejected", "live_in_flight")
+    assert engine.advance()[0] == "waiting"
+    (again,) = engine.take_commands()
+    assert (again["command"], again["gtt_id"]) == ("cancel_gtt", G1)
+
+
 def test_a_gtt_that_ends_is_named_by_one_of_the_kernels_ends():
     engine = protected()
     with pytest.raises(Exception, match="GTT end"):

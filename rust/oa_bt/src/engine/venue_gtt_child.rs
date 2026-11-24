@@ -17,7 +17,8 @@
 //!   `GttChildFilled` before the position event, as a backtest's child does.
 //! - **A strategy's GTT order** fires into that order itself, now working at the venue.
 //! - **A child not filled through one base bar** after the trigger is cancelled
-//!   (`withdraw_order`), and only once the venue confirms the cancellation does the
+//!   (`withdraw_order`; a cancellation the venue refused goes again in a later slice, as
+//!   long as the child works), and only once the venue confirms the cancellation does the
 //!   engine send its own exit of what is left at market, flagged `gtt_child_unfilled`,
 //!   reason `leg_sl` (`RiskExitReason::StopUnfilled`), as a backtest's after an unfilled
 //!   child. A child the broker rejects exits the leg at market as a rejected stop does
@@ -85,7 +86,6 @@ impl Engine {
             gtt,
             order: child,
             triggered_at: at,
-            unfilled: false,
         });
         self.after_result(&slice)?;
         Ok(child)
@@ -133,7 +133,9 @@ impl Engine {
     }
 
     /// Cancel the children not filled through one base bar since their GTT fired, by the
-    /// session's clock (module docs), decided and stamped as `at` says.
+    /// session's clock (module docs), decided and stamped as `at` says: once while the
+    /// venue has not answered, and again in a later slice after it refused
+    /// (`withdraw_order`), as long as the child works.
     ///
     /// Errors: those of `withdraw_order`.
     pub(super) fn cancel_unfilled_children(&mut self, at: SendAt) -> Result<(), KernelError> {
@@ -147,14 +149,11 @@ impl Engine {
             .gtts
             .children
             .iter()
-            .filter(|child| !child.unfilled && now.saturating_sub(child.triggered_at) >= base_ns)
+            .filter(|child| now.saturating_sub(child.triggered_at) >= base_ns)
             .map(|child| child.order)
             .filter(|id| book.get(*id).is_some_and(|o| o.status.is_working()))
             .collect();
         for id in due {
-            if let Some(child) = self.venue.gtts.children.iter_mut().find(|c| c.order == id) {
-                child.unfilled = true;
-            }
             self.withdraw_order(at.stamp(), id)?;
         }
         Ok(())

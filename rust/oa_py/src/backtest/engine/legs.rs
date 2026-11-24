@@ -40,7 +40,7 @@
 //!   placed for "stop_works", "exiting" (an exit of the position waits or works),
 //!   "no_stop_level", "flat" and "market_closed". A CNC or NRML leg's stop GTT is placed
 //!   also while the market is closed; "stop_crossed" when the last price is already at or
-//!   beyond the stop: no GTT, the leg exited at market ("risk_exit" "stop_unfilled", its
+//!   beyond the stop: no GTT, the leg exited at market ("risk_exit" "stop_crossed", its
 //!   fills flagged "stop_crossed"), and before the open that exit waits for the open.
 //! - `reprice_exit(order_id, limit_rupees)`: a leg's stop (or the engine's exit) modified
 //!   to a "LIMIT" at the price for the order's total units, partly filled or not; True when

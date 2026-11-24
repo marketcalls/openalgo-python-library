@@ -165,6 +165,7 @@
 //! | `venue_ends` | Its rejections and cancellations, and the slice every venue result is recorded in |
 //! | `venue_answers` | The venue's answers to the cancellations and modifications it was sent |
 //! | `venue_clock` | The end of a slice: a session close that waits for the venue to end its orders, the next open reached at the close of the slice before |
+//! | `venue_command` | `VenueCommand`: what a live session asks of its venue, for an order or a GTT |
 //! | `venue_error` | `VenueError`: a venue result that cannot be recorded, with its kind |
 //! | `venue_roles` | What each order of a live session is for: `OrderRole`, `EngineExit`, `RiskExitReason`; an order against the position beyond its closing side's room is an entry (a MARKET one is judged in the room the leg's stop makes for it, and the exit owner sends it), and a modification keeps the role |
 //! | `venue_session` | A live session's controls: an exit it asks for and what came of it (`ExitRequest`), the entry locks, the sizing cap, the daily loss measure, the stop where it stands |
@@ -308,6 +309,7 @@ mod venue;
 mod venue_answers;
 mod venue_checks;
 mod venue_clock;
+mod venue_command;
 mod venue_cover;
 mod venue_ends;
 mod venue_error;

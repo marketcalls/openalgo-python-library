@@ -16,7 +16,10 @@
 //! Firing in step 3 and the engine's exit after an unfilled child are in `gtt_fire`;
 //! strategy GTT orders (`validity="gtt"`) in `gtt_orders`. A live session sends a command
 //! at each of these moments instead, and its venue holds and fires the GTT
-//! (`venue_gtts`): none of the rules of this table acts in a session.
+//! (`venue_gtts`): none of the rules of this table acts in a session. Its renewal at a
+//! session open cancels a leg's old stop GTT and places the new one once the venue has
+//! taken the cancellation (`venue_gtt_sync`); a strategy GTT order is not renewed in a
+//! session (the broker's expiry ends it, `venue_gtt_answers`).
 
 use crate::exec::{
     Gtt, GttAction, GttBook, GttEvent, GttEventName, GttId, GttPolicy, GttPurpose, GttStatus,
@@ -305,13 +308,16 @@ impl Engine {
     /// Step 1: at a session open every active GTT older than the policy allows is
     /// cancelled and placed again with the same trigger and quantity (decision GTT-2), so a
     /// position held past a broker's GTT expiry stays protected. The re-created GTT is
-    /// in force from step 3 of this slice.
+    /// in force from step 3 of this slice. A live session renews its legs' stop GTTs
+    /// through the venue (`venue_gtt_sync::renew_old_stop_gtts`).
     ///
     /// Errors: `Exec` for a GTT the book cannot move (a kernel defect).
     pub(super) fn renew_old_gtts(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        // A live session's GTTs are the venue's: their renewal is not built for it yet.
-        if !slice.opens_session || self.is_external() {
+        if !slice.opens_session {
             return Ok(());
+        }
+        if self.is_external() {
+            return self.renew_old_stop_gtts(slice);
         }
         let stamp = Self::stamp(slice, Step::SessionOpen);
         let policy = self.gtts.policy;

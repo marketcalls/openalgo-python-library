@@ -68,7 +68,7 @@ fn protect_exits_a_leg_whose_stop_the_price_has_crossed_flagged_stop_crossed() {
         OrderId(3),
         Side::Sell,
         UNITS,
-        OrderRole::RiskExit(RiskExitReason::StopUnfilled),
+        OrderRole::RiskExit(RiskExitReason::StopCrossed),
     );
     assert_eq!(placed_roles(&commands), [exit]);
     assert!(kernel
@@ -109,6 +109,28 @@ fn a_stop_gtt_that_ends_while_the_session_closes_is_placed_again_with_the_market
     assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
     assert!(kernel.apply_gtt_placed(G2).is_ok());
     assert!(matches!(kernel.advance(), Ok(Pause::Finished { .. })));
+}
+
+#[test]
+fn a_crossed_stop_while_the_session_closes_says_the_market_is_closed() {
+    // As above, the add keeps the close waiting; the last price 495.00, at 15:30:01, is
+    // below the stop 496.10 when g1 ends at the venue: no GTT is placed (the broker would
+    // fire it at once) and no exit can go with the market closed.
+    let mut kernel = cnc_long_protected(stop_4());
+    let add = order(Side::Buy, 10.0, limit(400.0), Product::Cnc);
+    let last = venue_support::SESSION_SLICES as usize;
+    let acts = vec![at_close(1, Act::Submit(add))];
+    wait_before(&mut kernel, &bars(&[], &[]), &mut Script::new(acts), last);
+    kernel.take_commands();
+    let closed = at(venue_support::SESSION_SLICES, 1);
+    assert!(kernel.push_tick(SBIN, 495.0, closed).is_ok());
+    assert!(kernel.apply_gtt_cancelled(G1).is_ok());
+    assert!(kernel.take_commands().is_empty());
+    assert_eq!(
+        kernel.protect(SBIN, Product::Cnc),
+        Ok(Protect::MarketClosed)
+    );
+    assert!(kernel.take_commands().is_empty());
 }
 
 #[test]

@@ -30,14 +30,16 @@
 //! The risk reasons are the kernel's own rules (`daily_loss`, `daily_profit`, `drawdown`,
 //! `time_exit`) and those the live layer names when it asks for an exit
 //! (`Engine::request_exit`: `unprotected`, `stop_rejected`, `stop_unfilled`,
-//! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`). The trade an engine
-//! exit closes records the backtest's exit reason:
+//! `kill_switch`, `account_loss`, `account_profit`, `operator_stop`), and `stop_crossed`,
+//! the kernel's exit of a CNC or NRML leg whose stop the price had crossed with no stop
+//! GTT at the broker (`venue_gtt_protect`). The trade an engine exit closes records the
+//! backtest's exit reason:
 //!
 //! | Engine exit | Exit reason of the trade |
 //! |---|---|
 //! | `square_off` | `scheduler`, as the backtest's square-off |
 //! | `daily_loss`, `drawdown`, `time_exit` | `daily_loss_limit`, `drawdown_halt`, `time_exit`, as the backtest's rules |
-//! | `stop_unfilled` | `leg_sl`: the leg's stop level was reached |
+//! | `stop_unfilled`, `stop_crossed` | `leg_sl`: the leg's stop level was reached |
 //! | `account_loss` | `account_loss_limit`, as a portfolio backtest's account breach (`account_breach`; 18-multi-strategy 1.3) |
 //! | `daily_profit` | `daily_profit_target`, as the backtest's daily profit target (`daily_caps`; 18-multi-strategy 2.5a) |
 //! | `account_profit` | `account_profit_target`, as a portfolio backtest's account profit target (`account_breach`) |
@@ -53,7 +55,7 @@ use super::kernel::Engine;
 use super::venue::is_exit;
 
 /// True when an order on `side` goes against a position of `held` signed units.
-fn goes_against(held: f64, side: Side) -> bool {
+pub(super) fn goes_against(held: f64, side: Side) -> bool {
     held != 0.0 && (held > 0.0) != (side == Side::Buy)
 }
 
@@ -82,11 +84,14 @@ pub enum RiskExitReason {
     DailyProfit,
     /// The account's daily profit target, across the session's strategies.
     AccountProfit,
+    /// The price had crossed the leg's stop with no stop at the broker
+    /// (`venue_gtt_protect`).
+    StopCrossed,
 }
 
 impl RiskExitReason {
     /// Every reason, in the order of the module docs.
-    pub const ALL: [RiskExitReason; 11] = [
+    pub const ALL: [RiskExitReason; 12] = [
         RiskExitReason::DailyLoss,
         RiskExitReason::Drawdown,
         RiskExitReason::TimeExit,
@@ -98,6 +103,7 @@ impl RiskExitReason {
         RiskExitReason::OperatorStop,
         RiskExitReason::DailyProfit,
         RiskExitReason::AccountProfit,
+        RiskExitReason::StopCrossed,
     ];
 
     /// The code the bindings use.
@@ -114,6 +120,7 @@ impl RiskExitReason {
             RiskExitReason::OperatorStop => "operator_stop",
             RiskExitReason::DailyProfit => "daily_profit",
             RiskExitReason::AccountProfit => "account_profit",
+            RiskExitReason::StopCrossed => "stop_crossed",
         }
     }
 }
@@ -150,7 +157,7 @@ impl EngineExit {
                 RiskExitReason::DailyLoss => ExitReason::DailyLossLimit,
                 RiskExitReason::Drawdown => ExitReason::DrawdownHalt,
                 RiskExitReason::TimeExit => ExitReason::TimeExit,
-                RiskExitReason::StopUnfilled => ExitReason::LegSl,
+                RiskExitReason::StopUnfilled | RiskExitReason::StopCrossed => ExitReason::LegSl,
                 RiskExitReason::AccountLoss => ExitReason::AccountLossLimit,
                 RiskExitReason::DailyProfit => ExitReason::DailyProfitTarget,
                 RiskExitReason::AccountProfit => ExitReason::AccountProfitTarget,
@@ -385,6 +392,10 @@ mod tests {
                 "account_profit",
                 EngineExit::Risk(RiskExitReason::AccountProfit),
             ),
+            (
+                "stop_crossed",
+                EngineExit::Risk(RiskExitReason::StopCrossed),
+            ),
         ];
         for (code, exit) in table {
             assert_eq!(EngineExit::from_code(code), Some(exit), "{code}");
@@ -441,6 +452,10 @@ mod tests {
             (
                 EngineExit::Risk(RiskExitReason::AccountProfit),
                 ExitReason::AccountProfitTarget,
+            ),
+            (
+                EngineExit::Risk(RiskExitReason::StopCrossed),
+                ExitReason::LegSl,
             ),
         ];
         for (exit, reason) in table {

@@ -11,6 +11,7 @@
 
 use crate::exec::{Gtt, GttBook, GttId, GttLegRole, GttPurpose, GttStatus, OrderBook};
 
+use super::super::venue::VenueCommand;
 use super::super::venue_gtts::{GttChild, GttFollow, GttLegStop, GttTerms, VenueGtts};
 use super::error::LiveStateError;
 use super::orders::{write_ref, Ids};
@@ -49,6 +50,62 @@ pub(super) fn read_terms(read: &Read<'_>, instruments: usize) -> Result<GttTerms
 
 fn role_code(role: GttLegRole) -> &'static str {
     role.code()
+}
+
+/// A GTT's command the adapter has not taken (`orders::write_command`): "place_gtt",
+/// "modify_gtt" or "cancel_gtt" with the GTT's id and its terms, and for a place the
+/// strategy order it rests as, named in `orders`; `None` for an order's command.
+pub(super) fn write_gtt_command(orders: &OrderBook, command: &VenueCommand) -> Option<StateValue> {
+    let head = |kind: &str, gtt: GttId| [("command", kind.into()), ("gtt", gtt.0.into())];
+    Some(match *command {
+        VenueCommand::PlaceGtt { gtt, order, terms } => {
+            let [kind, id] = head("place_gtt", gtt);
+            let order = order.map(|id| write_ref(orders, id)).into();
+            map([kind, id, ("order", order), ("terms", write_terms(&terms))])
+        }
+        VenueCommand::ModifyGtt { gtt, terms } => {
+            let [kind, id] = head("modify_gtt", gtt);
+            map([kind, id, ("terms", write_terms(&terms))])
+        }
+        VenueCommand::CancelGtt { gtt, terms } => {
+            let [kind, id] = head("cancel_gtt", gtt);
+            map([kind, id, ("terms", write_terms(&terms))])
+        }
+        _ => return None,
+    })
+}
+
+/// The GTT's command `write_gtt_command` wrote, its order re-keyed by `ids`; `None` for
+/// an order's command.
+///
+/// Errors: `Malformed` for a field missing or unusable.
+pub(super) fn read_gtt_command(
+    read: &Read<'_>,
+    ids: &Ids,
+    instruments: usize,
+) -> Result<Option<VenueCommand>, LiveStateError> {
+    let kind = read.field("command")?;
+    let gtt = || read.whole_of("gtt").map(GttId);
+    let terms = || read_terms(&read.field("terms")?, instruments);
+    Ok(Some(match kind.text()? {
+        "place_gtt" => VenueCommand::PlaceGtt {
+            gtt: gtt()?,
+            order: read
+                .maybe("order")?
+                .map(|order| ids.working(&order))
+                .transpose()?,
+            terms: terms()?,
+        },
+        "modify_gtt" => VenueCommand::ModifyGtt {
+            gtt: gtt()?,
+            terms: terms()?,
+        },
+        "cancel_gtt" => VenueCommand::CancelGtt {
+            gtt: gtt()?,
+            terms: terms()?,
+        },
+        _ => return Ok(None),
+    }))
 }
 
 /// A GTT of `book`'s run, whose strategy order is named in `orders`.
@@ -168,7 +225,6 @@ pub(super) fn write_venue_gtts(orders: &OrderBook, gtts: &VenueGtts) -> StateVal
                     ("gtt", child.gtt.0.into()),
                     ("order", write_ref(orders, child.order)),
                     ("triggered_at_ns", child.triggered_at.into()),
-                    ("unfilled", child.unfilled.into()),
                 ])
             }),
         ),
@@ -208,7 +264,6 @@ pub(super) fn read_venue_gtts(
                     gtt: GttId(child.whole_of("gtt")?),
                     order: ids.reference(&child.field("order")?)?,
                     triggered_at: child.whole_of("triggered_at_ns")?,
-                    unfilled: child.bool_of("unfilled")?,
                 })
             })
             .collect::<Result<_, LiveStateError>>()?,

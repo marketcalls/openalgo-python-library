@@ -10,9 +10,15 @@
 //! | `day`, `instruments` | the trading day it closed, and its instruments |
 //! | `account` | the cash: capital, realized P&L, charges, margin blocked, sale proceeds withheld |
 //! | `positions`, `legs` | the open positions with their tranches and entry times, and their legs whole (levels, trail and breakeven state) |
-//! | `orders`, `gtts` | the strategy's GTT orders resting at the venue, and the GTTs at the venue: the legs' stop GTTs and those orders' GTTs, each with its kernel id and terms |
+//! | `orders`, `gtts` | the strategy's GTT orders resting at the venue, and the GTTs at the venue: the legs' stop GTTs and those orders' GTTs, each with its kernel id and terms, and `to_cancel` (below) |
+//! | `stop_gtt_rejections` | for each open CNC or NRML leg, how many of its stop GTTs the broker rejected after their placement (design 3.1, row `rejected`: the second exits the leg, on whichever day it comes) |
 //! | `risk` | the trading state, the daily loss measure's totals (its run baseline), the drawdown peak, and the slices each open position has been held |
 //! | `open_trades` | the round trips still open, with their excursion so far |
+//!
+//! A stop GTT that holds no open leg's stop is carried with `to_cancel` true: one whose
+//! position closed, or whose leg opened again, while the venue refused its cancellation up
+//! to the close. It still rests at the broker, so the next day's session follows it and
+//! asks its cancellation at once (`Engine::loose_stop_gtts`).
 //!
 //! Not carried, as a backtest's next session does not see them either: the orders that
 //! expired at the close and everything the venue was asked of them, the exits, the
@@ -23,22 +29,26 @@
 //! The next day's session takes it once, after its catch-up and before any order. Its
 //! instruments must be the saved ones and its capital the saved capital (as
 //! `restore_live_state` asks); the state must be of an earlier trading day; and every
-//! carried position must be CNC or NRML (MIS is squared off each day). The parts are
-//! checked as a same-day state's are (`checks`), and so are the GTTs: a stop GTT holds an
-//! open CNC or NRML leg's stop on its closing side for at most its units, and a GTT order
-//! names a carried GTT order. Anything else refuses the state whole (`LiveStateError`).
+//! carried position must be CNC or NRML (MIS is squared off each day): otherwise it is
+//! refused as `CarriedMismatch`. The parts are checked as a same-day state's are
+//! (`checks`), and so are the GTTs: a stop GTT not to cancel holds an open CNC or NRML
+//! leg's stop on its closing side for at most its units, one per position, and a GTT
+//! order names a carried GTT order. Anything else refuses the state whole as `Malformed`,
+//! naming the part of `carried_state` that breaks.
 //!
 //! Restored: the positions, marked at the catch-up's last close where there is one; the
-//! legs; the GTT orders and GTTs under new ids, every GTT resting (a request the venue had
-//! not answered when the session stopped rests on the terms asked; the start's GTT book
-//! read settles it, design 4.2 step 5); a carried leg without a stop GTT gets none by
+//! legs, with their stop GTTs' rejections; the GTT orders and GTTs under new ids, every GTT
+//! resting (a request the venue had not answered when the session stopped rests on the
+//! terms asked; the start's GTT book read settles it, design 4.2 step 5), and a stop GTT
+//! to cancel asked to be cancelled at once; a carried leg without a stop GTT gets none by
 //! itself, `protect` places it (`venue_gtt_protect`). The daily loss measure starts the
 //! session as a backtest's does at a session boundary (a run still open counts from its
 //! first fill, decision 11.9), and so does the trading state (a daily loss lock lifts, a
 //! drawdown halt stays); the sale proceeds withheld are credited, the day after the sale.
 //! Reading, checking and applying it is `carry_restore`.
 
-use crate::exec::{GttId, OrderId};
+use crate::exec::{Gtt, GttId, GttPurpose, OrderId};
+use crate::portfolio::PositionKey;
 use crate::rms::TradingStateCause;
 
 use super::super::error::KernelError;
@@ -101,18 +111,16 @@ impl Engine {
             .iter()
             .filter(|gtt| gtt.status.at_venue());
         let open = self.portfolio.positions().iter().filter(|p| !p.is_flat());
-        let trades = self.record.trades.open.iter().map(cleared);
-        let instruments = list(&self.instruments, |spec| {
-            map([
-                ("symbol", spec.symbol.as_str().into()),
-                ("exchange", spec.exchange.code().into()),
-            ])
+        let gtt_legs = self.venue.gtts.legs.iter().filter(|leg| {
+            let held = self.portfolio.position(leg.key);
+            held.is_some_and(|position| !position.is_flat())
         });
+        let trades = self.record.trades.open.iter().map(cleared);
         Ok(map([
             ("layout", LIVE_STATE_LAYOUT.into()),
             ("kind", CARRIED.into()),
             ("day", self.day_at(self.timeline.len()).into()),
-            ("instruments", instruments),
+            ("instruments", self.write_instruments()),
             ("account", write_account(&self.portfolio.account)),
             ("positions", list(open, write_position)),
             ("legs", list(&self.legs, |(key, leg)| write_leg(*key, leg))),
@@ -122,13 +130,53 @@ impl Engine {
                     write_order(order, self.order_role(order.id), true, &[])
                 }),
             ),
-            ("gtts", list(gtts, |gtt| write_gtt(book, gtt))),
+            ("gtts", list(gtts, |gtt| self.write_carried_gtt(gtt))),
+            (
+                "stop_gtt_rejections",
+                list(gtt_legs, |leg| {
+                    let [instrument, product] = key_fields(leg.key);
+                    let rejections = u32::from(leg.rejections);
+                    map([instrument, product, ("rejections", rejections.into())])
+                }),
+            ),
             ("risk", self.write_carried_risk()),
             (
                 "open_trades",
                 list(trades, |trade| write_open_trade(book, &trade)),
             ),
         ]))
+    }
+
+    /// The session's instruments by symbol and exchange, in registration order: the next
+    /// day's session must trade the same.
+    fn write_instruments(&self) -> StateValue {
+        list(&self.instruments, |spec| {
+            map([
+                ("symbol", spec.symbol.as_str().into()),
+                ("exchange", spec.exchange.code().into()),
+            ])
+        })
+    }
+
+    /// A GTT at the venue as it is carried: `write_gtt`'s fields and `to_cancel` (module
+    /// docs).
+    fn write_carried_gtt(&self, gtt: &Gtt) -> StateValue {
+        let mut written = write_gtt(&self.book, gtt);
+        if let StateValue::Map(entries) = &mut written {
+            entries.push(("to_cancel".to_string(), self.carried_to_cancel(gtt).into()));
+        }
+        written
+    }
+
+    /// True for a stop GTT that holds no open leg's stop (module docs): its position is
+    /// flat, or its leg holds another.
+    fn carried_to_cancel(&self, gtt: &Gtt) -> bool {
+        let key = PositionKey {
+            instrument: gtt.instrument,
+            product: gtt.product,
+        };
+        let legs_own = self.leg_gtt_of(key).and_then(|leg| leg.gtt) == Some(gtt.id);
+        gtt.purpose == GttPurpose::Protect && (self.held_units(key) == 0.0 || !legs_own)
     }
 
     fn write_carried_risk(&self) -> StateValue {
@@ -169,7 +217,7 @@ impl Engine {
     ///
     /// Errors: `Venue(NotExternal)` in a backtest; `LiveState` when the state is refused,
     /// whole: `NotRestorable` for a session that has traded or was restored already;
-    /// `Version`, `OtherSession` (the same or a later day, other instruments, another
+    /// `Version`, `CarriedMismatch` (the same or a later day, other instruments, another
     /// capital, an MIS position) and `Malformed` (a field that cannot be read, or parts
     /// that do not hold together) for the state itself.
     pub fn restore_carried_state(&mut self, state: &StateValue) -> Result<CarriedIds, KernelError> {
@@ -177,7 +225,7 @@ impl Engine {
             return Err(VenueError::NotExternal.into());
         }
         self.check_restorable()?;
-        let carried = self.read_carried(&Read::root(state))?;
+        let carried = self.read_carried(&Read::carried_root(state))?;
         self.apply_carried(carried)
     }
 }

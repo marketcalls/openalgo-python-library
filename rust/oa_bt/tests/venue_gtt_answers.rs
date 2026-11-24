@@ -347,6 +347,36 @@ fn a_child_not_filled_through_a_base_bar_is_cancelled_then_the_leg_exits_flagged
 }
 
 #[test]
+fn a_refused_cancel_of_an_unfilled_child_goes_again_in_a_later_slice_then_the_exit_follows() {
+    // As above, the child is cancelled at 09:17:31, in the slice in progress (minute 1),
+    // and the venue refuses: nothing more in that slice; once the session reaches minute
+    // 2 the cancel goes again, and once the venue confirms it the flagged exit goes.
+    let mut kernel = cnc_long_protected(stop_4());
+    assert_eq!(kernel.apply_gtt_triggered(G1, at(1, 30)), Ok(CHILD));
+    assert!(kernel.push_tick(SBIN, 489.0, at(2, 31)).is_ok());
+    let cancel = VenueCommand::Cancel { order: CHILD };
+    assert_eq!(kernel.take_commands(), [cancel]);
+    assert!(kernel.apply_cancel_refused(CHILD).is_ok());
+    assert!(kernel.push_tick(SBIN, 489.0, at(2, 50)).is_ok());
+    assert!(kernel.take_commands().is_empty());
+    wait_before(
+        &mut kernel,
+        &bars(&[], &[]),
+        &mut Script::new(Vec::new()),
+        2,
+    );
+    assert_eq!(kernel.take_commands(), [cancel]);
+    assert!(kernel.apply_cancel(CHILD).is_ok());
+    let exit = (
+        OrderId(3),
+        Side::Sell,
+        UNITS,
+        OrderRole::RiskExit(RiskExitReason::StopUnfilled),
+    );
+    assert_eq!(placed_roles(&kernel.take_commands()), [exit]);
+}
+
+#[test]
 fn a_target_waiting_for_the_stop_gtts_cancel_gives_way_to_its_child() {
     // The target's exit (o2) waits for g1's cancellation, and the venue fires g1 first:
     // its child (o3) holds the position, and the target's exit ends canceled.

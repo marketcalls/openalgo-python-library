@@ -47,6 +47,7 @@ fn kind(result: Result<Vec<(OrderId, OrderId)>, KernelError>) -> String {
         Err(KernelError::LiveState(error)) => match error {
             LiveStateError::NotRestorable { .. } => "not_restorable".to_string(),
             LiveStateError::OtherSession { .. } => "other_session".to_string(),
+            LiveStateError::CarriedMismatch { .. } => "carried_mismatch".to_string(),
             LiveStateError::Version { found } => format!("version {found}"),
             LiveStateError::Malformed { path, .. } => format!("malformed at {path}"),
         },

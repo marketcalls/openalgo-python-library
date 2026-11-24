@@ -12,18 +12,19 @@ mod gtt_venue_support;
 mod venue_support;
 
 use gtt_venue_support::{
-    at, cnc_long, cnc_long_protected, gtt_commands, long_stop, order_commands, stop_4,
+    at, cnc_buy, cnc_long, cnc_long_protected, gtt_commands, long_stop, order_commands, stop_4,
     stop_and_target, stop_and_trail, stop_and_two_targets, BUY, ENTRY, G1, UNITS,
 };
-use oa_bt::engine::{GttTerms, OrderRole, VenueCommand};
+use oa_bt::engine::{Engine, GttTerms, KernelError, OrderRole, Submission, VenueCommand};
 use oa_bt::exec::{
-    GttId, GttStatus, InstrumentSpec, OrderId, OrderRequest, OrderStatus, OrderType, Validity,
+    GttId, GttStatus, InstrumentSpec, OrderId, OrderRequest, OrderStatus, OrderType, RejectCode,
+    Validity,
 };
 use oa_bt::model::{days_from_civil, Exchange, InstrumentKind, Product, Side};
 use oa_bt::rms::LegRules;
 use venue_support::{
-    at_close, bars, config, limit, minute, order, placed_roles, run_to_end, sbin, session,
-    session_of, wait_before, Act, Script, SBIN,
+    at_close, bars, config, limit, minute, order, pause_at_close, placed_roles, run_to_end, sbin,
+    session, session_of, wait_before, Act, Script, SBIN,
 };
 
 #[test]
@@ -330,4 +331,173 @@ fn a_resting_sale_beside_a_stop_gtt_for_the_whole_position_is_refused_as_beside_
     let rejected =
         oa_bt::engine::Submission::Rejected(OrderId(2), oa_bt::exec::RejectCode::ExitCover);
     assert_eq!(script.submissions, [rejected]);
+}
+
+// ---------------------------------------------------------------- a stop GTT left behind
+
+/// The CNC long of `cnc_long_protected(stop_4())` sold by the broker by itself at 09:16:40
+/// and g1's cancellation refused: g1 rests on a flat position.
+fn flat_with_g1_resting() -> Engine {
+    let mut kernel = cnc_long_protected(stop_4());
+    sold_by_the_broker(&mut kernel, UNITS);
+    let cancel = gtt_commands(&kernel.take_commands());
+    assert!(matches!(
+        cancel[..],
+        [VenueCommand::CancelGtt { gtt: G1, .. }]
+    ));
+    assert!(kernel.apply_gtt_cancel_refused(G1).is_ok());
+    kernel
+}
+
+#[test]
+fn a_stop_gtt_left_resting_on_a_flat_position_keeps_entries_out() {
+    // A new CNC buy at the 09:16 close is rejected live_in_flight: its stop GTT beside g1
+    // would make two sales at the broker, as an MIS entry beside a stop a closed leg left
+    // working is rejected.
+    let mut kernel = flat_with_g1_resting();
+    let acts = vec![at_close(1, Act::Submit(cnc_buy(10.0, stop_4())))];
+    let mut script = Script::new(acts);
+    wait_before(&mut kernel, &bars(&[], &[]), &mut script, 2);
+    assert!(matches!(
+        script.submissions[..],
+        [Submission::Rejected(_, RejectCode::LiveInFlight)]
+    ));
+}
+
+/// The CNC long of `cnc_long_protected(stop_4())` with a resting LIMIT buy of 10 at
+/// 495.00 with `rules` (o2) placed at the 09:16 close. At 09:17:10 the broker sells the
+/// 100 by itself, the venue refuses g1's cancellation, and at 09:17:20 o2 fills and opens
+/// a new leg from flat; the commands of that fill are left.
+fn new_leg_beside_g1(rules: LegRules) -> Engine {
+    let mut kernel = cnc_long_protected(stop_4());
+    let add = OrderRequest {
+        leg_rules: rules,
+        ..order(Side::Buy, 10.0, limit(495.0), Product::Cnc)
+    };
+    let acts = vec![at_close(1, Act::Submit(add))];
+    wait_before(&mut kernel, &bars(&[], &[]), &mut Script::new(acts), 2);
+    kernel.take_commands();
+    let sold = kernel.apply_external_fill(
+        SBIN,
+        Product::Cnc,
+        Side::Sell,
+        UNITS,
+        499.0,
+        at(2, 10),
+        oa_bt::rms::ExitReason::Manual,
+    );
+    assert!(sold.is_ok(), "{sold:?}");
+    kernel.take_commands();
+    assert!(kernel.apply_gtt_cancel_refused(G1).is_ok());
+    assert!(kernel
+        .apply_fill(OrderId(2), 10.0, 495.0, at(2, 20))
+        .is_ok());
+    kernel
+}
+
+#[test]
+fn a_stop_gtt_an_earlier_leg_left_resting_is_cancelled_again_in_a_later_slice() {
+    // g1 is no leg's stop any more and still rests: nothing more in minute 2, the slice
+    // of the refusal, and its cancellation goes again once the session reaches minute 3.
+    let mut kernel = new_leg_beside_g1(LegRules::default());
+    assert!(gtt_commands(&kernel.take_commands()).is_empty());
+    wait_before(
+        &mut kernel,
+        &bars(&[], &[]),
+        &mut Script::new(Vec::new()),
+        3,
+    );
+    let again = gtt_commands(&kernel.take_commands());
+    assert!(matches!(
+        again[..],
+        [VenueCommand::CancelGtt { gtt: G1, .. }]
+    ));
+}
+
+#[test]
+fn a_new_legs_stop_gtt_waits_for_the_cancellation_of_the_one_its_earlier_leg_left() {
+    // o2 carries a stop of 4 points: 491.00, its child 1 percent below, 486.09 down to the
+    // tick, 486.05. That GTT beside g1 would be a second sale at the broker, so it goes
+    // only once the venue has cancelled g1.
+    let mut kernel = new_leg_beside_g1(stop_4());
+    assert!(gtt_commands(&kernel.take_commands()).is_empty());
+    wait_before(
+        &mut kernel,
+        &bars(&[], &[]),
+        &mut Script::new(Vec::new()),
+        3,
+    );
+    let again = gtt_commands(&kernel.take_commands());
+    assert!(matches!(
+        again[..],
+        [VenueCommand::CancelGtt { gtt: G1, .. }]
+    ));
+    assert!(kernel.apply_gtt_cancelled(G1).is_ok());
+    let placed = VenueCommand::PlaceGtt {
+        gtt: GttId(2),
+        order: None,
+        terms: long_stop(10.0, 491.0, 486.05),
+    };
+    assert_eq!(gtt_commands(&kernel.take_commands()), [placed]);
+}
+
+// ---------------------------------------------------------------- GTT orders against it
+
+#[test]
+fn a_gtt_order_against_the_position_held_is_not_built_in_a_session() {
+    // A GTT sale of 10 at 495.00 that is not reduce-only, beside g1: both could fire at the
+    // broker, a second sale of the position (on CNC, of the user's own holdings). A
+    // backtest cancels the stop GTT before such an exit fills; a session cannot.
+    let mut kernel = cnc_long_protected(stop_4());
+    pause_at_close(&mut kernel, &bars(&[], &[]), 1);
+    let sale = OrderRequest {
+        validity: Validity::Gtt,
+        ..order(Side::Sell, 10.0, limit(495.0), Product::Cnc)
+    };
+    let refused = kernel.submit(sale);
+    assert!(
+        matches!(
+            refused,
+            Err(KernelError::NotBuilt {
+                feature: "a GTT order against the position held, in a live session",
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert!(kernel.take_commands().is_empty());
+}
+
+// ---------------------------------------------------------------- one trigger move a minute
+
+#[test]
+fn a_cut_within_a_minute_of_a_trail_keeps_the_resting_trigger_until_the_minute_passes() {
+    // 503.00 at 09:16:10 trails the stop to 501.00 (child 495.95), confirmed. 506.10 at
+    // 09:16:30 would trail it to 504.10 and reaches the first target (half): the cut to 50
+    // goes at once on the resting trigger 501.00, and 504.10 (child 1 percent below,
+    // 499.059, down to the tick, 499.05) goes a minute after the cut, at 09:17:30.
+    let rules = LegRules {
+        trail: stop_and_trail().trail,
+        ..stop_and_two_targets()
+    };
+    let mut kernel = cnc_long_protected(rules);
+    assert!(kernel.push_tick(SBIN, 503.0, at(1, 10)).is_ok());
+    kernel.take_commands();
+    assert!(kernel.apply_gtt_modified(G1).is_ok());
+    assert!(kernel.push_tick(SBIN, 506.1, at(1, 30)).is_ok());
+    let cut = VenueCommand::ModifyGtt {
+        gtt: G1,
+        terms: long_stop(50.0, 501.0, 495.95),
+    };
+    assert_eq!(kernel.take_commands(), [cut]);
+    assert!(kernel.apply_gtt_modified(G1).is_ok());
+    kernel.take_commands();
+    assert!(kernel.push_tick(SBIN, 506.0, at(2, 20)).is_ok());
+    assert!(gtt_commands(&kernel.take_commands()).is_empty());
+    assert!(kernel.push_tick(SBIN, 506.0, at(2, 30)).is_ok());
+    let trailed = VenueCommand::ModifyGtt {
+        gtt: G1,
+        terms: long_stop(50.0, 504.1, 499.05),
+    };
+    assert_eq!(kernel.take_commands(), [trailed]);
 }

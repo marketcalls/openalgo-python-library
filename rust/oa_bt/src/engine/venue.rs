@@ -12,8 +12,9 @@
 //! closing fill nor an expiry settlement (a position still open at the end is reported
 //! open). The parts:
 //!
-//! - **Commands out** (`venue_orders`). An order that passes the checks is sent at once as
-//!   `VenueCommand::Place`, except an exit (below). The engine's own withdrawals send
+//! - **Commands out** (`venue_orders`, the commands in `venue_command`). An order that
+//!   passes the checks is sent at once as `VenueCommand::Place`, except an exit (below).
+//!   The engine's own withdrawals send
 //!   `Cancel` at most once in a slice; `cancel` sends it at once, again after the venue
 //!   refused it, but never twice while one waits for the venue's answer. The order works
 //!   on until the venue's result, since a fill may come first. `modify` sends `Modify`
@@ -83,7 +84,8 @@
 //!   `venue_gtt_answers`, a fired GTT's child is followed as an order (`venue_gtt_child`),
 //!   and `protect` places a stop GTT again (`venue_gtt_protect`).
 //! - **Not built yet** (`KernelError::NotBuilt`, `venue_requests`): a strategy's GTT order
-//!   that only reduces, modifying a GTT order, futures series and rebalancing.
+//!   that only reduces or goes against the position held, modifying a GTT order, futures
+//!   series and rebalancing.
 //!
 //! The contract for the live layer: every fill of an order is delivered (`apply_fill`)
 //! before its terminal result (`apply_cancel`, `apply_reject`); after it the order takes
@@ -91,8 +93,8 @@
 //! it changes nothing, but for `WouldReverse`, which records the fill up to the position.
 
 use crate::charges::OrderCharges;
-use crate::exec::{FillFlags, GttId, InstrumentId, OrderId, OrderRequest, OrderType};
-use crate::model::{Product, Side, TsNanos};
+use crate::exec::{FillFlags, OrderId, OrderRequest, OrderType};
+use crate::model::TsNanos;
 use crate::portfolio::PositionKey;
 
 use super::clock::SliceInfo;
@@ -101,7 +103,7 @@ use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
 use super::venue_group::GroupDesk;
-use super::venue_gtts::{GttTerms, VenueGtts};
+use super::venue_gtts::VenueGtts;
 use super::venue_legs::LegStop;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::SessionControls;
@@ -126,87 +128,7 @@ impl Venue {
     }
 }
 
-/// What an external session asks of its venue. Quantities are units, prices rupees.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum VenueCommand {
-    /// Place a DAY order.
-    Place {
-        /// The kernel order the venue's results name.
-        order: OrderId,
-        /// The instrument, by registration index.
-        instrument: InstrumentId,
-        /// CNC, MIS or NRML.
-        product: Product,
-        /// Buy or sell.
-        side: Side,
-        /// Units to trade, never lots.
-        units: f64,
-        /// MARKET, LIMIT, SL or SL-M, with its limit and trigger prices.
-        order_type: OrderType,
-        /// What the order is for (`venue_roles`).
-        role: OrderRole,
-    },
-    /// Replace a working order's units, type, limit and trigger (a full replacement).
-    Modify {
-        /// The kernel order to replace.
-        order: OrderId,
-        /// The replacement's units.
-        units: f64,
-        /// The replacement's type, with its limit and trigger prices.
-        order_type: OrderType,
-    },
-    /// Cancel a working order.
-    Cancel {
-        /// The kernel order to cancel.
-        order: OrderId,
-    },
-    /// Place a SINGLE GTT (design 20-positional-live 3.6): a CNC or NRML leg's stop, or a
-    /// strategy's GTT order.
-    PlaceGtt {
-        /// The kernel GTT the venue's answers name.
-        gtt: GttId,
-        /// The strategy's GTT order it rests as; `None` for a leg's stop.
-        order: Option<OrderId>,
-        /// Its trigger, child limit and units.
-        terms: GttTerms,
-    },
-    /// Replace a GTT's trigger, child limit and units (a full replacement).
-    ModifyGtt {
-        /// The kernel GTT to replace.
-        gtt: GttId,
-        /// The replacement's terms.
-        terms: GttTerms,
-    },
-    /// Cancel a GTT.
-    CancelGtt {
-        /// The kernel GTT to cancel.
-        gtt: GttId,
-        /// Its terms as they rest.
-        terms: GttTerms,
-    },
-}
-
-impl VenueCommand {
-    /// The kernel order the command is for; `None` for a GTT's command.
-    pub fn order(&self) -> Option<OrderId> {
-        match *self {
-            VenueCommand::Place { order, .. }
-            | VenueCommand::Modify { order, .. }
-            | VenueCommand::Cancel { order } => Some(order),
-            _ => None,
-        }
-    }
-
-    /// The kernel GTT the command is for; `None` for an order's command.
-    pub fn gtt(&self) -> Option<GttId> {
-        match *self {
-            VenueCommand::PlaceGtt { gtt, .. }
-            | VenueCommand::ModifyGtt { gtt, .. }
-            | VenueCommand::CancelGtt { gtt, .. } => Some(gtt),
-            _ => None,
-        }
-    }
-}
+pub use super::venue_command::VenueCommand;
 
 /// Who asked for an exit (`venue_owner`).
 #[derive(Clone, Copy, Debug, PartialEq)]

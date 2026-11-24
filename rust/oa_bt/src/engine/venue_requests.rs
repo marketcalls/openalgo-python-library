@@ -8,16 +8,18 @@
 //!
 //! | Refused | Why |
 //! |---|---|
-//! | A GTT order that only reduces | not built for a live session: a resting GTT exit beside the leg's stop GTT would be a second exit at the broker; use `stop=` and `target=` |
+//! | A GTT order that only reduces, or any GTT order against the position held | not built for a live session: a resting GTT exit beside the leg's stop GTT would be a second exit at the broker, and both could fire (a backtest cancels the stop GTT before such an exit fills; the broker does not); use `stop=` and `target=` |
 //! | `rebalance()` | not built for a live session |
 //! | Modifying a partly filled order, or a GTT order | not built: cancel it and place a new one |
 //! | Modifying an order whose last modification waits, or an exit not sent yet | one modification at a time; an exit waiting for its cancels has nothing at the venue |
 //! | A replacement left with no units | the venue takes no order of none: cancel it |
 
 use crate::exec::{ExecError, Order, OrderRequest, Validity};
+use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::kernel::Engine;
+use super::venue_roles::goes_against;
 
 fn not_built(feature: &'static str, instead: &'static str) -> KernelError {
     KernelError::NotBuilt { feature, instead }
@@ -32,15 +34,27 @@ fn invalid(reason: &str) -> KernelError {
 impl Engine {
     /// Refuse, in an external session, what the venue cannot carry yet (module docs).
     ///
-    /// Errors: `NotBuilt` for a GTT order that only reduces and a rebalance order.
+    /// Errors: `NotBuilt` for a GTT order that only reduces or goes against the position
+    /// held, and a rebalance order.
     pub(super) fn check_venue_request(&self, request: &OrderRequest) -> Result<(), KernelError> {
         if !self.is_external() {
             return Ok(());
         }
+        let instead = "hold the position's exits with stop= and target=, or place a DAY order";
         if request.validity == Validity::Gtt && request.reduce_only {
             return Err(not_built(
                 "a GTT order that only reduces, in a live session",
-                "hold the position's exits with stop= and target=, or place a DAY order",
+                instead,
+            ));
+        }
+        let key = PositionKey {
+            instrument: request.instrument,
+            product: request.product,
+        };
+        if request.validity == Validity::Gtt && goes_against(self.held_units(key), request.side) {
+            return Err(not_built(
+                "a GTT order against the position held, in a live session",
+                instead,
             ));
         }
         if request.rebalance {

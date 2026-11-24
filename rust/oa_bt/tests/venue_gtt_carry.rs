@@ -19,9 +19,10 @@
 mod venue_support;
 
 use oa_bt::engine::{
-    BarColumns, BaseBar, Engine, Pause, RunConfig, RunOutput, StateValue, VenueCommand,
+    BarColumns, BaseBar, Engine, GttEnd, KernelError, LiveStateError, OrderRole, Pause,
+    RiskExitReason, RunConfig, RunOutput, StateValue, VenueCommand,
 };
-use oa_bt::exec::{GttId, OrderId, OrderRequest, OrderType};
+use oa_bt::exec::{FillFlags, GttId, GttStatus, OrderId, OrderRequest, OrderType};
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Product, Side};
 use oa_bt::rms::{Distance, LegRules, TrailSpec};
 use venue_support::{config, order, run_backtest, Act, Ohlc, Script, CAPITAL, NSE_OPEN_MINUTE};
@@ -116,6 +117,14 @@ struct Venue {
     gtts: Vec<(GttId, f64)>,
     /// The price a target's exit fills at, once a tick reached it.
     target_price: Option<f64>,
+    /// The minute at whose open the broker sells the whole position by itself, at the
+    /// open; from then on the venue refuses every cancellation of a GTT.
+    sells_all_at: Option<u32>,
+    /// The venue refuses every cancellation of a GTT.
+    refuses_cancels: bool,
+    /// The minute at whose open the broker rejects the resting stop GTT after its
+    /// placement.
+    rejects_stop_at: Option<u32>,
 }
 
 impl Venue {
@@ -137,6 +146,11 @@ impl Venue {
                         self.gtts.retain(|(known, _)| *known != gtt);
                         self.gtts.push((gtt, terms.trigger_rupees));
                     }
+                    VenueCommand::CancelGtt { gtt, .. } if self.refuses_cancels => {
+                        kernel
+                            .apply_gtt_cancel_refused(gtt)
+                            .expect("the venue refuses");
+                    }
                     VenueCommand::CancelGtt { gtt, .. } => {
                         kernel.apply_gtt_cancelled(gtt).expect("the venue confirms");
                         self.gtts.retain(|(known, _)| *known != gtt);
@@ -145,6 +159,28 @@ impl Venue {
                 }
             }
         }
+    }
+
+    /// What the broker does by itself at the open of minute `k` (`sells_all_at`,
+    /// `rejects_stop_at`), at `price`.
+    fn act_alone(&mut self, kernel: &mut Engine, k: u32, price: f64, at: i64) {
+        if self.sells_all_at == Some(k) {
+            let held = kernel
+                .position(venue_support::SBIN, Product::Cnc)
+                .map_or(0.0, |p| p.quantity_units);
+            let reason = oa_bt::rms::ExitReason::Manual;
+            let sbin = venue_support::SBIN;
+            let sold =
+                kernel.apply_external_fill(sbin, Product::Cnc, Side::Sell, held, price, at, reason);
+            assert!(sold.is_ok(), "{sold:?}");
+            self.refuses_cancels = true;
+        }
+        if self.rejects_stop_at == Some(k) {
+            let (gtt, _) = self.gtts.remove(0);
+            let rejected = kernel.apply_gtt_ended(gtt, GttEnd::Rejected);
+            assert!(rejected.is_ok(), "{rejected:?}");
+        }
+        self.answer(kernel);
     }
 
     fn fill_orders(&mut self, kernel: &mut Engine, price: f64, at: i64) {
@@ -160,6 +196,7 @@ impl Venue {
         let open_ns = minute_on(day, k);
         self.answer(kernel);
         self.fill_orders(kernel, open, open_ns);
+        self.act_alone(kernel, k, open, open_ns + 1);
         for (second, price) in [(15, high), (30, low)] {
             let at = open_ns + second * 1_000_000_000;
             kernel
@@ -547,7 +584,7 @@ fn a_carried_state_goes_only_to_a_later_trading_day() {
     assert!(matches!(
         same_day.restore_carried_state(&state),
         Err(oa_bt::engine::KernelError::LiveState(
-            oa_bt::engine::LiveStateError::OtherSession { .. }
+            oa_bt::engine::LiveStateError::CarriedMismatch { .. }
         ))
     ));
 }
@@ -562,7 +599,7 @@ fn a_carried_state_needs_the_capital_it_was_saved_with() {
     assert!(matches!(
         other.restore_carried_state(&state),
         Err(oa_bt::engine::KernelError::LiveState(
-            oa_bt::engine::LiveStateError::OtherSession { .. }
+            oa_bt::engine::LiveStateError::CarriedMismatch { .. }
         ))
     ));
 }
@@ -610,7 +647,7 @@ fn a_carried_mis_position_is_refused() {
     assert!(matches!(
         tuesday.restore_carried_state(&state),
         Err(oa_bt::engine::KernelError::LiveState(
-            oa_bt::engine::LiveStateError::OtherSession { .. }
+            oa_bt::engine::LiveStateError::CarriedMismatch { .. }
         ))
     ));
 }
@@ -647,8 +684,238 @@ fn a_carried_leg_without_its_stop_gtt_crossed_before_the_open_exits_at_the_open(
         .push_tick(sbin, 495.0, minute_on(day_2(), 0) + 1)
         .is_ok());
     let placed = venue_support::placed_roles(&tuesday.take_commands());
-    let exit = oa_bt::engine::OrderRole::RiskExit(oa_bt::engine::RiskExitReason::StopUnfilled);
+    let exit = OrderRole::RiskExit(RiskExitReason::StopCrossed);
     assert_eq!(placed, [(OrderId(1), Side::Sell, UNITS, exit)]);
+    // It fills at 494.90: the trade closes for the stop's reason, flagged stop_crossed.
+    let filled = tuesday.apply_fill(OrderId(1), UNITS, 494.9, minute_on(day_2(), 0) + 2);
+    assert!(filled.is_ok(), "{filled:?}");
+    run_day(
+        &mut tuesday,
+        day_2(),
+        &Vec::new(),
+        &mut Script::new(Vec::new()),
+        &mut Venue::default(),
+    );
+    let output = tuesday.finish().expect("day 2 finished");
+    let fill = output.fills[0].fill;
+    assert_eq!(fill.reason.code(), "leg_sl");
+    assert!(fill.flags.contains(FillFlags::STOP_CROSSED));
+}
+
+#[test]
+fn a_stop_gtt_left_resting_on_a_flat_position_at_the_close_is_carried_and_cancelled_at_once() {
+    // The broker sells the 100 by itself at the open of minute 370 and refuses every
+    // cancellation of g1 to the close, which completes with g1 resting on a flat
+    // position. The carried state holds g1 marked to cancel, and day 2's session takes it
+    // and asks the cancellation at once.
+    let mut kernel = session_on(day_1());
+    let acts = vec![(minute_on(day_1(), 1), Act::Submit(buy(stop_4())))];
+    let mut venue = Venue {
+        sells_all_at: Some(370),
+        ..Venue::default()
+    };
+    run_day(
+        &mut kernel,
+        day_1(),
+        &Vec::new(),
+        &mut Script::new(acts),
+        &mut venue,
+    );
+    let state = kernel.carried_state().expect("closed");
+    let StateValue::List(gtts) = field(&state, "gtts") else {
+        panic!("gtts is a list");
+    };
+    assert_eq!(field(&state, "positions"), &StateValue::List(Vec::new()));
+    assert_eq!(gtts.len(), 1);
+    assert_eq!(field(&gtts[0], "to_cancel"), &StateValue::Bool(true));
+    let mut tuesday = session_on(day_2());
+    let ids = tuesday
+        .restore_carried_state(&state)
+        .expect("day 2 takes it");
+    let carried = ids.gtts[0].1;
+    let commands = tuesday.take_commands();
+    assert!(
+        matches!(commands[..], [VenueCommand::CancelGtt { gtt, .. }] if gtt == carried),
+        "{commands:?}"
+    );
+    assert!(tuesday.apply_gtt_cancelled(carried).is_ok());
+    let state = tuesday.gtt_view(carried).map(|view| view.gtt.status);
+    assert_eq!(state, Some(GttStatus::Canceled));
+}
+
+#[test]
+fn a_carried_leg_whose_stop_gtt_is_rejected_again_on_day_2_is_exited_at_market() {
+    // Day 1: the broker rejects g1 after its placement at minute 100, the leg's first
+    // rejection, and g2 protects it again. Day 2: the broker rejects g2's successor, the
+    // leg's second rejection: the leg is exited at market, stop_rejected (design 3.1, row
+    // rejected), not protected a third time.
+    let mut kernel = session_on(day_1());
+    let acts = vec![(minute_on(day_1(), 1), Act::Submit(buy(stop_4())))];
+    let mut venue = Venue {
+        rejects_stop_at: Some(100),
+        ..Venue::default()
+    };
+    run_day(
+        &mut kernel,
+        day_1(),
+        &Vec::new(),
+        &mut Script::new(acts),
+        &mut venue,
+    );
+    let state = kernel.carried_state().expect("closed");
+    let mut tuesday = session_on(day_2());
+    let ids = tuesday
+        .restore_carried_state(&state)
+        .expect("day 2 takes it");
+    let carried = ids.gtts[0].1;
+    assert!(tuesday.apply_gtt_ended(carried, GttEnd::Rejected).is_ok());
+    let sbin = venue_support::SBIN;
+    assert!(tuesday
+        .push_tick(sbin, 500.1, minute_on(day_2(), 0) + 1)
+        .is_ok());
+    let commands = tuesday.take_commands();
+    assert!(gtt_free(&commands), "{commands:?}");
+    let exit = OrderRole::RiskExit(RiskExitReason::StopRejected);
+    let placed = venue_support::placed_roles(&commands);
+    assert_eq!(placed, [(OrderId(1), Side::Sell, UNITS, exit)]);
+}
+
+/// True when `commands` hold no GTT's command.
+fn gtt_free(commands: &[VenueCommand]) -> bool {
+    commands.iter().all(|command| command.gtt().is_none())
+}
+
+#[test]
+fn a_carried_run_keeps_counting_toward_the_daily_loss_measure() {
+    // Decision 11.9. Day 1 closes with the 100 bought at 500.10 marked at 499.10: the run
+    // is 100 x -1.00 = -100.00 down. Day 2 starts from that run, still open: -100.00, and
+    // a tick at 498.60 makes it 100 x -1.50 = -150.00.
+    let lower = (499.1, 499.1, 499.1, 499.1);
+    let first: DayBars = (2..SLICES).map(|k| (k, lower)).collect();
+    let mut kernel = session_on(day_1());
+    let acts = vec![(minute_on(day_1(), 1), Act::Submit(buy(stop_4())))];
+    run_day(
+        &mut kernel,
+        day_1(),
+        &first,
+        &mut Script::new(acts),
+        &mut Venue::default(),
+    );
+    assert_eq!(kernel.daily_loss_measure(), -100.0);
+    let state = kernel.carried_state().expect("closed");
+    let mut tuesday = session_on(day_2());
+    assert!(tuesday.restore_carried_state(&state).is_ok());
+    assert_eq!(tuesday.daily_loss_measure(), -100.0);
+    let sbin = venue_support::SBIN;
+    assert!(tuesday
+        .push_tick(sbin, 498.6, minute_on(day_2(), 0) + 1)
+        .is_ok());
+    assert_eq!(tuesday.daily_loss_measure(), -150.0);
+}
+
+#[test]
+fn a_carried_state_goes_only_to_a_session_of_its_instruments() {
+    let state = day_1_closed(stop_4()).carried_state().expect("closed");
+    let config = day_config(day_2(), day_2());
+    let mut other = venue_support::session_of(config, venue_support::nifty_call());
+    let refused = other.restore_carried_state(&state);
+    assert!(
+        matches!(
+            &refused,
+            Err(KernelError::LiveState(LiveStateError::CarriedMismatch { reason }))
+                if reason.contains("NIFTY31JUL2525000CE")
+        ),
+        "{refused:?}"
+    );
+    assert!(other.position(venue_support::SBIN, Product::Cnc).is_none());
+}
+
+#[test]
+fn a_carried_state_refused_is_named_as_a_carried_state() {
+    // The refusal names where the carried state breaks and says to pass what
+    // carried_state() returned; it does not send the user to live_state().
+    let state = day_1_closed(stop_4()).carried_state().expect("closed");
+    let StateValue::List(gtts) = field(&state, "gtts") else {
+        panic!("gtts is a list");
+    };
+    let terms = field(&gtts[0], "terms");
+    let more = with_field(terms, "units", StateValue::Float(200.0));
+    let gtt = with_field(&gtts[0], "terms", more);
+    let edited = with_field(&state, "gtts", StateValue::List(vec![gtt]));
+    let refused = session_on(day_2())
+        .restore_carried_state(&edited)
+        .expect_err("refused whole");
+    let message = refused.to_string();
+    assert!(message.contains("carried_state.gtts[0]"), "{message}");
+    assert!(
+        message.contains("pass the state carried_state() returned"),
+        "{message}"
+    );
+    assert!(!message.contains("live_state"), "{message}");
+}
+
+/// Advance `kernel`, a session of `day`, adding the flat bars and releasing each slice
+/// but filling nothing, until it waits before slice `slice`.
+fn wait_on(kernel: &mut Engine, day: Day, slice: usize) {
+    loop {
+        match kernel.advance().expect("the slice runs") {
+            Pause::Waiting { next_slice } if next_slice >= slice => return,
+            Pause::Waiting { next_slice } => {
+                let k = u32::try_from(next_slice).expect("a slice of the day");
+                let (open, high, low, close) = FLAT;
+                let bar = BaseBar {
+                    ts_open: minute_on(day, k),
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume: 1_000.0,
+                };
+                kernel.add_bar(venue_support::SBIN, bar).expect("a bar");
+                kernel.release(next_slice + 1);
+            }
+            Pause::Finished { .. } => panic!("the session finished before slice {slice}"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_carried_stop_gtt_older_than_360_days_is_cancelled_then_placed_again_at_the_open() {
+    // GTT-2 in a session: the carried g1 was created 361 days before day 2. At day 2's
+    // session open it is cancelled, and only once the venue has taken that does the leg's
+    // new stop GTT go, at its stop 496.10 (child 491.10), created on day 2.
+    let state = day_1_closed(stop_4()).carried_state().expect("closed");
+    let StateValue::List(gtts) = field(&state, "gtts") else {
+        panic!("gtts is a list");
+    };
+    let created = i64::from(day_2()) - 361;
+    let old = with_field(&gtts[0], "created_on", StateValue::Int(created));
+    let edited = with_field(&state, "gtts", StateValue::List(vec![old]));
+    let mut tuesday = session_on(day_2());
+    let ids = tuesday
+        .restore_carried_state(&edited)
+        .expect("day 2 takes it");
+    let carried = ids.gtts[0].1;
+    assert!(tuesday.take_commands().is_empty());
+    wait_on(&mut tuesday, day_2(), 1);
+    let commands = tuesday.take_commands();
+    assert!(
+        matches!(commands[..], [VenueCommand::CancelGtt { gtt, .. }] if gtt == carried),
+        "{commands:?}"
+    );
+    assert!(tuesday.apply_gtt_cancelled(carried).is_ok());
+    let renewed = GttId(carried.0 + 1);
+    let placed = tuesday.take_commands();
+    assert!(
+        matches!(placed[..], [VenueCommand::PlaceGtt { gtt, terms, .. }]
+            if gtt == renewed && terms.trigger_rupees == 496.1 && terms.limit_rupees == 491.1),
+        "{placed:?}"
+    );
+    let view = tuesday
+        .gtt_view(renewed)
+        .expect("the new GTT is the session's");
+    assert_eq!(view.gtt.created_on, day_2());
 }
 
 #[test]
