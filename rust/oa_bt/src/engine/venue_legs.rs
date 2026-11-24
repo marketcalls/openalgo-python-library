@@ -2,7 +2,8 @@
 //! 16-session-design 4.1, 4.3, 4.5 and 4.10, requirements R2, R3, R4 and R6).
 //!
 //! A backtest holds a leg's stop itself and fills it at its level (`legs`). A live session
-//! hands it to the broker as an order and keeps that order on the leg:
+//! hands an MIS leg's stop to the broker as an order and keeps that order on the leg (a
+//! CNC or NRML leg's stop is a GTT instead, kept by `venue_gtt_sync`):
 //!
 //! - **Placed** once the leg has a stop level: with the fill that opens the leg, for the
 //!   units filled, or when a trail or a breakeven first sets one. It is a reduce-only DAY
@@ -49,6 +50,7 @@ use crate::rms::{ExitReason, RiskEvent, RiskEventName, RiskScope};
 
 use super::error::KernelError;
 use super::event::{Event, EventStamp};
+use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue::SendAt;
 use super::venue_owner::closing_side;
@@ -106,7 +108,11 @@ impl Engine {
     /// side that no longer closes, where it is cancelled (`venue_cover`).
     pub(super) fn open_leg_stop(&mut self, key: PositionKey) {
         self.venue.leg_stops.retain(|stop| stop.key != key);
-        self.venue.leg_stops.push(LegStop::new(key));
+        if held_as_gtt(key.product) {
+            self.open_leg_gtt(key);
+        } else {
+            self.venue.leg_stops.push(LegStop::new(key));
+        }
         self.venue.fired_targets.retain(|(known, _)| *known != key);
         self.venue.group.release(key);
     }
@@ -271,12 +277,14 @@ impl Engine {
     }
 
     /// Before the first fill of order `id` when it is a leg's stop: `leg_sl_hit`, with its
-    /// trigger as the level (the leg's level once it was repriced).
+    /// trigger as the level (the leg's level once it was repriced). A fired GTT's child
+    /// wrote it when the GTT fired (`venue_gtt_child`).
     pub(super) fn before_stop_fill(&mut self, stamp: EventStamp, id: OrderId) {
         let Some(order) = self.book.get(id) else {
             return;
         };
-        if self.order_role(id) != Some(OrderRole::LegStop) || order.filled_units > 0.0 {
+        let child = self.gtt_child_of(id).is_some();
+        if self.order_role(id) != Some(OrderRole::LegStop) || order.filled_units > 0.0 || child {
             return;
         }
         let instrument = order.request.instrument;

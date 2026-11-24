@@ -112,6 +112,7 @@ impl TickEcho {
                         .expect("the venue confirms a cancel");
                 }
             }
+            other => panic!("an MIS leg sends no GTT command: {other:?}"),
         }
     }
 

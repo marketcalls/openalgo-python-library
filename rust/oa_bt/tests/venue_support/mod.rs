@@ -9,7 +9,8 @@
 //! decision (SPEC-35) and none in a slice without a bar (SPEC-06). Slippage is zero, so
 //! the simulator's price is the matched price itself. A fill at the open is reported at
 //! the slice's open instant, one inside the bar one nanosecond after it. It confirms
-//! every modification and cancellation as soon as it takes them.
+//! every modification and cancellation as soon as it takes them, and every GTT's place,
+//! modification and cancellation too (it fires no GTT: the GTT tests script that).
 //!
 //! Every test file that includes this module uses a different part of it, so unused
 //! items are allowed here rather than duplicated per file.
@@ -433,6 +434,21 @@ impl Echo {
                 engine
                     .apply_cancel(order)
                     .expect("the venue confirms a cancel");
+            }
+            VenueCommand::PlaceGtt { gtt, .. } => {
+                engine
+                    .apply_gtt_placed(gtt)
+                    .expect("the venue confirms a GTT's place");
+            }
+            VenueCommand::ModifyGtt { gtt, .. } => {
+                engine
+                    .apply_gtt_modified(gtt)
+                    .expect("the venue confirms a GTT's modify");
+            }
+            VenueCommand::CancelGtt { gtt, .. } => {
+                engine
+                    .apply_gtt_cancelled(gtt)
+                    .expect("the venue confirms a GTT's cancel");
             }
         }
     }

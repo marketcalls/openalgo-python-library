@@ -1,8 +1,9 @@
 //! What a live session has asked its venue and not heard back, and what it keeps on its
 //! positions, in its saved state (`venue_state`): the cancellations and modifications
 //! that wait for an answer (a modification with its replacement terms), the exits of the
-//! positions with the orders sent for them, the legs' broker-held stops, the targets
-//! fired and the exits made for them, the reprices waiting, and the session's controls
+//! positions with the orders sent for them (and the flags of an engine exit's fills), the
+//! legs' broker-held stops, the targets fired and the exits made for them, the reprices
+//! waiting, what the session follows of its GTTs (`gtts`), and the session's controls
 //! (entry locks, the sizing cap).
 //!
 //! Of the controls, a restore takes only the sizing cap, and only into a session that has
@@ -14,12 +15,14 @@
 //! order: `orders::write_ref`), and dropped where nothing looks it up any more, as the
 //! session itself forgets it (`Engine::tidy_venue`).
 
-use crate::exec::{OrderBook, OrderId};
+use crate::exec::{FillFlags, OrderBook, OrderId};
 
 use super::super::venue::{ExitBy, PositionExit, Replacement, VenueDesk};
+use super::super::venue_gtts::VenueGtts;
 use super::super::venue_legs::LegStop;
 use super::super::venue_roles::{EngineExit, OrderRole};
 use super::error::LiveStateError;
+use super::gtts::{read_venue_gtts, write_venue_gtts};
 use super::orders::{write_ref, Ids};
 use super::requests::{key_fields, read_key, read_request, write_request};
 use super::value::{list, map, Read, StateValue};
@@ -35,8 +38,28 @@ pub(super) struct SavedDesk {
     pub(super) target_exits: Vec<(OrderId, u16)>,
     pub(super) fired_targets: Vec<(crate::portfolio::PositionKey, u16)>,
     pub(super) reprices: Vec<(OrderId, f64)>,
+    /// The flags of the engine's exit orders whose fills are flagged.
+    pub(super) exit_flags: Vec<(OrderId, FillFlags)>,
+    /// What the session follows of its GTTs.
+    pub(super) gtts: VenueGtts,
     /// The saved cap on the engine default's sizing equity, rupees.
     pub(super) sizing_cap_rupees: Option<f64>,
+}
+
+/// The names of `flags` (`FillFlags::names`).
+fn write_flags(flags: FillFlags) -> StateValue {
+    list(flags.names(), StateValue::from)
+}
+
+/// The flags `write_flags` wrote.
+///
+/// Errors: `Malformed` for a name that is no flag's.
+fn read_flags(read: &Read<'_>) -> Result<FillFlags, LiveStateError> {
+    let mut flags = FillFlags::NONE;
+    for name in read.items()? {
+        flags = flags.with(name.parsed(FillFlags::from_name)?);
+    }
+    Ok(flags)
 }
 
 fn engine_exit_code(exit: EngineExit) -> &'static str {
@@ -59,6 +82,7 @@ fn write_exit(book: &OrderBook, exit: &PositionExit) -> StateValue {
         ("engine_exit", engine),
         ("sent", list(&exit.sent, |id| write_ref(book, *id))),
         ("limit_rupees", exit.limit_rupees.into()),
+        ("flags", write_flags(exit.flags)),
     ])
 }
 
@@ -85,6 +109,7 @@ fn read_exit(
             .map(|order| ids.reference(order))
             .collect::<Result<_, _>>()?,
         limit_rupees: read.opt_f64_of("limit_rupees")?,
+        flags: read_flags(&read.field("flags")?)?,
     })
 }
 
@@ -179,6 +204,14 @@ pub(super) fn write_desk(book: &OrderBook, desk: &VenueDesk) -> StateValue {
             ),
         ),
         (
+            "exit_flags",
+            list(
+                desk.exit_flags.iter().filter(|(id, _)| works(id)),
+                |(id, flags)| map([("order", order(*id)), ("flags", write_flags(*flags))]),
+            ),
+        ),
+        ("gtts", write_venue_gtts(book, &desk.gtts)),
+        (
             "entry_locks",
             list(&desk.controls.entry_locks, |reason| reason.as_str().into()),
         ),
@@ -251,6 +284,16 @@ pub(super) fn read_desk(
                 ))
             })
             .collect::<Result<_, LiveStateError>>()?,
+        exit_flags: each("exit_flags")?
+            .iter()
+            .map(|flagged| {
+                Ok((
+                    ids.working(&flagged.field("order")?)?,
+                    read_flags(&flagged.field("flags")?)?,
+                ))
+            })
+            .collect::<Result<_, LiveStateError>>()?,
+        gtts: read_venue_gtts(&read.field("gtts")?, ids, instruments)?,
         sizing_cap_rupees: read.opt_f64_of("sizing_cap_rupees")?,
     })
 }

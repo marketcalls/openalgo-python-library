@@ -14,12 +14,13 @@
 //! that has ended is not saved: the order has nothing left to send.
 
 use crate::charges::OrderCharges;
-use crate::exec::{Order, OrderBook, OrderId, OrderStatus};
+use crate::exec::{GttBook, GttId, Order, OrderBook, OrderId, OrderStatus};
 use crate::market::costs::CostBreakdown;
 
 use super::super::venue::{ChargePart, VenueCommand};
 use super::super::venue_roles::{OrderRole, RiskExitReason};
 use super::error::LiveStateError;
+use super::gtts::{read_terms, write_terms};
 use super::requests::{read_instrument, read_order_type, read_request, read_side, write_request};
 use super::value::{list, map, Read, StateValue};
 use crate::model::Product;
@@ -232,13 +233,19 @@ pub(super) fn read_order(
     })
 }
 
-/// A command the adapter has not taken, `None` for one naming an order that has ended
-/// (module docs).
-pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<StateValue> {
-    let works = book
-        .get(command.order())
-        .is_some_and(|o| o.status.is_working());
-    if !works {
+/// A command the adapter has not taken, `None` for one naming an order that has ended or
+/// a GTT no longer at the venue (module docs).
+pub(super) fn write_command(
+    book: &OrderBook,
+    gtts: &GttBook,
+    command: &VenueCommand,
+) -> Option<StateValue> {
+    let alive = match (command.order(), command.gtt()) {
+        (Some(order), _) => book.get(order).is_some_and(|o| o.status.is_working()),
+        (None, Some(gtt)) => gtts.get(gtt).is_some_and(|g| g.status.at_venue()),
+        (None, None) => false,
+    };
+    if !alive {
         return None;
     }
     let terms = |units: f64, order_type: crate::exec::OrderType| {
@@ -292,6 +299,22 @@ pub(super) fn write_command(book: &OrderBook, command: &VenueCommand) -> Option<
         VenueCommand::Cancel { order } => {
             map([("command", "cancel".into()), ("order", order.0.into())])
         }
+        VenueCommand::PlaceGtt { gtt, order, terms } => map([
+            ("command", "place_gtt".into()),
+            ("gtt", gtt.0.into()),
+            ("order", order.map(|id| write_ref(book, id)).into()),
+            ("terms", write_terms(&terms)),
+        ]),
+        VenueCommand::ModifyGtt { gtt, terms } => map([
+            ("command", "modify_gtt".into()),
+            ("gtt", gtt.0.into()),
+            ("terms", write_terms(&terms)),
+        ]),
+        VenueCommand::CancelGtt { gtt, terms } => map([
+            ("command", "cancel_gtt".into()),
+            ("gtt", gtt.0.into()),
+            ("terms", write_terms(&terms)),
+        ]),
     })
 }
 
@@ -303,8 +326,35 @@ pub(super) fn read_command(
     ids: &Ids,
     instruments: usize,
 ) -> Result<VenueCommand, LiveStateError> {
-    let order = ids.working(&read.field("order")?)?;
     let kind = read.field("command")?;
+    let gtt = || read.whole_of("gtt").map(GttId);
+    let terms = || read_terms(&read.field("terms")?, instruments);
+    match kind.text()? {
+        "place_gtt" => {
+            return Ok(VenueCommand::PlaceGtt {
+                gtt: gtt()?,
+                order: read
+                    .maybe("order")?
+                    .map(|order| ids.working(&order))
+                    .transpose()?,
+                terms: terms()?,
+            })
+        }
+        "modify_gtt" => {
+            return Ok(VenueCommand::ModifyGtt {
+                gtt: gtt()?,
+                terms: terms()?,
+            })
+        }
+        "cancel_gtt" => {
+            return Ok(VenueCommand::CancelGtt {
+                gtt: gtt()?,
+                terms: terms()?,
+            })
+        }
+        _ => {}
+    }
+    let order = ids.working(&read.field("order")?)?;
     Ok(match kind.text()? {
         "place" => VenueCommand::Place {
             order,

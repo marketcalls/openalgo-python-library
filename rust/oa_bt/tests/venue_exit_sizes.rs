@@ -52,6 +52,7 @@ fn commands(kernel: &mut Engine) -> Vec<(OrderId, Option<f64>)> {
             VenueCommand::Place { order, units, .. }
             | VenueCommand::Modify { order, units, .. } => (order, Some(units)),
             VenueCommand::Cancel { order } => (order, None),
+            other => panic!("an MIS position sends no GTT command: {other:?}"),
         })
         .collect()
 }

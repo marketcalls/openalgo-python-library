@@ -7,7 +7,8 @@
 
 use crate::exec::state::next_status;
 use crate::exec::{
-    Order, OrderAction, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec, RejectCode,
+    FillFlags, Order, OrderAction, OrderId, OrderRequest, OrderStatus, OrderType, QuantitySpec,
+    RejectCode,
 };
 use crate::model::{Side, TsNanos};
 use crate::portfolio::PositionKey;
@@ -184,7 +185,8 @@ impl Engine {
     }
 
     /// Send the engine's exit `by` of `exit`'s position of `held` signed units, the whole
-    /// of it, at market or at the exit's limit; dropped when no session is left.
+    /// of it, at market or at the exit's limit, its orders' fills flagged as the exit is;
+    /// dropped when no session is left.
     ///
     /// Errors: those of the order book and of `fills::end_order`.
     pub(super) fn send_engine_exit(
@@ -215,8 +217,19 @@ impl Engine {
         for units in self.pieces_of(exit.key, held.abs())? {
             sent.push(self.make_exit_order(at, exit.key, terms, units, by.into())?);
         }
+        if exit.flags != FillFlags::NONE {
+            let flagged = sent.iter().map(|id| (*id, exit.flags));
+            self.venue.exit_flags.extend(flagged);
+        }
         self.set_sent(exit, sent);
         Ok(())
+    }
+
+    /// What the fills of order `id` are flagged: an engine exit's flags
+    /// (`PositionExit::flags`), `NONE` for any other order.
+    pub(super) fn exit_flags_of(&self, id: OrderId) -> FillFlags {
+        let flagged = self.venue.exit_flags.iter().find(|(order, _)| *order == id);
+        flagged.map_or(FillFlags::NONE, |(_, flags)| *flags)
     }
 
     /// Make and send one of the engine's exit orders of `key`: a reduce-only DAY order of

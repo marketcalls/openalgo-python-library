@@ -14,7 +14,9 @@
 //! | A session opens | every GTT older than 360 days is cancelled and placed again (GTT-2); a backtest assumes the engine runs at every session open (GTT-4) | 1 |
 //!
 //! Firing in step 3 and the engine's exit after an unfilled child are in `gtt_fire`;
-//! strategy GTT orders (`validity="gtt"`) in `gtt_orders`.
+//! strategy GTT orders (`validity="gtt"`) in `gtt_orders`. A live session sends a command
+//! at each of these moments instead, and its venue holds and fires the GTT
+//! (`venue_gtts`): none of the rules of this table acts in a session.
 
 use crate::exec::{
     Gtt, GttAction, GttBook, GttEvent, GttEventName, GttId, GttPolicy, GttPurpose, GttStatus,
@@ -93,7 +95,7 @@ impl Engine {
     }
 
     /// How the child of `key`'s stop GTT is priced.
-    fn child_terms(&self, key: PositionKey) -> Result<ChildTerms, KernelError> {
+    pub(super) fn child_terms(&self, key: PositionKey) -> Result<ChildTerms, KernelError> {
         let spec = self.spec(key.instrument)?;
         let held = self.held_units(key);
         Ok(ChildTerms {
@@ -113,7 +115,7 @@ impl Engine {
         key: PositionKey,
         effect: &FillEffect,
     ) -> Result<(), KernelError> {
-        if effect.kind != FillKind::Entry || !held_as_gtt(key.product) {
+        if effect.kind != FillKind::Entry || !held_as_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let Some(planned) = self
@@ -170,7 +172,8 @@ impl Engine {
     /// leaves units (the strategy's partial exit, a target's) keeps the GTT in force
     /// instead, which step 4 cuts to the units left, in backtest and live alike (design
     /// 20-positional-live section 2; the lead's ruling on unit N0's verification, option
-    /// B).
+    /// B). A live session cancels its GTTs at the venue before it sends the exit
+    /// (`venue_owner`), so nothing is cancelled here.
     pub(super) fn cancel_gtts_before_exit(
         &mut self,
         stamp: EventStamp,
@@ -181,7 +184,7 @@ impl Engine {
             let purpose = self.gtts.book.get(id).map(|gtt| gtt.purpose);
             purpose == Some(GttPurpose::Protect)
         });
-        if own_exit || !held_as_gtt(key.product) {
+        if own_exit || !held_as_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let held = self.held_units(key);
@@ -197,12 +200,16 @@ impl Engine {
     }
 
     /// When a strategy order ends (cancelled, rejected, expired), the GTT it rests as
-    /// is cancelled first.
+    /// is cancelled first. A live session's GTT order ends with its GTT's answer instead
+    /// (`venue_gtt_answers`).
     pub(super) fn cancel_order_gtt(
         &mut self,
         stamp: EventStamp,
         order: OrderId,
     ) -> Result<(), KernelError> {
+        if self.is_external() {
+            return Ok(());
+        }
         match self.gtts.book.of_order(order) {
             Some(id) => self.cancel_gtt(stamp, id),
             None => Ok(()),
@@ -302,7 +309,8 @@ impl Engine {
     ///
     /// Errors: `Exec` for a GTT the book cannot move (a kernel defect).
     pub(super) fn renew_old_gtts(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
-        if !slice.opens_session {
+        // A live session's GTTs are the venue's: their renewal is not built for it yet.
+        if !slice.opens_session || self.is_external() {
             return Ok(());
         }
         let stamp = Self::stamp(slice, Step::SessionOpen);

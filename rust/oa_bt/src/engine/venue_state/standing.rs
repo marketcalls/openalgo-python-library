@@ -86,7 +86,8 @@ impl Engine {
         }
         let traded = !self.book.orders().is_empty()
             || !self.portfolio.positions().is_empty()
-            || !self.record.fills.is_empty();
+            || !self.record.fills.is_empty()
+            || !self.gtts.book.gtts().is_empty();
         if traded {
             return refuse(
                 "the session has orders or positions of its own: restore into a session \

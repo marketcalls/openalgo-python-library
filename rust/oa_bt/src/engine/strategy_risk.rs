@@ -58,6 +58,10 @@ pub(super) struct StrategyRisk {
     pub(super) pending_exits: Vec<PendingExit>,
     /// The entries of the session day, for the trade caps (`daily_caps`).
     pub(super) trades: TradeCount,
+    /// The slices each position a live session carried from an earlier day had been held
+    /// before this session's first slice (`venue_state::carry`): a time exit counts them
+    /// with this session's. Empty in a backtest, whose grid spans the days.
+    pub(super) carried_slices: Vec<(PositionKey, usize)>,
 }
 
 impl StrategyRisk {
@@ -80,7 +84,16 @@ impl StrategyRisk {
             roll_carry: None,
             pending_exits: Vec::new(),
             trades: TradeCount::default(),
+            carried_slices: Vec::new(),
         }
+    }
+
+    /// The slices `key`'s position was held before this session (`carried_slices`).
+    pub(super) fn carried_slices_of(&self, key: PositionKey) -> usize {
+        self.carried_slices
+            .iter()
+            .find(|(held, _)| *held == key)
+            .map_or(0, |(_, slices)| *slices)
     }
 
     /// Note the session of a slice. Returns true when it is a later session than the
@@ -102,6 +115,11 @@ impl StrategyRisk {
         let roll = fill.reason == FillReason::Roll;
         self.daily_loss
             .after_fill(fill.totals, fill.strategy_flat, roll);
+        let opens_or_closes =
+            fill.effect.kind == FillKind::Entry || fill.effect.change == PositionChange::Closed;
+        if opens_or_closes {
+            self.carried_slices.retain(|(key, _)| *key != fill.key);
+        }
         match (fill.effect.kind, fill.effect.change) {
             (FillKind::Entry, _) => {
                 let carried = if roll { self.roll_carry.take() } else { None };

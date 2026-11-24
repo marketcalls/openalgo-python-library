@@ -23,14 +23,17 @@ fn write_totals(totals: AccountTotals) -> StateValue {
     ])
 }
 
-fn read_totals(read: &Read<'_>) -> Result<AccountTotals, LiveStateError> {
+pub(super) fn read_totals(read: &Read<'_>) -> Result<AccountTotals, LiveStateError> {
     Ok(AccountTotals {
         realized_rupees: read.f64_of("realized_rupees")?,
         costs_rupees: read.f64_of("costs_rupees")?,
     })
 }
 
-fn read_opt_totals(read: &Read<'_>, key: &str) -> Result<Option<AccountTotals>, LiveStateError> {
+pub(super) fn read_opt_totals(
+    read: &Read<'_>,
+    key: &str,
+) -> Result<Option<AccountTotals>, LiveStateError> {
     read.maybe(key)?
         .map(|totals| read_totals(&totals))
         .transpose()
@@ -107,6 +110,13 @@ pub(super) fn write_risk(risk: &StrategyRisk, works: impl Fn(OrderId) -> bool) -
         ),
         ("roll_carry_slice", risk.roll_carry.into()),
         (
+            "carried_slices",
+            list(&risk.carried_slices, |(key, slices)| {
+                let [instrument, product] = key_fields(*key);
+                map([instrument, product, ("slices", (*slices).into())])
+            }),
+        ),
+        (
             "pending_exits",
             list(&risk.pending_exits, |pending| {
                 let [instrument, product] = key_fields(pending.key);
@@ -123,7 +133,7 @@ pub(super) fn write_risk(risk: &StrategyRisk, works: impl Fn(OrderId) -> bool) -
 
 /// The trading lock saved as its state and cause: the one change from ACTIVE the cause
 /// makes, which every state a lock can be in is.
-fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
+pub(super) fn read_lock(read: &Read<'_>) -> Result<TradingLock, LiveStateError> {
     let state = read.field("trading_state")?;
     let mut lock = TradingLock::default();
     if let Some(cause) = read.maybe("trading_state_cause")? {
@@ -192,8 +202,14 @@ pub(super) fn read_risk(
             })
         })
         .collect::<Result<_, LiveStateError>>()?;
+    let carried_slices = read
+        .items_of("carried_slices")?
+        .iter()
+        .map(|held| Ok((read_key(held, instruments)?, held.whole_of("slices")?)))
+        .collect::<Result<_, LiveStateError>>()?;
     Ok(StrategyRisk {
         lock: read_lock(read)?,
+        carried_slices,
         daily_loss: DailyLossMeasure::resume(totals),
         drawdown,
         last_exit_slice,

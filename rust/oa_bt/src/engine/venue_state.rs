@@ -12,7 +12,8 @@
 //! | `positions` | every position with its tranches, adds, realized P&L, margin and mark |
 //! | `legs` | each open position's leg state whole (levels, targets, trail, breakeven and what the leg keeps besides) |
 //! | `orders` | every working order: its role, whether it was sent, request, status, units, filled units, fill price, times and what its fills were charged so far |
-//! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions, the legs' broker-held stops, the targets fired, the reprices waiting, the entry locks and the sizing cap |
+//! | `gtts` | every GTT of the session: its id, state, purpose (a leg's stop, or the strategy order it rests as) and terms (`gtts`) |
+//! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions (an engine exit's fill flags with them), the legs' broker-held stops, the targets fired, the reprices waiting, what the session follows of its GTTs (a modification or cancellation waiting, the legs' stop GTTs, the children of fired GTTs), the entry locks and the sizing cap |
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open, the day's entries the trade caps count |
 //! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back and their last slice's ticks), the day's CNC buys |
@@ -59,14 +60,21 @@
 //! took while waiting), which its next pause would have delivered, are not saved either:
 //! the restored session never delivers them, so the strategy's `on_fill`, `on_order` and
 //! `on_position` do not run for them, and a strategy that keeps state in those callbacks
-//! can differ from the uninterrupted run (the books do not: they hold every fill). Timers,
-//! GTT orders and futures series are not part of a session's state (missed timers are
-//! skipped; the other two are refused in a session).
+//! can differ from the uninterrupted run (the books do not: they hold every fill). Timers
+//! and futures series are not part of a session's state (missed timers are skipped;
+//! futures series are refused in a session). The GTTs keep their ids: the restored
+//! session's book of GTTs is empty before the restore and takes them all back.
+//!
+//! The state the next trading day's session takes is `carried_state` (`carry`).
 
 mod book;
+mod carry;
+mod carry_checks;
+mod carry_restore;
 mod checks;
 mod desk;
 mod error;
+mod gtts;
 mod legs;
 mod orders;
 mod requests;
@@ -74,11 +82,12 @@ mod risk;
 mod standing;
 mod value;
 
+pub use carry::CarriedIds;
 pub use error::LiveStateError;
 pub use value::StateValue;
 
 use crate::charges::OrderCharges;
-use crate::exec::{InstrumentId, OrderId};
+use crate::exec::{GttBook, InstrumentId, OrderId};
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
@@ -94,6 +103,7 @@ use book::{
 };
 use checks::{check_parts, Parts};
 use desk::{read_desk, write_desk, SavedDesk};
+use gtts::{read_gtt_book, write_gtt};
 use legs::{read_leg, write_leg};
 use orders::{read_command, read_order, write_command, write_order, Ids, SavedOrder};
 use risk::{read_risk, write_risk};
@@ -105,8 +115,10 @@ use value::{list, map, Read};
 /// 3 the orders that hold it back by the terms of a modification the venue has not
 /// answered, which its refusal releases (`excursion_hold`); layout 4 the terms confirmed
 /// modifications replaced, which judge the bar of the slice they were confirmed in;
-/// layout 5 the day's entries the trade caps count (`risk`, 18-multi-strategy 2.5a).
-pub const LIVE_STATE_LAYOUT: i64 = 5;
+/// layout 5 the day's entries the trade caps count (`risk`, 18-multi-strategy 2.5a);
+/// layout 6 the GTTs and what the session follows of them, and an engine exit's fill flags
+/// (design 20-positional-live 4.1).
+pub const LIVE_STATE_LAYOUT: i64 = 6;
 
 /// A saved state read whole, before any of it is applied.
 struct Saved {
@@ -114,6 +126,7 @@ struct Saved {
     portfolio: Portfolio,
     legs: Vec<(PositionKey, LegState)>,
     orders: Vec<SavedOrder>,
+    gtts: GttBook,
     desk: SavedDesk,
     commands: Vec<VenueCommand>,
     risk: StrategyRisk,
@@ -154,10 +167,18 @@ impl Engine {
             ),
             ("legs", list(&self.legs, |(key, leg)| write_leg(*key, leg))),
             ("orders", orders),
+            (
+                "gtts",
+                list(self.gtts.book.gtts(), |gtt| write_gtt(book, gtt)),
+            ),
             ("desk", write_desk(book, &self.venue)),
             (
                 "commands",
-                StateValue::List(commands.filter_map(|c| write_command(book, c)).collect()),
+                StateValue::List(
+                    commands
+                        .filter_map(|c| write_command(book, &self.gtts.book, c))
+                        .collect(),
+                ),
             ),
             (
                 "risk",
@@ -243,6 +264,7 @@ impl Engine {
             portfolio: Portfolio::resume(read_account(&read.field("account")?)?, positions),
             legs,
             orders,
+            gtts: read_gtt_book(&read.field("gtts")?, &ids, count)?,
             desk,
             commands: read
                 .items_of("commands")?
@@ -302,6 +324,9 @@ impl Engine {
         venue.target_exits = desk.target_exits;
         venue.fired_targets = desk.fired_targets;
         venue.reprices = desk.reprices;
+        venue.exit_flags = desk.exit_flags;
+        venue.gtts = desk.gtts;
+        self.gtts.book = saved.gtts;
         if venue.controls.sizing_cap_rupees.is_none() {
             venue.controls.sizing_cap_rupees = desk.sizing_cap_rupees;
         }

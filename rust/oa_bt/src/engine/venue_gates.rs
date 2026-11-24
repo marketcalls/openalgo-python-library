@@ -7,7 +7,7 @@
 //! | Gate | Rejects the entry or add | Code |
 //! |---|---|---|
 //! | Entry locks | while any reason locks entries (`Engine::lock_entries`) | `live_lock` |
-//! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two | `live_in_flight` |
+//! | Nothing in flight | while any other order of its instrument and product works, but the open leg's resting stop, which keeps it out too while a modification or cancellation of the stop waits for the venue and once the stop is repriced to exit (`venue_protect`); a stop a closed leg left working (its cancellation refused) keeps it out, since a new leg's stop beside it would make two; a CNC or NRML leg's stop GTT (`venue_gtts`) keeps it out the same way while its place, a modification or its cancellation waits for the venue | `live_in_flight` |
 //! | Freeze cap | when it would take the position above the instrument's freeze quantity | `freeze_qty` |
 //!
 //! The gates of an instrument several strategies of the session trade come before them
@@ -21,7 +21,7 @@
 //! it. Exits and stops pass every gate. A backtest has none of them: its freeze rule judges
 //! each order alone (`exec::checks::freeze_rule`).
 
-use crate::exec::{Order, OrderId, OrderRequest, RejectCode};
+use crate::exec::{GttStatus, Order, OrderId, OrderRequest, RejectCode};
 use crate::portfolio::PositionKey;
 
 use super::clock::SliceInfo;
@@ -91,7 +91,10 @@ impl Engine {
                 && Some(order.id) != replacing
                 && holds_entries(legs_stop == Some(order.id), self.stop_busy(key, order.id))
         };
-        if self.book.working().any(in_flight) {
+        let gtt_busy = self
+            .stop_gtt_at_venue(key)
+            .is_some_and(|gtt| gtt.status != GttStatus::Active);
+        if self.book.working().any(in_flight) || gtt_busy {
             return Err(RejectCode::LiveInFlight);
         }
         let freeze = self

@@ -262,9 +262,10 @@ impl Engine {
         }
     }
 
-    /// The units of the leg's resting stop of `request`'s position when `request` is a
-    /// MARKET order against the position that the exit owner sends (module docs); 0 for
-    /// any other order, and for the stop itself (`except`).
+    /// The units of the leg's resting stop of `request`'s position, or of its stop GTT
+    /// (`venue_gtts`), when `request` is a MARKET order against the position that the exit
+    /// owner sends (module docs); 0 for any other order, and for the stop itself
+    /// (`except`).
     fn room_the_stop_makes(&self, request: &OrderRequest, except: Option<OrderId>) -> f64 {
         if request.order_type != OrderType::Market {
             return 0.0;
@@ -277,7 +278,7 @@ impl Engine {
             Some(stop) if Some(stop) != except => {
                 self.book.get(stop).map_or(0.0, |o| self.units_to_fill(o))
             }
-            _ => 0.0,
+            _ => self.stop_gtt_units(key),
         }
     }
 
@@ -292,9 +293,11 @@ impl Engine {
             instrument: request.instrument,
             product: request.product,
         };
+        let stop_rests =
+            self.resting_leg_stop(key).is_some() || self.stop_gtt_at_venue(key).is_some();
         request.order_type == OrderType::Market
             && goes_against(self.held_units(key), request.side)
-            && self.resting_leg_stop(key).is_some()
+            && stop_rests
     }
 
     /// Refuse, in an external session, a replacement `request` of `units` for order `id`

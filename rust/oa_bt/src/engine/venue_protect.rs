@@ -4,7 +4,7 @@
 //!
 //! | Call | What |
 //! |---|---|
-//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; a resting order sent only to close the position is cancelled first for the room the stop takes (`venue_stop_terms`); says what it did (`Protect`) |
+//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; a resting order sent only to close the position is cancelled first for the room the stop takes (`venue_stop_terms`); says what it did (`Protect`). A CNC or NRML leg's stop is a GTT, placed also while the market is closed, and a leg whose stop the price has crossed is exited instead (`venue_gtt_protect`) |
 //! | `reprice_exit(order, limit_rupees)` | modify a leg's stop the price has reached and not filled (or an engine exit at a limit) to a LIMIT at `limit_rupees`, for the order's total units (a broker's modify takes the total), a partly filled one too; sent now, or with the venue's answer to a modification of it that waits |
 //! | `request_limit_exit(instrument, product, exit, limit_rupees)` | `request_exit` (`venue_session`) whose orders are LIMIT orders at `limit_rupees`: the price rule's marketable fallback |
 //!
@@ -41,11 +41,15 @@ pub enum Protect {
     Flat,
     /// The market is closed: no stop can be placed.
     MarketClosed,
+    /// A CNC or NRML leg's stop: the session's last price is already at or beyond it, so
+    /// no GTT was placed and the leg is exited at market, flagged `stop_crossed`
+    /// (`venue_gtt_protect`).
+    StopCrossed,
 }
 
 impl Protect {
     /// Every outcome's code, in the order of the variants.
-    pub const CODES: [&'static str; 7] = [
+    pub const CODES: [&'static str; 8] = [
         "placed",
         "waits_for_cancels",
         "stop_works",
@@ -53,6 +57,7 @@ impl Protect {
         "no_stop_level",
         "flat",
         "market_closed",
+        "stop_crossed",
     ];
 
     /// The code the bindings use.
@@ -65,6 +70,7 @@ impl Protect {
             Protect::NoStopLevel => "no_stop_level",
             Protect::Flat => "flat",
             Protect::MarketClosed => "market_closed",
+            Protect::StopCrossed => "stop_crossed",
         }
     }
 }
@@ -95,6 +101,9 @@ impl Engine {
         // the hold kept waiting move on first (`venue_group`).
         if self.venue.group.release(key) {
             self.progress_exits(at)?;
+        }
+        if self.holds_stop_gtt(key) {
+            return self.protect_gtt_leg(at, key);
         }
         if self.held_units(key) == 0.0 {
             return Ok(Protect::Flat);

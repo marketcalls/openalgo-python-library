@@ -123,7 +123,7 @@ impl Engine {
 
     /// The leg's risk event when its stop GTT fires: `leg_sl_hit` with the trigger as
     /// the level.
-    fn emit_stop_hit(&mut self, stamp: EventStamp, gtt: &Gtt) {
+    pub(super) fn emit_stop_hit(&mut self, stamp: EventStamp, gtt: &Gtt) {
         let event = RiskEvent {
             name: RiskEventName::LegSlHit,
             scope: RiskScope::Leg,

@@ -30,6 +30,10 @@
 //!   cancellation waits counts at what it may still fill.
 //! - **A fill beyond the position**, from a race at the broker, is recorded up to the
 //!   position and the rest refused (`venue_fills`, `VenueError::WouldReverse`).
+//! - **A CNC or NRML leg's stop GTT** (`venue_gtts`) is not an order, but the broker
+//!   fills its child as one: its units take their room on the closing side as the leg's
+//!   resting stop does, first, and the GTT itself is cut to the position by
+//!   `venue_gtt_sync`.
 
 use crate::exec::{Order, OrderId, OrderRequest, QuantitySpec, RejectCode};
 use crate::portfolio::PositionKey;
@@ -82,7 +86,7 @@ impl Engine {
             })
             .map(|order| self.units_to_fill(order))
             .sum();
-        (held.abs() - working).max(0.0)
+        (held.abs() - working - self.stop_gtt_units(key)).max(0.0)
     }
 
     /// In an external session, the cover rule of a reduce-only order of `units` (above 0)
@@ -145,7 +149,7 @@ impl Engine {
         // other. The sort is stable: the others stay in the order they were placed.
         let stop = self.resting_leg_stop(key);
         orders.sort_by_key(|order| Some(order.id) != stop);
-        let mut room = held.abs();
+        let mut room = (held.abs() - self.stop_gtt_units(key)).max(0.0);
         for order in orders {
             if Some(order.request.side) != closing {
                 self.withdraw_order(at.stamp(), order.id)?;

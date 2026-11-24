@@ -14,6 +14,14 @@
 //! spent. A modification is a full replacement of the trigger and quantity under the
 //! same id (`Modify`).
 //!
+//! A live session's GTT is held by the broker, so it has the states of a request too
+//! (design 20-positional-live 3.1, unit N1): `Requested` until the venue confirms the
+//! place (`Active`) or refuses it (`Rejected`), `ModifyPending` and `CancelPending` while
+//! a modification or cancellation waits for the venue's answer (the old terms rest until
+//! then), and `VenueEnded` for a GTT that ended at the venue without the session asking
+//! (expired, rejected after placement, cancelled outside the session). A backtest never
+//! takes those states. `GTT_TRANSITIONS` lists every legal move.
+//!
 //! The four decisions on GTTs (all reading A) are the defaults of `GttPolicy`: GTT-1 the
 //! child's limit buffer, GTT-2 re-creation after 360 days, GTT-3 at most one
 //! modification per base bar and only for a move of at least one tick, GTT-4 the engine
@@ -89,7 +97,8 @@ pub enum GttPurpose {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum GttStatus {
-    /// Resting: its triggers are tested on every base bar.
+    /// Resting: its triggers are tested on every base bar (in a live session, at the
+    /// venue, its place or last modification confirmed).
     Active = 0,
     /// A trigger fired and the child order was placed.
     Triggered = 1,
@@ -98,22 +107,40 @@ pub enum GttStatus {
     /// The child order did not fill through its bar and was cancelled; the GTT is
     /// spent. Terminal.
     ChildCanceled = 3,
-    /// Cancelled by the strategy or the engine (an engine exit, a flat position).
-    /// Terminal.
+    /// Cancelled by the strategy or the engine (an engine exit, a flat position); in a
+    /// live session, its cancellation confirmed by the venue. Terminal.
     Canceled = 4,
     /// Older than `GttPolicy::max_age_days`: replaced by a new GTT (GTT-2). Terminal.
     Expired = 5,
+    /// A live session sent its place and the venue has not answered: not in force yet.
+    Requested = 6,
+    /// A live session sent a modification and the venue has not answered: the old terms
+    /// rest until it does.
+    ModifyPending = 7,
+    /// A live session sent a cancellation and the venue has not answered: it rests until
+    /// the venue confirms it.
+    CancelPending = 8,
+    /// The venue refused its place. Terminal.
+    Rejected = 9,
+    /// It ended at the venue without the session asking: expired, rejected after its
+    /// placement, or cancelled outside the session. Terminal.
+    VenueEnded = 10,
 }
 
 impl GttStatus {
     /// Every state, in code order.
-    pub const ALL: [GttStatus; 6] = [
+    pub const ALL: [GttStatus; 11] = [
         GttStatus::Active,
         GttStatus::Triggered,
         GttStatus::ChildFilled,
         GttStatus::ChildCanceled,
         GttStatus::Canceled,
         GttStatus::Expired,
+        GttStatus::Requested,
+        GttStatus::ModifyPending,
+        GttStatus::CancelPending,
+        GttStatus::Rejected,
+        GttStatus::VenueEnded,
     ];
 
     /// The state name used in results.
@@ -125,12 +152,32 @@ impl GttStatus {
             GttStatus::ChildCanceled => "ChildCanceled",
             GttStatus::Canceled => "Canceled",
             GttStatus::Expired => "Expired",
+            GttStatus::Requested => "Requested",
+            GttStatus::ModifyPending => "ModifyPending",
+            GttStatus::CancelPending => "CancelPending",
+            GttStatus::Rejected => "Rejected",
+            GttStatus::VenueEnded => "VenueEnded",
         }
+    }
+
+    /// True while its trigger rests on known terms: active, or with a modification or
+    /// cancellation waiting for the venue's answer (the confirmed terms rest until then).
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            GttStatus::Active | GttStatus::ModifyPending | GttStatus::CancelPending
+        )
+    }
+
+    /// True while it is at the venue or asked for there: resting (`is_active`), or its
+    /// place not answered yet.
+    pub fn at_venue(self) -> bool {
+        self.is_active() || self == GttStatus::Requested
     }
 
     /// True when no action can move the GTT any more.
     pub fn is_terminal(self) -> bool {
-        !matches!(self, GttStatus::Active | GttStatus::Triggered)
+        !(self.at_venue() || self == GttStatus::Triggered)
     }
 }
 
@@ -140,7 +187,8 @@ impl GttStatus {
 pub enum GttAction {
     /// Replace the triggers and the quantity (a trail, a breakeven, an add).
     Modify = 0,
-    /// A base bar reached a trigger: place the child order.
+    /// A base bar reached a trigger (in a live session, the venue fired it): place the
+    /// child order.
     Fire = 1,
     /// The child order filled.
     FillChild = 2,
@@ -150,17 +198,44 @@ pub enum GttAction {
     Cancel = 4,
     /// The GTT is too old: it is replaced by a new one (GTT-2).
     Expire = 5,
+    /// The venue confirmed its place.
+    Confirm = 6,
+    /// The venue refused its place.
+    Refuse = 7,
+    /// A live session sends a modification.
+    AskModify = 8,
+    /// The venue confirmed the modification.
+    ConfirmModify = 9,
+    /// The venue refused the modification.
+    RefuseModify = 10,
+    /// A live session sends a cancellation.
+    AskCancel = 11,
+    /// The venue confirmed the cancellation.
+    ConfirmCancel = 12,
+    /// The venue refused the cancellation.
+    RefuseCancel = 13,
+    /// It ended at the venue without the session asking.
+    VenueEnd = 14,
 }
 
 impl GttAction {
     /// Every action, in code order.
-    pub const ALL: [GttAction; 6] = [
+    pub const ALL: [GttAction; 15] = [
         GttAction::Modify,
         GttAction::Fire,
         GttAction::FillChild,
         GttAction::CancelChild,
         GttAction::Cancel,
         GttAction::Expire,
+        GttAction::Confirm,
+        GttAction::Refuse,
+        GttAction::AskModify,
+        GttAction::ConfirmModify,
+        GttAction::RefuseModify,
+        GttAction::AskCancel,
+        GttAction::ConfirmCancel,
+        GttAction::RefuseCancel,
+        GttAction::VenueEnd,
     ];
 
     /// The action name used in messages.
@@ -172,6 +247,15 @@ impl GttAction {
             GttAction::CancelChild => "CancelChild",
             GttAction::Cancel => "Cancel",
             GttAction::Expire => "Expire",
+            GttAction::Confirm => "Confirm",
+            GttAction::Refuse => "Refuse",
+            GttAction::AskModify => "AskModify",
+            GttAction::ConfirmModify => "ConfirmModify",
+            GttAction::RefuseModify => "RefuseModify",
+            GttAction::AskCancel => "AskCancel",
+            GttAction::ConfirmCancel => "ConfirmCancel",
+            GttAction::RefuseCancel => "RefuseCancel",
+            GttAction::VenueEnd => "VenueEnd",
         }
     }
 }
@@ -180,13 +264,29 @@ use GttAction as A;
 use GttStatus as S;
 
 /// Every legal GTT transition as (from, action, to). Anything not listed is illegal.
-pub const GTT_TRANSITIONS: [(GttStatus, GttAction, GttStatus); 6] = [
+/// The first six are a backtest's; the rest a live session's, whose venue confirms or
+/// refuses each request, may fire a GTT while a modification or cancellation of it
+/// waits, and may end it on its own while it rests (module docs).
+pub const GTT_TRANSITIONS: [(GttStatus, GttAction, GttStatus); 19] = [
     (S::Active, A::Modify, S::Active),
     (S::Active, A::Fire, S::Triggered),
     (S::Active, A::Cancel, S::Canceled),
     (S::Active, A::Expire, S::Expired),
     (S::Triggered, A::FillChild, S::ChildFilled),
     (S::Triggered, A::CancelChild, S::ChildCanceled),
+    (S::Requested, A::Confirm, S::Active),
+    (S::Requested, A::Refuse, S::Rejected),
+    (S::Active, A::AskModify, S::ModifyPending),
+    (S::ModifyPending, A::ConfirmModify, S::Active),
+    (S::ModifyPending, A::RefuseModify, S::Active),
+    (S::Active, A::AskCancel, S::CancelPending),
+    (S::CancelPending, A::ConfirmCancel, S::Canceled),
+    (S::CancelPending, A::RefuseCancel, S::Active),
+    (S::ModifyPending, A::Fire, S::Triggered),
+    (S::CancelPending, A::Fire, S::Triggered),
+    (S::Active, A::VenueEnd, S::VenueEnded),
+    (S::ModifyPending, A::VenueEnd, S::VenueEnded),
+    (S::CancelPending, A::VenueEnd, S::VenueEnded),
 ];
 
 /// The state a GTT moves to. Errors: `IllegalGttTransition`.
@@ -299,9 +399,10 @@ impl Gtt {
         (self.leg.role == role).then_some(self.leg.trigger_rupees)
     }
 
-    /// True while its triggers are tested.
+    /// True while its trigger rests (`GttStatus::is_active`): a backtest tests it on every
+    /// base bar.
     pub fn is_active(&self) -> bool {
-        self.status == GttStatus::Active
+        self.status.is_active()
     }
 }
 
@@ -311,14 +412,30 @@ mod tests {
 
     /// The legal transitions, written out from 04-execution 4.4: placed (Active), then
     /// modified any number of times, then cancelled, expired, or fired with its child
-    /// filled or cancelled.
-    const LEGAL: [(GttStatus, GttAction, GttStatus); 6] = [
+    /// filled or cancelled. Then from design 20-positional-live 3.1 for a live session:
+    /// each request (place, modify, cancel) waits for the venue's answer, confirmed or
+    /// refused; the venue may fire the GTT while a modify or cancel waits, and may end it
+    /// on its own while it rests.
+    const LEGAL: [(GttStatus, GttAction, GttStatus); 19] = [
         (S::Active, A::Modify, S::Active),
         (S::Active, A::Fire, S::Triggered),
         (S::Active, A::Cancel, S::Canceled),
         (S::Active, A::Expire, S::Expired),
         (S::Triggered, A::FillChild, S::ChildFilled),
         (S::Triggered, A::CancelChild, S::ChildCanceled),
+        (S::Requested, A::Confirm, S::Active),
+        (S::Requested, A::Refuse, S::Rejected),
+        (S::Active, A::AskModify, S::ModifyPending),
+        (S::ModifyPending, A::ConfirmModify, S::Active),
+        (S::ModifyPending, A::RefuseModify, S::Active),
+        (S::ModifyPending, A::Fire, S::Triggered),
+        (S::ModifyPending, A::VenueEnd, S::VenueEnded),
+        (S::Active, A::AskCancel, S::CancelPending),
+        (S::CancelPending, A::ConfirmCancel, S::Canceled),
+        (S::CancelPending, A::RefuseCancel, S::Active),
+        (S::CancelPending, A::Fire, S::Triggered),
+        (S::CancelPending, A::VenueEnd, S::VenueEnded),
+        (S::Active, A::VenueEnd, S::VenueEnded),
     ];
 
     #[test]
@@ -361,8 +478,39 @@ mod tests {
             .collect();
         assert_eq!(
             terminal,
-            ["ChildFilled", "ChildCanceled", "Canceled", "Expired"]
+            [
+                "ChildFilled",
+                "ChildCanceled",
+                "Canceled",
+                "Expired",
+                "Rejected",
+                "VenueEnded"
+            ]
         );
+    }
+
+    #[test]
+    fn a_gtt_rests_while_a_request_of_it_waits_and_is_at_the_venue_once_asked_for() {
+        // (state, its trigger rests, at the venue or asked for there)
+        let table = [
+            (S::Requested, false, true),
+            (S::Active, true, true),
+            (S::ModifyPending, true, true),
+            (S::CancelPending, true, true),
+            (S::Triggered, false, false),
+            (S::ChildFilled, false, false),
+            (S::Canceled, false, false),
+            (S::Rejected, false, false),
+            (S::VenueEnded, false, false),
+        ];
+        for (state, rests, at_venue) in table {
+            assert_eq!(
+                (state.is_active(), state.at_venue()),
+                (rests, at_venue),
+                "{}",
+                state.code()
+            );
+        }
     }
 
     #[test]

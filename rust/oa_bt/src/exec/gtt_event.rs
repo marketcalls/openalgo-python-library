@@ -10,6 +10,11 @@
 //! | `GttChildFilled` | 3 | quantity, child limit, price |
 //! | `GttChildCanceled` | 3 | quantity, child limit |
 //! | `GttCanceled` | the step of the engine exit it precedes, 7 when the strategy cancels, 1 for a re-creation | quantity, trigger |
+//! | `GttRejected` | a live session: the venue refused its place (`venue_gtt_answers`) | quantity, trigger |
+//! | `GttEnded` | a live session: it ended at the venue without the session asking (expired, rejected after placement, cancelled outside the session) | quantity, trigger |
+//!
+//! A live session writes `GttPlaced`, `GttModified` and `GttCanceled` when the venue
+//! confirms the place, the modification or the cancellation, in the slice in progress.
 //!
 //! The trigger is `stop_trigger_rupees` for a position's stop and `order_trigger_rupees`
 //! for a strategy's GTT order. No GTT holds a target (design 20-positional-live P6).
@@ -35,6 +40,10 @@ pub enum GttEventName {
     ChildCanceled = 4,
     /// The GTT was cancelled.
     Canceled = 5,
+    /// The venue refused its place.
+    Rejected = 6,
+    /// It ended at the venue without the session asking.
+    Ended = 7,
 }
 
 impl GttEventName {
@@ -47,6 +56,8 @@ impl GttEventName {
             GttEventName::ChildFilled => "GttChildFilled",
             GttEventName::ChildCanceled => "GttChildCanceled",
             GttEventName::Canceled => "GttCanceled",
+            GttEventName::Rejected => "GttRejected",
+            GttEventName::Ended => "GttEnded",
         }
     }
 }
