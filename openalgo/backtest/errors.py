@@ -131,6 +131,9 @@ VENUE_REFUSAL_KINDS = frozenset(
         "beyond_position",
         "at_bar_close",
         "session_over",
+        "unknown_gtt",
+        "gtt_state",
+        "gtt_resting",
     }
 )
 
@@ -150,7 +153,10 @@ class VenueRefusalError(LiveError):
     with no order of the session's, `apply_external_fill`, that would not only close or
     reduce the position: on its side, of a flat position, or through zero), "at_bar_close"
     (the engine is paused at a bar close: advance it first), "session_over" (the session
-    has finished) and "not_external" (the engine is a backtest's).
+    has finished), "not_external" (the engine is a backtest's), and for a GTT's answers
+    "unknown_gtt", "gtt_state" (no such request of the GTT waits for an answer: a second
+    answer to one, or a GTT that has fired or ended) and "gtt_resting" (a result for a
+    strategy order that rests as a GTT the broker has not fired).
 
     The exception is "would_reverse": the broker filled an order that may not reverse
     the position (reduce-only, or without reverse=True) beyond it, in a race. The units

@@ -130,7 +130,7 @@ def test_the_saved_state_is_plain_data_that_survives_a_json_round_trip():
     state = holding().live_state()
     text = json.dumps(state, allow_nan=False)
     assert json.loads(text) == state
-    assert state["layout"] == 5
+    assert state["layout"] == 6
     assert (state["slice"], state["stage"]) == (1, "ready")
     [position] = state["positions"]
     assert (position["product"], position["quantity_units"]) == ("MIS", 10.0)

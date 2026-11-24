@@ -143,12 +143,22 @@ def placed(engine: Any) -> list[dict[str, Any]]:
     return [command for command in engine.take_commands() if command["command"] == "place"]
 
 
-@pytest.mark.parametrize("product", ["CNC", "NRML"])
-def test_a_stop_rule_on_a_carry_product_is_not_built_in_a_session(product):
+def test_a_gtt_order_that_only_reduces_is_not_built_in_a_session():
+    # Leg rules on CNC and NRML are taken (their stop is a GTT: test_kernel_gtts); a
+    # resting GTT exit is not.
     engine = new_session()
     assert release_minute(engine, 0)[0] == "bar_close"
-    with pytest.raises(NotImplementedError, match="CNC or NRML"):
-        engine.submit(order("BUY", 10, product=product, rules=STOP_3))
+    exit_gtt = order(
+        "SELL",
+        10,
+        product="CNC",
+        order_type="LIMIT",
+        price=520.0,
+        validity="GTT",
+        reduce_only=True,
+    )
+    with pytest.raises(NotImplementedError, match="GTT order that only reduces"):
+        engine.submit(exit_gtt)
 
 
 @pytest.mark.parametrize(
@@ -359,4 +369,5 @@ def test_the_protect_vocabulary_is_the_kernels():
         "no_stop_level",
         "flat",
         "market_closed",
+        "stop_crossed",
     )

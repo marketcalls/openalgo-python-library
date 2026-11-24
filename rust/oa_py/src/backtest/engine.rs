@@ -28,6 +28,7 @@ mod charges;
 mod columns;
 mod errors;
 mod futures;
+mod gtts;
 mod legs;
 mod live_state;
 mod market;
@@ -44,7 +45,7 @@ mod timers;
 mod venue;
 
 use oa_bt::engine::{Engine, Pause};
-use oa_bt::exec::{InstrumentId, OrderId};
+use oa_bt::exec::{GttId, InstrumentId, OrderId};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -217,6 +218,83 @@ impl NativeEngine {
         state: &Bound<'py, PyAny>,
     ) -> PyResult<Dict<'py>> {
         live_state::restore_live_state(py, self.engine_mut()?, state)
+    }
+
+    /// A live session's state carried to the next trading day, once its session has closed
+    /// (`live_state`).
+    fn carried_state(&self, py: Python<'_>) -> PyResult<PyObject> {
+        live_state::carried_state(py, self.engine()?)
+    }
+
+    /// Restore a carried state into the session of a later trading day; `{"gtts": {saved
+    /// id: new id}, "orders": {saved id: new id}}` (`live_state`).
+    fn restore_carried_state<'py>(
+        &mut self,
+        py: Python<'py>,
+        state: &Bound<'py, PyAny>,
+    ) -> PyResult<Dict<'py>> {
+        live_state::restore_carried_state(py, self.engine_mut()?, state)
+    }
+
+    /// Record that the venue confirmed a GTT's place; the stamp (`gtts`).
+    fn apply_gtt_placed(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_gtt_placed(GttId(gtt_id)))
+    }
+
+    /// Record that the venue refused a GTT's place; the stamp (`gtts`).
+    fn apply_gtt_refused(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_gtt_refused(GttId(gtt_id)))
+    }
+
+    /// Record that the venue confirmed a GTT's modification; the stamp (`gtts`).
+    fn apply_gtt_modified(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_gtt_modified(GttId(gtt_id)))
+    }
+
+    /// Record that the venue refused a GTT's modification (`gtts`).
+    fn apply_gtt_modify_refused(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<()> {
+        let refused = self.engine_mut()?.apply_gtt_modify_refused(GttId(gtt_id));
+        venue::answered(py, refused)
+    }
+
+    /// Record that the venue cancelled a GTT, on the session's request or not; the stamp
+    /// (`gtts`).
+    fn apply_gtt_cancelled(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<StampTuple> {
+        venue::recorded(py, self.engine_mut()?.apply_gtt_cancelled(GttId(gtt_id)))
+    }
+
+    /// Record that the venue refused a GTT's cancellation (`gtts`).
+    fn apply_gtt_cancel_refused(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<()> {
+        let refused = self.engine_mut()?.apply_gtt_cancel_refused(GttId(gtt_id));
+        venue::answered(py, refused)
+    }
+
+    /// Record that a GTT ended at the venue without the session asking, `how` one of
+    /// `GTT_ENDS`; the stamp (`gtts`).
+    fn apply_gtt_ended(&mut self, py: Python<'_>, gtt_id: u64, how: &str) -> PyResult<StampTuple> {
+        let how = gtts::gtt_end(how)?;
+        venue::recorded(py, self.engine_mut()?.apply_gtt_ended(GttId(gtt_id), how))
+    }
+
+    /// Record that the venue fired a GTT at `at` (UTC nanoseconds); the kernel order id of
+    /// its child (`gtts`).
+    fn apply_gtt_triggered(&mut self, py: Python<'_>, gtt_id: u64, at: i64) -> PyResult<u64> {
+        gtts::triggered(py, self.engine_mut()?, gtt_id, at)
+    }
+
+    /// A GTT of the run as a dict, None for an unknown id (`gtts`).
+    fn gtt<'py>(&self, py: Python<'py>, gtt_id: u64) -> PyResult<Option<Dict<'py>>> {
+        gtts::gtt(py, self.engine()?, gtt_id)
+    }
+
+    /// The GTTs of an instrument in a product, in id order, as dicts (`gtts`).
+    fn gtts<'py>(
+        &self,
+        py: Python<'py>,
+        instrument: u32,
+        product: &str,
+    ) -> PyResult<Bound<'py, PyList>> {
+        gtts::gtts(py, self.engine()?, (instrument, product))
     }
 
     /// Exit a live session's position for a reason of the session's; what it did, one of
@@ -489,6 +567,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     venue::register(m)?;
     session::register(m)?;
     legs::register(m)?;
+    gtts::register(m)?;
     futures::register(m)?;
     market::register(m)
 }
