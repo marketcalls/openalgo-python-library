@@ -5,9 +5,11 @@ means.
 
 A journal is bound to the account and the broker it was created for. Its layout version
 is kept in `PRAGMA user_version`, which SQLite reads as 0 in a file never given one. A file
-of an earlier layout this version knows is upgraded in place when it is opened, its rows
-kept (`_UPGRADES`): version 1 (openalgo 2.3.0) gains the strategies' versions of each start
-and the version id of each intent (18-multi-strategy 12.1). A newer file is refused.
+of an earlier layout this version knows is upgraded in place when it is opened, in the
+transaction that opens it, through each later version in turn, its rows kept
+(`_journal_layout.UPGRADES`): version 1 (openalgo 2.3.0) gains the strategies' versions of
+each start and the version id of each intent (18-multi-strategy 12.1), version 2 (openalgo
+2.4) the tables of positions held overnight (20-positional-live). A newer file is refused.
 """
 
 from __future__ import annotations
@@ -20,9 +22,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 from ..errors import JournalError
+from ._journal_layout import SCHEMA, SCHEMA_VERSION, UPGRADES
 
-#: The layout of the journal file this version reads and writes.
-SCHEMA_VERSION = 2
 #: Seconds a statement waits for a lock another connection holds before SQLite gives up
 #: with SQLITE_BUSY: 5, Python's own default for `sqlite3.connect(timeout=...)`. A
 #: session writes one file from two threads, each through its own handle, and every
@@ -52,64 +53,6 @@ _DEVICE_NAMES = frozenset(
 )
 _SUPERSCRIPT_DIGITS = MappingProxyType(str.maketrans("¹²³⁴⁵⁶⁷⁸⁹", "123456789"))
 _FIRST_PRINTABLE = 32
-
-# Every table is STRICT, so a value of the wrong type is refused instead of kept. Each
-# has a `ledger` column, a `Mode` value: the mode of the handle that wrote the row, or
-# for an update the mode it was handled in. `day` is an IST trading day, YYYY-MM-DD; a
-# broker may give an order ID again on a later day, so an order ID is unique in a day.
-# An intent's `state` is "recorded" until its outcome is known, then "bound" to its
-# order, "unbound" (outcome unknown), "queued" (semi-auto put it in the Action Center;
-# its `reason` is then the pending order ID there) or "not_placed". Its `version_id` is
-# its strategy's version ("" in a file version 1 wrote). A `versions` row is one
-# strategy's version at one start of the day: its id and its run manifest, as JSON.
-_VERSIONS = (
-    """CREATE TABLE versions (
-        ledger TEXT NOT NULL, day TEXT NOT NULL, strategy TEXT NOT NULL,
-        version_id TEXT NOT NULL, manifest TEXT NOT NULL, started_ns INTEGER NOT NULL) STRICT""",
-    "CREATE INDEX versions_by_day ON versions (ledger, day, strategy)",
-)
-_SCHEMA = (
-    "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
-    """CREATE TABLE intents (
-        seq INTEGER PRIMARY KEY, intent_id TEXT NOT NULL UNIQUE, ledger TEXT NOT NULL,
-        day TEXT NOT NULL, strategy TEXT NOT NULL, symbol TEXT NOT NULL,
-        exchange TEXT NOT NULL, action TEXT NOT NULL, quantity INTEGER NOT NULL,
-        price_type TEXT NOT NULL, product TEXT NOT NULL, purpose TEXT NOT NULL,
-        created_ns INTEGER NOT NULL, price REAL NOT NULL, trigger_price REAL NOT NULL,
-        state TEXT NOT NULL, order_id TEXT, reason TEXT NOT NULL,
-        changed_ns INTEGER NOT NULL, version_id TEXT NOT NULL DEFAULT '') STRICT""",
-    "CREATE UNIQUE INDEX intents_by_order ON intents (ledger, day, order_id)",
-    "CREATE INDEX intents_by_day ON intents (ledger, day, state, seq)",
-    """CREATE TABLE updates (
-        seq INTEGER PRIMARY KEY, ledger TEXT NOT NULL, day TEXT NOT NULL,
-        order_id TEXT NOT NULL, symbol TEXT NOT NULL, exchange TEXT NOT NULL,
-        action TEXT NOT NULL, quantity INTEGER NOT NULL, filled_quantity INTEGER NOT NULL,
-        pending_quantity INTEGER NOT NULL, average_price REAL NOT NULL,
-        status TEXT NOT NULL, terminal INTEGER NOT NULL, rejection_reason TEXT NOT NULL,
-        mode TEXT NOT NULL, ts_recv_ns INTEGER NOT NULL, source TEXT NOT NULL) STRICT""",
-    "CREATE INDEX updates_by_order ON updates (ledger, day, order_id, terminal, seq)",
-    """CREATE TABLE stops (
-        ledger TEXT NOT NULL, day TEXT NOT NULL, strategy TEXT NOT NULL,
-        symbol TEXT NOT NULL, exchange TEXT NOT NULL, order_id TEXT NOT NULL,
-        set_ns INTEGER NOT NULL, PRIMARY KEY (ledger, day, strategy, symbol, exchange)) STRICT""",
-    """CREATE TABLE risk_states (
-        ledger TEXT NOT NULL, strategy TEXT NOT NULL, day TEXT NOT NULL,
-        state TEXT NOT NULL, saved_ns INTEGER NOT NULL,
-        PRIMARY KEY (ledger, strategy, day)) STRICT""",
-    """CREATE TABLE user_states (
-        ledger TEXT NOT NULL, strategy TEXT NOT NULL, state TEXT NOT NULL,
-        saved_ns INTEGER NOT NULL, PRIMARY KEY (ledger, strategy)) STRICT""",
-    """CREATE TABLE sessions (
-        ledger TEXT NOT NULL, day TEXT NOT NULL, broker TEXT NOT NULL,
-        first_started_ns INTEGER NOT NULL, last_started_ns INTEGER NOT NULL,
-        starts INTEGER NOT NULL, PRIMARY KEY (ledger, day)) STRICT""",
-    *_VERSIONS,
-)
-#: What takes a file of each earlier layout to `SCHEMA_VERSION`, by its version: version 1
-#: gains the intents' version ids (its intents keep "") and the versions table.
-_UPGRADES = MappingProxyType(
-    {1: ("ALTER TABLE intents ADD COLUMN version_id TEXT NOT NULL DEFAULT ''", *_VERSIONS)}
-)
 
 # What to do after each kind of SQLite error, by its primary result code; SQLITE_BUSY's
 # advice names the busy timeout (`_busy_advice`).
@@ -277,7 +220,7 @@ def _prepare(
             if version == 0:
                 _create(connection, account, broker)
             _check_binding(connection, path, account, broker)
-            if version in _UPGRADES:
+            if version in UPGRADES:
                 _upgrade(connection, version)
             # A write that changes nothing: a file that cannot be written (read-only)
             # is refused now, before the session, not at its first order.
@@ -299,7 +242,7 @@ def _prepare(
 
 def _check_version(connection: sqlite3.Connection, path: Path) -> int:
     """The file's schema version: 0 for a new, empty file, else `SCHEMA_VERSION` or an
-    earlier one `_UPGRADES` takes to it."""
+    earlier one `UPGRADES` takes to it."""
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and connection.execute("SELECT 1 FROM sqlite_master").fetchone():
         raise JournalError(
@@ -311,7 +254,7 @@ def _check_version(connection: sqlite3.Connection, path: Path) -> int:
             f"the live journal at {path} was written by a newer openalgo (schema version "
             f"{version}; this one reads {SCHEMA_VERSION}): upgrade with pip install -U openalgo"
         )
-    if version not in (0, SCHEMA_VERSION, *_UPGRADES):
+    if version not in (0, SCHEMA_VERSION, *UPGRADES):
         raise JournalError(
             f"the live journal at {path} has the unknown schema version {version}: move it "
             "away or open another path"
@@ -320,7 +263,7 @@ def _check_version(connection: sqlite3.Connection, path: Path) -> int:
 
 
 def _create(connection: sqlite3.Connection, account: str, broker: str) -> None:
-    for statement in _SCHEMA:
+    for statement in SCHEMA:
         connection.execute(statement)
     connection.executemany(
         "INSERT INTO meta VALUES (?, ?)", (("account", account), ("broker", broker))
@@ -330,10 +273,11 @@ def _create(connection: sqlite3.Connection, account: str, broker: str) -> None:
 
 def _upgrade(connection: sqlite3.Connection, version: int) -> None:
     """Take a file of the earlier schema `version` to `SCHEMA_VERSION` in the transaction
-    that opens it, its rows kept; it is checked as the account's and the broker's first,
-    so a file of another account is left as it was."""
-    for statement in _UPGRADES[version]:
-        connection.execute(statement)
+    that opens it, through each later version in turn, its rows kept; it is checked as the
+    account's and the broker's first, so a file of another account is left as it was."""
+    for step in range(version, SCHEMA_VERSION):
+        for statement in UPGRADES[step]:
+            connection.execute(statement)
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

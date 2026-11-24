@@ -49,13 +49,15 @@ def place(**changes):
     return command | changes
 
 
-def intent_of(command, mode=Mode.LIVE, starts=1):
+def intent_of(command, mode=Mode.LIVE, starts=1, product="MIS"):
+    """The intent of `command` placed by the engine of a strategy trading `product`."""
     return intent_fields(
         command,
         strategy=STRATEGY,
         markets=MARKETS,
         session=journal_session(mode, starts),
         created_ns=OPEN_NS,
+        product=product,
     )
 
 
@@ -146,6 +148,18 @@ def test_the_journal_takes_a_sandbox_rehearsal_and_a_live_session_of_one_day(tmp
 def test_a_command_the_session_cannot_send_is_refused(changes, words):
     with pytest.raises(LiveError, match=words):
         intent_of(place(**changes))
+
+
+@pytest.mark.parametrize("product", ["CNC", "NRML"])
+def test_an_order_of_a_strategy_trading_another_product_is_sent_in_that_product(product):
+    intent = intent_of(place(product=product), product=product)
+
+    assert intent.product == product
+
+
+def test_an_order_in_a_product_other_than_its_strategys_is_refused():
+    with pytest.raises(LiveError, match="in CNC, the strategy's product, .* product 'MIS'"):
+        intent_of(place(product="MIS"), product="CNC")
 
 
 def an_intent(role):

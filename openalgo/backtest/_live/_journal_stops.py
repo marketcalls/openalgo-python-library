@@ -1,16 +1,57 @@
-"""The rules for recording a leg's broker-held stop in the live journal (`journal.Journal`):
-either the broker holds a leg's stop or the engine does, never both, so a leg has one
-stop, and that stop is an order the session sent, as a stop, for that leg, on the
-session's trading day.
+"""The legs' broker-held stops in the live journal (`journal.Journal`) and the rules for
+recording one: either the broker holds a leg's stop or the engine does, never both, so a
+leg has one stop, and that stop is an order the session sent, as a stop, for that leg, on
+the session's trading day.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 
 from ..errors import JournalError
 from . import _journal_reads as reads
+from ._journal_handle import JournalHandle
 from ._types import Purpose
+
+
+class JournalStops(JournalHandle):
+    """The journal's part for the legs' stops (module docstring), mixed into
+    `journal.Journal`."""
+
+    def set_stop(self, strategy: str, symbol: str, exchange: str, order_id: str) -> None:
+        """Record the broker-held stop of a leg on the session's day (setting the same one
+        again changes nothing). Raises `JournalError` when the order is not bound on the
+        session's day in this ledger, was sent for another leg or not with `Purpose.STOP`,
+        or the leg has another stop: one exit owner per leg."""
+        key, now = self._day_key(None, "record the stop"), self._now_ns()
+        leg = (strategy, symbol, exchange)
+        with self._sql("record the stop") as sql:
+            if needs_recording(sql, self._ledger, key, leg, order_id):
+                row = (self._ledger, key, *leg, order_id, now)
+                sql.execute("INSERT INTO stops VALUES (?, ?, ?, ?, ?, ?, ?)", row)
+
+    def stop_of(
+        self, strategy: str, symbol: str, exchange: str, *, day: date | None = None
+    ) -> str | None:
+        """The order ID of a leg's stop on the day, or None. Raises `JournalError` with no
+        `day` before `start_session`."""
+        key = self._day_key(day, "read the stop")
+        with self._sql("read the stop") as sql:
+            return reads.stop_of(sql, self._ledger, key, (strategy, symbol, exchange))
+
+    def clear_stop(
+        self, strategy: str, symbol: str, exchange: str, *, day: date | None = None
+    ) -> None:
+        """Forget a leg's stop of the day (nothing happens when it has none). Raises
+        `JournalError` with no `day` before `start_session`."""
+        key = self._day_key(day, "clear the stop")
+        with self._sql("clear the stop") as sql:
+            sql.execute(
+                "DELETE FROM stops WHERE ledger = ? AND day = ? AND strategy = ? AND symbol = ? "
+                "AND exchange = ?",
+                (self._ledger, key, strategy, symbol, exchange),
+            )
 
 
 def needs_recording(
@@ -61,4 +102,4 @@ def _not_bound(sql: sqlite3.Connection, ledger: str, day: str, order_id: str) ->
     )
 
 
-__all__ = ["needs_recording"]
+__all__ = ["JournalStops", "needs_recording"]

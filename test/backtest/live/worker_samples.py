@@ -102,12 +102,17 @@ class Recording:
 
 class WorkerRig:
     """An order worker of `fake`, its journal at `folder`, started up on the test's
-    thread unless `start` is False; `starts` counts the restarts made with `restart`."""
+    thread unless `start` is False, reading the holdings with every book read when
+    `read_holdings` (a session with a CNC strategy); `starts` counts the restarts made
+    with `restart`."""
 
-    def __init__(self, fake: FakeOpenAlgo, folder: Any, *, start: bool = True) -> None:
+    def __init__(
+        self, fake: FakeOpenAlgo, folder: Any, *, start: bool = True, read_holdings: bool = False
+    ) -> None:
         self.fake = fake
         self.clock = fake.clock
         self.folder = folder
+        self.read_holdings = read_holdings
         self.alerts = Alerts()
         self.inbox = Inbox(self.clock.now)
         self.guard = ModeGuard(fake.client(), now=self.clock.now, alerts=self.alerts)
@@ -132,6 +137,7 @@ class WorkerRig:
             journal=target,
             now=self.clock.now,
             sleep=self.clock.sleep,
+            read_holdings=self.read_holdings,
         )
         self.orders.worker = worker
         return worker

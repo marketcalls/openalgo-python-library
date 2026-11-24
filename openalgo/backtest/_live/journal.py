@@ -7,7 +7,10 @@ that it is resolved against the order book before anything else is sent, or queu
 semi-auto mode put it in OpenAlgo's Action Center. Every order update is kept, in
 arrival order. The journal also holds each leg's broker-held stop (one exit owner per
 leg, `_journal_stops`), the risk rules' state (extremes, trail level, daily realized
-P&L), the strategy's own `self.state` and its version at each start (`_journal_versions`).
+P&L), the strategy's own `self.state` and its version at each start (`_journal_versions`),
+and for positions held overnight (20-positional-live) the GTTs and their children
+(`_journal_gtt`), each strategy's day-close record, the refusals kept across starts and
+the last bar each strategy decided (`_journal_carry`).
 
 Every write is committed, and synced to disk, before its method returns: an intent is
 durable before its order is sent. The file (`_journal_file`) uses write-ahead logging
@@ -22,11 +25,12 @@ OpenAlgo sends every update of the account to every session (manual orders, its 
 strategies), so one of the other mode is kept there and never changes this ledger's
 orders. Intent IDs are unique across both ledgers.
 
-Tier 1 trades MIS only, so what a restart restores is one IST trading day's: the day of
-the session started on the handle (`start_session`), or a `day=` argument. An intent is
-recorded, and a stop set, only on the session's day; an order ID is unique within a day
-(a broker may give it again later), and the risk state is kept per day. Only
-`self.state` carries across days. A handle is used from the thread that opened it.
+What a same-day restart restores is one IST trading day's: the day of the session started
+on the handle (`start_session`), or a `day=` argument. An intent is recorded, and a stop
+set, only on the session's day; an order ID is unique within a day (a broker may give it
+again later), and the risk state is kept per day. `self.state`, the GTTs, the day-close
+records, the kept refusals and the decided bars carry across days. A handle is used from
+the thread that opened it.
 
 Times are UTC nanoseconds. Every failure raises `JournalError` saying what to do.
 """
@@ -41,6 +45,7 @@ from typing import Any
 
 from ..errors import JournalError
 from . import _journal_reads as reads
+from ._journal_carry import DayClose, JournalCarry, KeptRefusal
 from ._journal_file import (
     DEFAULT_BUSY_TIMEOUT_S,
     JOURNAL_FILE_NAME,
@@ -50,6 +55,8 @@ from ._journal_file import (
     connect,
     default_journal_path,
 )
+from ._journal_gtt import JournalGtts
+from ._journal_gtt_rows import GttBinding, GttChild, GttState, GttTerms
 from ._journal_reads import JournalSession, JournalSnapshot, SavedState
 from ._journal_rows import (
     INSERT_INTENT,
@@ -60,7 +67,7 @@ from ._journal_rows import (
     state_json,
     update_values,
 )
-from ._journal_stops import needs_recording
+from ._journal_stops import JournalStops
 from ._journal_versions import JournalVersions
 from ._types import BoundOrder, Mode, Now, OrderIntent, OrderUpdate, QueuedIntent
 
@@ -70,7 +77,7 @@ _START_SESSION = (
 )
 
 
-class Journal(JournalVersions):
+class Journal(JournalStops, JournalVersions, JournalGtts, JournalCarry):
     """The journal of one account; see the module docstring. Implements `JournalLike`.
     Opened with `Journal.open`; `close()` or a `with` block closes it.
 
@@ -252,40 +259,6 @@ class Journal(JournalVersions):
         terminal), oldest first. Raises `JournalError` with no `day` before `start_session`."""
         return [order for order in self.bound_orders(day=day) if not order.terminal]
 
-    def set_stop(self, strategy: str, symbol: str, exchange: str, order_id: str) -> None:
-        """Record the broker-held stop of a leg on the session's day (setting the same one
-        again changes nothing). Raises `JournalError` when the order is not bound on the
-        session's day in this ledger, was sent for another leg or not with `Purpose.STOP`,
-        or the leg has another stop: one exit owner per leg."""
-        key, now = self._day_key(None, "record the stop"), self._now_ns()
-        leg = (strategy, symbol, exchange)
-        with self._sql("record the stop") as sql:
-            if needs_recording(sql, self._ledger, key, leg, order_id):
-                row = (self._ledger, key, *leg, order_id, now)
-                sql.execute("INSERT INTO stops VALUES (?, ?, ?, ?, ?, ?, ?)", row)
-
-    def stop_of(
-        self, strategy: str, symbol: str, exchange: str, *, day: date | None = None
-    ) -> str | None:
-        """The order ID of a leg's stop on the day, or None. Raises `JournalError` with no
-        `day` before `start_session`."""
-        key = self._day_key(day, "read the stop")
-        with self._sql("read the stop") as sql:
-            return reads.stop_of(sql, self._ledger, key, (strategy, symbol, exchange))
-
-    def clear_stop(
-        self, strategy: str, symbol: str, exchange: str, *, day: date | None = None
-    ) -> None:
-        """Forget a leg's stop of the day (nothing happens when it has none). Raises
-        `JournalError` with no `day` before `start_session`."""
-        key = self._day_key(day, "clear the stop")
-        with self._sql("clear the stop") as sql:
-            sql.execute(
-                "DELETE FROM stops WHERE ledger = ? AND day = ? AND strategy = ? AND symbol = ? "
-                "AND exchange = ?",
-                (self._ledger, key, strategy, symbol, exchange),
-            )
-
     def put_rms_state(
         self, strategy: str, state: dict[str, Any], *, day: date | None = None
     ) -> None:
@@ -392,9 +365,15 @@ __all__ = [
     "JOURNAL_FILE_NAME",
     "LIVE_DIR_VARIABLE",
     "SCHEMA_VERSION",
+    "DayClose",
+    "GttBinding",
+    "GttChild",
+    "GttState",
+    "GttTerms",
     "Journal",
     "JournalSession",
     "JournalSnapshot",
+    "KeptRefusal",
     "SavedState",
     "default_journal_path",
 ]

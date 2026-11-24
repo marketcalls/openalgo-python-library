@@ -55,6 +55,7 @@ from typing import Any
 
 from .._series import ist_time
 from ..errors import ConfigError
+from ._broker_units import broker_units
 from ._group_rules import and_join
 from ._kill_reads import (
     KILL_READ_BACKOFF_S,
@@ -69,7 +70,6 @@ from ._kill_reads import (
     seconds_ns,
 )
 from ._session_trader import Trader
-from ._stops_held import net_units
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadPositions
 from .inbox import PositionRows
@@ -136,13 +136,20 @@ class KillSwitch:
 
     def positions(self, message: PositionRows) -> None:
         """A position-book read, whoever asked for it: it counts for each fired strategy
-        whose state began at or before the read did (module docstring)."""
+        whose state began at or before the read did (module docstring), its broker's units
+        those of its leg in its product (`_broker_units`)."""
         self._reads.came(message.read_ns)
         for name, kill in self._fired.items():
             if message.read_ns < kill.since_ns:
                 continue
             trader = self._session.trader_named(name)
-            kill.broker = net_units(message.positionbook, trader.symbol, trader.exchange)
+            kill.broker = broker_units(
+                message.positionbook,
+                message.holdings,
+                trader.symbol,
+                trader.exchange,
+                trader.product,
+            )
             kill.read_ns = message.read_ns
 
     def duties(self, now_ns: int) -> None:

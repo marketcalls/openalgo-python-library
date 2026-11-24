@@ -166,7 +166,7 @@ class _Engine:
 
 
 class _Trader:
-    name, symbol, exchange = "StopHold", "SBIN", "NSE"
+    name, symbol, exchange, product = "StopHold", "SBIN", "NSE", "MIS"
 
     def __init__(self):
         self.venue, self.engine = _Venue(), _Engine()
@@ -217,7 +217,7 @@ class _Leg:
     """A strategy holding 10 units of `symbol` in the kernel, whose orders are
     `orders`: broker order ID to (kernel order, units, units the kernel has filled)."""
 
-    exchange = "NSE"
+    exchange, product = "NSE", "MIS"
 
     def __init__(self, name, symbol, orders):
         self.name, self.symbol = name, symbol

@@ -154,10 +154,10 @@ def test_a_version_needs_the_session_day(path):
 # ----- the upgrade of a version 1 file ---------------------------------------------------------
 
 
-def test_a_version_1_journal_is_upgraded_to_version_2_in_place(path):
+def test_a_version_1_journal_is_upgraded_in_place_through_version_2_to_3(path):
     version_1_file(path)
     open_journal(path).close()
-    assert user_version(path) == 2
+    assert user_version(path) == 3
 
 
 def test_an_upgraded_journal_keeps_its_intents_with_no_version_id(path):
@@ -182,4 +182,4 @@ def test_opening_an_upgraded_journal_again_changes_nothing(path):
     open_journal(path).close()
     with started_journal(path) as journal:
         assert journal.intent("old").version_id == ""
-    assert user_version(path) == 2
+    assert user_version(path) == 3

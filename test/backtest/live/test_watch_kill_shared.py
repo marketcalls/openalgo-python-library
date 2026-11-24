@@ -23,7 +23,7 @@ class Member:
     """A strategy's kernel session as the kill switch sees it: `units` signed SBIN, no
     working order."""
 
-    symbol, exchange, finished, square_off_ns = "SBIN", "NSE", False, 0
+    symbol, exchange, product, finished, square_off_ns = "SBIN", "NSE", "MIS", False, 0
 
     def __init__(self, name: str, units: int) -> None:
         self.name, self.units = name, units

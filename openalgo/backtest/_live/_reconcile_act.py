@@ -46,7 +46,7 @@ from ._session_news import RECONCILE_LOCK
 from ._session_records import adopted_fill
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind
-from ._venue_requests import LIVE_PRODUCT, CancelRequest
+from ._venue_requests import CancelRequest
 from ._worker_queue import CancelOrphan
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -228,7 +228,7 @@ class Corrections:
             call(
                 trader.engine.apply_external_fill,
                 INSTRUMENT,
-                LIVE_PRODUCT,
+                trader.product,
                 side,
                 float(units),
                 price,

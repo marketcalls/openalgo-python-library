@@ -31,6 +31,7 @@ def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...
             part.engine,
             strategy=part.spec.name,
             instruments=part.setup.instruments,
+            product=part.spec.product,
             session=parts.journal_session,
             request_ids=numbers,
             alerts=parts.alerts,

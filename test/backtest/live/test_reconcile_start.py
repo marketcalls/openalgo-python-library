@@ -44,7 +44,7 @@ class Trader:
     external fills it was given, `locks` its entry locks, `records` what the session keeps
     of it for the result."""
 
-    name, symbol, exchange = "S", "SBIN", "NSE"
+    name, symbol, exchange, product = "S", "SBIN", "NSE", "MIS"
     finished = False
 
     def __init__(self, units: int) -> None:

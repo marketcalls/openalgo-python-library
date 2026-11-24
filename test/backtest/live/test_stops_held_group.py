@@ -32,7 +32,7 @@ class Member:
     """A member holding `units` SBIN, its stop `stop_id` (kernel order 2, 10 units) with
     `filled` units its engine has taken; `working` its kernel's working orders."""
 
-    symbol, exchange = "SBIN", "NSE"
+    symbol, exchange, product = "SBIN", "NSE", "MIS"
 
     def __init__(self, name: str, stop_id: str, units: int = 10, filled: int = 0):
         self.name, self.stop_id, self.units, self.filled_units = name, stop_id, units, filled
@@ -260,6 +260,23 @@ def test_another_members_stop_missing_from_the_order_book_stops_the_decision():
     a, b = Member("A", "SA"), Member("B", "SB")
     empty = {"status": "success", "data": {"orders": []}}
     assert unheard(Shared(a, b), a, empty) == "the order book does not show the stop SB of B"
+
+
+@pytest.mark.parametrize(
+    ("product", "row_product", "why"),
+    [
+        ("CNC", "CNC", None),
+        ("NRML", "NRML", None),
+        ("CNC", "MIS", "the order book does not show the stop SB of B"),
+    ],
+    ids=["cnc group, cnc row", "nrml group, nrml row", "cnc group, a row in mis"],
+)
+def test_the_order_book_is_read_in_the_groups_product(product, row_product, why):
+    # 20-positional-live 7.1: a broker keeps each product's orders apart, so only the
+    # rows of the group's own product show its members' stops.
+    a, b = Member("A", "SA"), Member("B", "SB")
+    a.product = b.product = product
+    assert unheard(Shared(a, b), a, books(20, {"product": row_product}).orderbook) == why
 
 
 def test_an_order_book_that_cannot_be_read_stops_the_decision():

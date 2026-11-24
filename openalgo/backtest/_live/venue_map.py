@@ -77,11 +77,12 @@ class VenueMap(RestoredOrders, Withdrawals):
     and the session withdraws what it will not send (`_venue_withdraw.Withdrawals`).
 
     `instruments` are the engine's in registration order, each with `symbol`, `exchange`
-    and `tick_size` (rupees: the preflight's facts); `session` is the journal session
-    (day, mode and starts: the intent IDs); `request_ids` numbers the requests, shared by
-    every strategy's map so the worker's answers name one request; `alerts` the session's;
-    `now` gives UTC nanoseconds; `version_id` is the strategy's version, which each intent
-    carries. Raises LiveError for an instrument without a tick.
+    and `tick_size` (rupees: the preflight's facts); `product` is the strategy's, which
+    every order carries; `session` is the journal session (day, mode and starts: the
+    intent IDs); `request_ids` numbers the requests, shared by every strategy's map so the
+    worker's answers name one request; `alerts` the session's; `now` gives UTC
+    nanoseconds; `version_id` is the strategy's version, which each intent carries.
+    Raises LiveError for an instrument without a tick.
     """
 
     def __init__(
@@ -90,6 +91,7 @@ class VenueMap(RestoredOrders, Withdrawals):
         *,
         strategy: str,
         instruments: Sequence[Any],
+        product: str,
         session: JournalSession,
         request_ids: Iterator[int],
         alerts: AlertsLike,
@@ -98,6 +100,7 @@ class VenueMap(RestoredOrders, Withdrawals):
     ) -> None:
         self._engine = engine
         self._strategy, self._version_id = strategy, version_id
+        self._product = product
         self._markets = tuple((item.symbol, item.exchange) for item in instruments)
         self._ticks = tuple(item.tick_size for item in instruments)
         for (symbol, exchange), tick in zip(self._markets, self._ticks, strict=True):
@@ -181,6 +184,7 @@ class VenueMap(RestoredOrders, Withdrawals):
             markets=self._markets,
             session=self._session,
             created_ns=self._now(),
+            product=self._product,
             version_id=self._version_id,
         )
         kernel_order, tick = int(command["order_id"]), self._ticks[int(command["instrument"])]

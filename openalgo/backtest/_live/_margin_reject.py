@@ -59,7 +59,6 @@ from ._session_trader import Trader
 from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
 from ._stops_kernel import protect as kernel_protect
 from ._types import LOGGER_NAME, AlertKind, OrderIntent, Purpose
-from ._venue_requests import LIVE_PRODUCT
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -201,7 +200,7 @@ class MarginHolds:
         if limit_rupees is None:
             return trader.request_exit(reason)
         exit_ = trader.engine.request_exit
-        return str(call(exit_, INSTRUMENT, LIVE_PRODUCT, reason, float(limit_rupees)))
+        return str(call(exit_, INSTRUMENT, trader.product, reason, float(limit_rupees)))
 
     def protect(self, trader: Trader) -> str | None:
         """Place `trader`'s stop again (R7) through the gate (module docstring): what the

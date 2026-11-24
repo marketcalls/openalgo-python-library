@@ -36,11 +36,13 @@ function.
 Each row's module keeps its helpers in private modules named after it (`_reconcile_*`,
 `_session_*`, `_feedlink_*` and so on), each under the package's 400-line rule; the order
 rate is `_order_throttle` (for `worker`) and the account's daily rules `_account_watch` (for
-`watch`). Four serve several rows: `_groups`, the strategies of a session that trade one
-instrument and the entry gates set on them, `_group_rules`, the rules of such a group
-against the broker's net position, and `_margin_reject`, a closing order rejected on such
-an instrument (18-multi-strategy 4), and `_locked_entries`, the strategies whose entries
-are locked, which the loop writes and the order worker reads before an entry or add. The
+`watch`). Five serve several rows: `_groups`, the strategies of a session that trade one
+instrument and product and the entry gates set on them, `_group_rules`, the rules of such
+a group against the broker's net position, and `_margin_reject`, a closing order rejected
+on such an instrument (18-multi-strategy 4), `_locked_entries`, the strategies whose
+entries are locked, which the loop writes and the order worker reads before an entry or
+add, and `_broker_units`, the one reader of a leg's units at the broker by its product
+(20-positional-live 7.1), which `watch`, `stops`, `reconcile` and the restart read. The
 audit record of 18-multi-strategy 12 is `_version_id` and `_session_versions` (each
 strategy's version on every order, its manifest in the journal, `_journal_versions`; the
 compiled code of a class whose source cannot be read, `_version_code`; the one rule for

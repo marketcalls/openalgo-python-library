@@ -80,6 +80,8 @@ class _Engine:
 
 
 class _Trader:
+    product = "MIS"
+
     def __init__(self, name: str) -> None:
         self.name, self.symbol, self.exchange = name, "SBIN", "NSE"
         self.finished = False

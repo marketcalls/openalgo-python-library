@@ -3,9 +3,10 @@ the broker's books say of one leg, how a difference with the engine is judged, a
 each judgement allows. Pure: the reconciler (`reconcile`) and the restart
 (`_session_restore`) act on what these give.
 
-**A leg in the books** (`LegBooks`, `leg_books`): the broker's net units of the
-instrument in MIS (the position book), its trades (the trade book), and its order-book
-rows; the account's available cash in the funds (`available_cash`).
+**A leg in the books** (`LegBooks`, `leg_books`): the broker's units of the instrument in
+the leg's product (`_broker_units`: the position book, and for CNC the holdings too), its
+trades and its order-book rows in that product (the trade book, the order book); the
+account's available cash in the funds (`available_cash`).
 
 **A position difference** (`judge`, 5.3). The engine's signed units are compared, after
 its own orders' trades are attributed to them (5.2 step 1), with the broker's. A
@@ -51,11 +52,10 @@ from types import MappingProxyType
 from typing import Any
 
 from ..errors import LiveError
+from ._broker_units import broker_units
 from ._order_book import book_rows
 from ._order_updates import status_of
-from ._stops_held import net_units
 from ._types import OrderStatus
-from ._venue_requests import LIVE_PRODUCT
 
 
 class Kind(enum.Enum):
@@ -192,9 +192,9 @@ class Row:
 
 @dataclass(frozen=True)
 class LegBooks:
-    """What the books say of one instrument in MIS: the broker's net `units` (None when
-    the position book cannot be read), its `trades` and `rows` (None when their book
-    cannot be read)."""
+    """What the books say of one instrument in a leg's product: the broker's net `units`
+    (None when a book they are read from cannot be read), its `trades` and `rows` (None
+    when their book cannot be read)."""
 
     units: int | None
     trades: tuple[Trade, ...] | None
@@ -223,13 +223,19 @@ def leg_books(
     orderbook: Mapping[str, Any],
     symbol: str,
     exchange: str,
+    *,
+    product: str,
+    holdings: Mapping[str, Any] | None = None,
 ) -> LegBooks:
-    """The books' answers (as the SDK returns them) read for `exchange:symbol` in MIS. A
-    row that cannot be read makes its whole book unreadable: a guess is never made."""
+    """The books' answers (as the SDK returns them) read for `exchange:symbol` in
+    `product`, with the holdings' answer when the session reads them (None when it does
+    not: a CNC leg's units are then unknown). A row that cannot be read makes its whole
+    book unreadable: a guess is never made. Raises LiveError for a product that is not
+    MIS, CNC or NRML."""
     return LegBooks(
-        net_units(positionbook, symbol, exchange),
-        _trades(tradebook, symbol, exchange),
-        _rows(orderbook, symbol, exchange),
+        broker_units(positionbook, holdings, symbol, exchange, product),
+        _trades(tradebook, symbol, exchange, product),
+        _rows(orderbook, symbol, exchange, product),
     )
 
 
@@ -303,7 +309,9 @@ def restart_kind(journal_units: int, broker_units: int, unexplained: int) -> Res
     return RestartKind.DIFFERS
 
 
-def _trades(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Trade, ...] | None:
+def _trades(
+    answer: Mapping[str, Any], symbol: str, exchange: str, product: str
+) -> tuple[Trade, ...] | None:
     data = answer.get("data") if answer.get("status") == "success" else None
     if not isinstance(data, list):
         return None
@@ -314,7 +322,7 @@ def _trades(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Trad
         if (row.get("symbol"), row.get("exchange"), row.get("product")) != (
             symbol,
             exchange,
-            LIVE_PRODUCT,
+            product,
         ):
             continue
         try:
@@ -328,7 +336,11 @@ def _trades(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Trad
     return tuple(trades)
 
 
-def _rows(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Row, ...] | None:
+def _rows(
+    answer: Mapping[str, Any], symbol: str, exchange: str, product: str
+) -> tuple[Row, ...] | None:
+    """The order-book rows of the leg; a row that names no product is taken as the leg's
+    (a book that leaves the product out shows the leg's orders all the same)."""
     if answer.get("status") != "success":
         return None
     try:
@@ -341,7 +353,7 @@ def _rows(answer: Mapping[str, Any], symbol: str, exchange: str) -> tuple[Row, .
             return None
         if (row.get("symbol"), row.get("exchange")) != (symbol, exchange):
             continue
-        if row.get("product", LIVE_PRODUCT) != LIVE_PRODUCT:
+        if row.get("product", product) != product:
             continue
         order_id = str(row.get("orderid") or "")
         try:

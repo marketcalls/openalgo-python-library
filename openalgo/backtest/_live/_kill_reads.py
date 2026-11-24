@@ -26,7 +26,6 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
-from ._venue_requests import LIVE_PRODUCT
 
 #: Seconds between two asks for a position-book read, and at least between the starts of
 #: two reads judged in a row: the stops supervisor's pace for a held cancel
@@ -120,8 +119,9 @@ def judged(kill: Kill, read_ns: int) -> None:
 
 
 def held(trader: Trader) -> Held:
-    """The strategy's position (`Held`): flat with no tranche when it never opened."""
-    position = call(trader.engine.position, INSTRUMENT, LIVE_PRODUCT)
+    """The strategy's position in its product (`Held`): flat with no tranche when it never
+    opened."""
+    position = call(trader.engine.position, INSTRUMENT, trader.product)
     if position is None:
         return 0.0, ()
     tranches = tuple(

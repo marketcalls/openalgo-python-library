@@ -49,13 +49,16 @@ def start_worker(
     sleep: Sleep,
     threads: bool,
     orders_per_second: int,
+    read_holdings: bool,
     stack: contextlib.ExitStack,
 ) -> StartedWorker:
     """Step 8 (module docstring): the order worker on the `orders` client, posting to the
     loop's `inbox`, its journal handle W opened on `target`, then journal handle L on the
-    same file; `threads` False runs the worker's startup inline (the test seam). Both are
-    closed by `stack`. Raises the worker's startup error, LiveError when it is not ready in
-    `WORKER_READY_TIMEOUT_S`, and JournalError when handle L cannot be opened."""
+    same file; `threads` False runs the worker's startup inline (the test seam), and
+    `read_holdings` has it read the holdings with every book read (a session with a CNC
+    strategy). Both are closed by `stack`. Raises the worker's startup error, LiveError
+    when it is not ready in `WORKER_READY_TIMEOUT_S`, and JournalError when handle L
+    cannot be opened."""
     worker = OrderWorker(
         orders,
         guard=guard,
@@ -65,6 +68,7 @@ def start_worker(
         now=now,
         sleep=sleep,
         orders_per_second=orders_per_second,
+        read_holdings=read_holdings,
     )
     stack.callback(worker.close)
     journal_session = _wait_ready(worker, inbox, now=now, threads=threads)

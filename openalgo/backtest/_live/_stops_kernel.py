@@ -20,7 +20,6 @@ from ..errors import VenueRefusalError
 from ._plan_catch_up import INSTRUMENT
 from ._session_trader import Trader
 from ._types import LOGGER_NAME
-from ._venue_requests import LIVE_PRODUCT
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -55,12 +54,12 @@ def push_price(trader: Trader, price: float, at_ns: int) -> bool:
 
 
 def protect(trader: Trader) -> str | None:
-    """Place the leg's stop again at its level for what the position's exits leave (R7);
-    what the kernel did, one of the binding's `PROTECT_OUTCOMES`, or None once the
-    kernel session finished."""
+    """Place the leg's stop again at its level for what the position's exits leave (R7),
+    in the strategy's product; what the kernel did, one of the binding's
+    `PROTECT_OUTCOMES`, or None once the kernel session finished."""
     if trader.finished:
         return None
-    return str(call(trader.engine.protect, INSTRUMENT, LIVE_PRODUCT))
+    return str(call(trader.engine.protect, INSTRUMENT, trader.product))
 
 
 def reprice(trader: Trader, kernel_order: int, limit_rupees: float) -> bool | None:

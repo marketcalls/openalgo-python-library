@@ -36,7 +36,7 @@ class Strategy:
     """The session's strategy double: `units` of SBIN NSE (signed), no working order, the
     kernel's exits it was asked for in `exits`."""
 
-    name, symbol, exchange = "HoldSbin", "SBIN", "NSE"
+    name, symbol, exchange, product = "HoldSbin", "SBIN", "NSE", "MIS"
     finished = False
     square_off_ns = FIRED_NS + 16 * 60 * NS
 

@@ -52,7 +52,8 @@ _FEED_TIMING = {"poll": 0.002, "backoff": (0.01,), "backoff_slice": 0.005}
 
 class FakeOpenAlgo:
     """The fake server. `start_ns` starts its clock (UTC nanoseconds); `analyzer` is the
-    analyzer switch at the start (False: live mode).
+    analyzer switch at the start (False: live mode); `gtt` whether OpenAlgo ships GTT
+    orders for the broker (False: its GTT calls answer HTTP 501 in live mode).
 
     Attributes: `clock` (the manual clock to hand the live layer as `Now` and `Sleep`),
     `log` (everything that happened), `faults` (the faults a test schedules) and
@@ -68,6 +69,7 @@ class FakeOpenAlgo:
         username: str = USERNAME,
         live_cash: float = LIVE_CASH,
         sandbox_cash: float = SANDBOX_CASH,
+        gtt: bool = True,
     ) -> None:
         self.clock = ManualClock(start_ns)
         self.log = FakeLog()
@@ -82,6 +84,7 @@ class FakeOpenAlgo:
             live_cash=live_cash,
             sandbox_cash=sandbox_cash,
             analyzer=analyzer,
+            gtt_supported=gtt,
         )
         self.faults = Faults(self._venue, feed, frozenset(ROUTES))
         self._handler = RestHandler(self._venue, self.faults, API_KEY)
@@ -257,6 +260,24 @@ class FakeOpenAlgo:
         or "" for none)."""
         market = self._venue.markets[(symbol, exchange)]
         market.instrument = dataclasses.replace(market.instrument, expiry=expiry)
+
+    def set_holding(
+        self,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+        *,
+        average_price: float = 0.0,
+        mode: Mode | None = None,
+    ) -> None:
+        """Hold `quantity` units of a known instrument for delivery (CNC) at
+        `average_price` rupees in a book (the selected one by default), as `holdings`
+        answers them; 0 units holds none. Raises ValueError for an unknown instrument."""
+        with self._venue.lock:
+            if self._venue.market(symbol, exchange) is None:
+                raise ValueError(f"the fake broker does not know {exchange}:{symbol}")
+            book = self._venue.books[mode or self.mode]
+            book.holdings[(symbol, exchange)] = (quantity, average_price)
 
     def set_holidays(self, rows: Iterable[dict[str, Any]]) -> None:
         """Replace OpenAlgo's market holidays (`market/holidays` rows, as

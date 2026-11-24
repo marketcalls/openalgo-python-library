@@ -41,8 +41,6 @@ ROLE_PURPOSES: Mapping[str, Purpose] = {
 }
 #: The binding's sides, as OpenAlgo's actions.
 ACTIONS = frozenset({"BUY", "SELL"})
-#: The product a live session trades in Tier 1 (CNC and NRML positions need GTT live).
-LIVE_PRODUCT = "MIS"
 #: The price types of a broker stop: a modify that keeps the units and one of these is a
 #: trigger move (trailing), not a change of what protects the position.
 STOP_TYPES = frozenset({"SL", "SL-M"})
@@ -189,23 +187,25 @@ def intent_fields(
     markets: Sequence[tuple[str, str]],
     session: JournalSession,
     created_ns: int,
+    product: str,
     version_id: str = "",
 ) -> OrderIntent:
     """The intent of a "place" command of `strategy`'s engine, whose instruments are
-    `markets` ((symbol, exchange) in registration order), created at `created_ns` by the
-    strategy's version `version_id`.
+    `markets` ((symbol, exchange) in registration order) and whose product is `product`
+    (the strategy's: "MIS", "CNC" or "NRML"), created at `created_ns` by the strategy's
+    version `version_id`.
 
     Raises LiveError for a fraction of a unit (the kernel sizes in whole units in a live
-    session), an unknown role, side or instrument, or a product other than MIS.
+    session), an unknown role, side or instrument, or a product other than the strategy's.
     """
     kernel_order = int(command["order_id"])
-    role, side, product = command.get("role"), command.get("side"), command.get("product")
+    role, side, given = command.get("role"), command.get("side"), command.get("product")
     index = command.get("instrument")
-    if role not in ROLE_PURPOSES or side not in ACTIONS or product != LIVE_PRODUCT:
+    if role not in ROLE_PURPOSES or side not in ACTIONS or given != product:
         raise LiveError(
             f"kernel order o{kernel_order} cannot be sent: a live session places "
-            f"{sorted(ROLE_PURPOSES)} orders, BUY or SELL, in {LIVE_PRODUCT}, not role "
-            f"{role!r}, side {side!r}, product {product!r}"
+            f"{sorted(ROLE_PURPOSES)} orders, BUY or SELL, in {product}, the strategy's "
+            f"product, not role {role!r}, side {side!r}, product {given!r}"
         )
     if not isinstance(index, int) or not 0 <= index < len(markets):
         raise LiveError(f"kernel order o{kernel_order} names instrument {index!r}, unregistered")
@@ -219,7 +219,7 @@ def intent_fields(
         action=side,
         quantity=terms.quantity,
         price_type=terms.price_type,
-        product=product,
+        product=given,
         purpose=ROLE_PURPOSES[role],
         created_ns=created_ns,
         price=terms.price,
@@ -324,7 +324,6 @@ def _same(seen: float | None, sent: float) -> bool:
 __all__ = [
     "ACTIONS",
     "LIMIT_TYPES",
-    "LIVE_PRODUCT",
     "ROLE_PURPOSES",
     "SAME_PRICE_RUPEES",
     "STOP_TYPES",
