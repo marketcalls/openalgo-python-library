@@ -1,11 +1,12 @@
 #![cfg(all(feature = "costs", feature = "time"))]
 //! A CNC or NRML position's stop is one SINGLE GTT for all its open units, and its
 //! targets are held by the engine exactly as an MIS leg's are (design 20-positional-live
-//! P6, 04-execution 4.4 item 2): a target exit fills at the target or at a gapped open, a
-//! full one cancels the stop GTT first, a partial one cuts the GTT to the units left, and
-//! inside one bar a level crossed at the open comes first, else the stop. A leg with a
-//! stop has no level tested in a bar where its stop GTT is not in force (the bar of a
-//! partial exit at the open), and breakeven after the first target moves the GTT.
+//! P6, 04-execution 4.4 item 2): a target exit fills at the target or at a gapped open,
+//! and inside one bar a level crossed at the open comes first, else the stop. An exit of
+//! the whole position cancels the stop GTT first; a partial exit, the strategy's or a
+//! target's, cuts it to the units left and keeps it in force, so the bar of a partial exit
+//! at the open tests the leg's levels as an MIS leg's (the lead's ruling on unit N0's
+//! verification, option B). Breakeven after the first target moves the GTT.
 //!
 //! A daily strategy on daily bars, no charges, no slippage. The position is opened at
 //! the close of 2025-07-01 and fills at the 07-02 open of 1000.00; 07-02 reaches neither
@@ -16,11 +17,12 @@ mod order_support;
 
 use oa_bt::engine::{RunOutput, Step};
 use oa_bt::exec::{FillAt, Gtt, GttId, GttLegRole, GttStatus, InstrumentSpec, OrderRequest};
-use oa_bt::exec::{OrderType, TriggerDirection};
+use oa_bt::exec::{OrderType, QuantitySpec, TriggerDirection};
 use oa_bt::model::{Day, Product, Side};
 use oa_bt::rms::{AfterFirstTarget, Distance, LegRules, TargetSpec};
 use order_support::{
-    day_open, equity, events_at, fills, future, july_2025, order, run_daily_on, Act, FillRow, Ohlc,
+    day_open, engine, equity, events_at, fills, future, july_2025, minute, minute_bars,
+    minute_config, order, run_daily_on, run_script, Act, FillRow, Ohlc,
 };
 
 const FLAT: Ohlc = (1000.0, 1005.0, 995.0, 1000.0);
@@ -471,11 +473,11 @@ fn sell_half_on_the_second() -> Vec<(Day, Act)> {
 }
 
 #[test]
-fn a_partial_exit_at_the_open_leaves_no_level_of_a_leg_with_a_stop_tested_in_that_bar() {
-    // The sale cancels g1 first (cancel-then-exit, GTT-9) and g2 holds the stop of the
-    // 50 left from the next base bar, so no stop is held in 07-03. Its targets are not
-    // tested alone there either: a bar through both levels would otherwise exit at the
-    // target, where the stop comes first for an MIS leg.
+fn a_partial_exit_at_the_open_keeps_the_stop_gtt_in_force_for_the_units_left() {
+    // The sale of 50 at the 07-03 open of 1000.00 keeps g1 (it is cut to the 50 left in
+    // step 4), so the leg's levels are tested in 07-03 as an MIS leg's: the bar reaches
+    // both the stop 950.00 and the target 1100.00 from inside, the stop comes first, and
+    // g1's child sells the 50 left at its trigger, 950.00.
     let (output, gtts) = run_with(
         Side::Buy,
         stop_and_target(),
@@ -491,24 +493,51 @@ fn a_partial_exit_at_the_open_leaves_no_level_of_a_leg_with_a_stop_tested_in_tha
         FillAt::Open,
         "signal",
     );
-    assert_eq!(fills(&output)[1..], [sale]);
+    let stop = (
+        third_day(),
+        Step::Levels,
+        Side::Sell,
+        50.0,
+        950.0,
+        FillAt::Level,
+        "leg_sl",
+    );
+    assert_eq!(fills(&output)[1..], [sale, stop]);
     assert_eq!(
         events_at(&output, third_day()),
         [
-            "GttCanceled g1",
             "Filled",
             "PositionChanged",
-            "GttPlaced g2"
+            "GttTriggered g1",
+            "leg_sl_hit",
+            "GttChildFilled g1",
+            "PositionClosed"
         ]
     );
-    assert_eq!(
-        (
-            gtts[1].status,
-            gtts[1].quantity_units,
-            gtts[1].trigger(GttLegRole::Stop)
-        ),
-        (GttStatus::Active, 50.0, Some(950.0))
+    assert_eq!(gtts.len(), 1, "{gtts:?}");
+    assert_eq!(gtts[0].status, GttStatus::ChildFilled);
+}
+
+#[test]
+fn an_exit_of_the_whole_position_still_cancels_the_stop_gtt_first() {
+    // Selling all 100 at the 07-03 open closes the position: g1 is cancelled before the
+    // sale fills (cancel-then-exit, GTT-9), and nothing is left for 07-03's levels.
+    let sell_all = OrderRequest {
+        reduce_only: true,
+        ..order(Side::Sell, LONG_UNITS, OrderType::Market, Product::Cnc)
+    };
+    let (output, gtts) = run_with(
+        Side::Buy,
+        stop_and_target(),
+        (BOTH_LEVELS, FLAT),
+        vec![(july_2025(2), Act::Submit(sell_all))],
     );
+    assert_eq!(
+        events_at(&output, third_day()),
+        ["GttCanceled g1", "Filled", "PositionClosed"]
+    );
+    assert_eq!(fills(&output).len(), 2);
+    assert_eq!(gtts[0].status, GttStatus::Canceled);
 }
 
 #[test]
@@ -536,6 +565,66 @@ fn a_leg_without_a_stop_has_its_target_tested_in_the_bar_of_a_partial_exit() {
         "leg_target",
     );
     assert_eq!(fills(&output)[2..], [target]);
+}
+
+/// One-minute bars of 2025-07-01: the buy of 100 decided at the 09:15 close fills at the
+/// 09:16 open of 1000.00; `reduce(fraction=0.5)` decided at the 09:16 close fills at the
+/// 09:17 open, whose bar runs through both levels from inside.
+fn partial_exit_on_minutes(product: Product) -> RunOutput {
+    let bars = minute_bars(10, 1000.0, &[(2, BOTH_LEVELS)]);
+    let buy = OrderRequest {
+        leg_rules: stop_and_target(),
+        ..order(Side::Buy, LONG_UNITS, OrderType::Market, product)
+    };
+    let half = OrderRequest {
+        reduce_only: true,
+        quantity: QuantitySpec::PositionFraction(0.5),
+        ..order(Side::Sell, LONG_UNITS, OrderType::Market, product)
+    };
+    let acts = vec![
+        (minute(1), Act::Submit(buy)),
+        (minute(2), Act::Submit(half)),
+    ];
+    let kernel = engine(minute_config(), equity(), bars);
+    run_script(kernel, acts).0
+}
+
+#[test]
+fn a_cnc_partial_exit_at_the_open_trades_as_an_mis_one_on_minute_bars() {
+    // 100 bought at 1000.00 (stop 950.00, target 1100.00). The 09:17 bar is (1000.00,
+    // 1110.00, 940.00, 1000.00): the signal sells 50 at its open of 1000.00, then the
+    // stop sells the 50 left at 950.00, before the target, in the same bar.
+    let expected = [
+        (
+            minute(1),
+            Step::OpenFills,
+            Side::Buy,
+            100.0,
+            1000.0,
+            FillAt::Open,
+            "entry",
+        ),
+        (
+            minute(2),
+            Step::OpenFills,
+            Side::Sell,
+            50.0,
+            1000.0,
+            FillAt::Open,
+            "signal",
+        ),
+        (
+            minute(2),
+            Step::Levels,
+            Side::Sell,
+            50.0,
+            950.0,
+            FillAt::Level,
+            "leg_sl",
+        ),
+    ];
+    assert_eq!(fills(&partial_exit_on_minutes(Product::Mis)), expected);
+    assert_eq!(fills(&partial_exit_on_minutes(Product::Cnc)), expected);
 }
 
 // ---------------------------------------------------------------- breakeven after the first target

@@ -290,7 +290,9 @@ fn a_signal_exit_cancels_the_gtt_before_it_fills() {
 }
 
 #[test]
-fn a_partial_exit_cancels_the_gtt_and_places_one_for_the_rest_in_step_4() {
+fn a_partial_exit_cuts_the_gtt_to_the_units_left_in_step_4() {
+    // Sell 4 of the 10 at the 07-03 open: g1 stays in force and step 4 cuts it to the 6
+    // left, its trigger 1450.00 unchanged (the lead's ruling on unit N0's verification).
     let reduce = oa_bt::exec::OrderRequest {
         reduce_only: true,
         quantity: QuantitySpec::Units(4.0),
@@ -301,16 +303,16 @@ fn a_partial_exit_cancels_the_gtt_and_places_one_for_the_rest_in_step_4() {
     let (output, gtts, _) = run_daily(&july(&[]), acts, zero_slippage);
     assert_eq!(
         events_at(&output, day_open(july_2025(3))),
-        [
-            "GttCanceled g1",
-            "Filled",
-            "PositionChanged",
-            "GttPlaced g2"
-        ]
+        ["Filled", "PositionChanged", "GttModified g1"]
     );
+    assert_eq!(gtts.len(), 1, "{gtts:?}");
     assert_eq!(
-        (gtts[1].quantity_units, stop_trigger(&gtts[1])),
-        (6.0, Some(1450.0))
+        (
+            gtts[0].status,
+            gtts[0].quantity_units,
+            stop_trigger(&gtts[0])
+        ),
+        (GttStatus::Active, 6.0, Some(1450.0))
     );
 }
 
