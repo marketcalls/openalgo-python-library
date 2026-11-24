@@ -142,6 +142,23 @@ def test_a_place_that_times_out_is_at_the_broker_only_when_it_reached_it(broker,
     assert len(broker.gtts()) == placed
 
 
+def test_a_place_the_server_finishes_after_the_clients_timeout_lands_then(broker):
+    broker.faults.late_landing("placegttorder", seconds=20.0)
+
+    answer = broker.client().placegttorder(**STOP)
+    before = book(broker)
+    broker.clock.advance(20.0)
+    after = book(broker)
+
+    assert answer["error_type"] == "timeout_error"
+    assert (before, [row["trigger_id"] for row in after]) == ([], ["261116000001"])
+
+
+def test_a_late_landing_is_a_fault_of_an_order_write_only(broker):
+    with pytest.raises(ValueError, match="only"):
+        broker.faults.late_landing("gttorderbook", seconds=1.0)
+
+
 def test_a_place_whose_answer_is_lost_is_the_servers_500_and_the_gtt_is_made(broker):
     broker.faults.lose_answer("placegttorder")
 
@@ -255,6 +272,15 @@ def test_a_brokers_book_lists_the_gtts_that_ended_only_when_it_keeps_them(
     client.cancelgttorder(trigger_id=first, strategy="ema")
 
     assert [row["status"] for row in book(fake, "all")] == listed
+
+
+def test_a_book_that_lags_leaves_a_gtt_out_of_its_next_reads(broker):
+    broker.hide_gtt("261116000001", reads=2)
+    broker.client().placegttorder(**STOP)
+
+    seen = [[row["trigger_id"] for row in book(broker)] for _ in range(3)]
+
+    assert seen == [[], [], ["261116000001"]]
 
 
 def test_the_active_book_lists_the_active_gtts_newest_first(broker):

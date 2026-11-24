@@ -30,6 +30,7 @@ from .faults import Faults
 from .feed import Feed
 from .feed_server import FeedServer
 from .gtts import FakeGtt
+from .hidden_rows import GTT_BOOK, ORDER_BOOK
 from .log import FakeLog
 from .market import Candle, Instrument
 from .orders import FakeOrder, Fill
@@ -256,6 +257,13 @@ class FakeOpenAlgo:
         with self._venue.lock:
             self._venue.lag_positions()
 
+    def hide_order(self, order_id: str, *, reads: int = 1) -> None:
+        """The next `reads` answers of the order book leave out order `order_id`, placed
+        already or not yet: a broker's book that lists a new order late (`hidden_rows`).
+        Raises ValueError for fewer than 1 read."""
+        with self._venue.lock:
+            self._venue.hidden.hide(ORDER_BOOK, order_id, reads)
+
     def catch_up_positionbook(self) -> None:
         """The position book shows every fill again after `lag_positionbook`."""
         with self._venue.lock:
@@ -320,6 +328,13 @@ class FakeOpenAlgo:
         Raises ValueError for an unknown trigger ID or a GTT that is not active."""
         with self._venue.lock:
             self._venue.set_gtt_status(trigger_id, status)
+
+    def hide_gtt(self, trigger_id: str, *, reads: int = 1) -> None:
+        """The next `reads` answers of the GTT book leave out GTT `trigger_id`, placed
+        already or not yet: a broker's book that shows a new GTT late, or drops a row
+        from one read (`hidden_rows`). Raises ValueError for fewer than 1 read."""
+        with self._venue.lock:
+            self._venue.hidden.hide(GTT_BOOK, trigger_id, reads)
 
     def gtts(self, mode: Mode | None = None) -> list[FakeGtt]:
         """Copies of a book's GTTs (the selected one by default), ended ones included,

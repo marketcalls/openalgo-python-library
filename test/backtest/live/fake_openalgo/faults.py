@@ -4,7 +4,8 @@ REST faults act on the next call to one endpoint (the path after `/api/v1/`, as 
 posts it: "placeorder", "analyzer", "telegram/notify"), each once, in the order they were
 scheduled. A transport fault can be told the call reached the broker first
 (`reached_broker`): the order is then placed, modified or cancelled although its answer
-never comes back, which is what makes an answer ambiguous. The stream's and the feed's
+never comes back, which is what makes an answer ambiguous; a late landing does it only
+some seconds after the client's timeout (`late_landing`). The stream's and the feed's
 faults act on the WebSocket (`feed.Feed`). Every fault is logged when it acts or is set
 (`FakeLog.faults`).
 """
@@ -25,6 +26,7 @@ GATEWAY_ERROR = "gateway_error"
 DROPPED_CONNECTION = "dropped_connection"
 REFUSED_CONNECTION = "refused_connection"
 LOST_ANSWER = "lost_answer"
+LATE_LANDING = "late_landing"
 SLOW_ANSWER = "slow_answer"
 RATE_LIMITED = "rate_limited"
 #: The endpoints whose broker answer the server can lose after the broker acted.
@@ -111,6 +113,18 @@ class Faults:
         if self._venue.analyzer:
             raise ValueError("the OpenAlgo sandbox sends nothing to a broker: no answer to lose")
         self._schedule(RestFault(LOST_ANSWER, endpoint, reached_broker=True))
+
+    def late_landing(self, endpoint: str, *, seconds: float) -> None:
+        """The next order write times out in the client while the server is still working
+        on it, and finishes it `seconds` after the client gave up: the order or GTT is
+        placed, changed or cancelled then, as seen by every call the fake answers from that
+        time on. Raises ValueError for an endpoint that writes no order, or a delay that
+        is not above 0."""
+        if endpoint not in ORDER_WRITES:
+            raise ValueError(f"only {sorted(ORDER_WRITES)} can land after their timeout")
+        if seconds <= 0:
+            raise ValueError(f"a late landing comes more than 0 seconds late, not {seconds}")
+        self._schedule(RestFault(LATE_LANDING, endpoint, seconds=seconds))
 
     def slow(self, endpoint: str, seconds: float) -> None:
         """The next call to `endpoint` takes `seconds`: the fake's clock moves on by that
@@ -229,6 +243,7 @@ __all__ = [
     "DROPPED_CONNECTION",
     "GATEWAY_ERROR",
     "GATEWAY_TIMEOUT_STATUS",
+    "LATE_LANDING",
     "LOST_ANSWER",
     "ORDER_WRITES",
     "RATE_LIMITED",

@@ -27,6 +27,7 @@ from openalgo.backtest._live._types import Mode
 from .book import FILLED, Book, Change, OrderTerms
 from .clock import ManualClock
 from .feed import Feed
+from .hidden_rows import HiddenRows
 from .holidays import HOLIDAYS_2026
 from .ids import BrokerIds, SandboxIds
 from .log import FILL, SWITCH, FakeLog
@@ -103,6 +104,8 @@ class Venue(GttVenue):
         self.calling_client = ""
         #: The position books as they stood when they began to lag their fills, by mode.
         self.lagged: dict[Mode, list[Position]] | None = None
+        #: The GTTs and orders a test has their books leave out of their next reads.
+        self.hidden = HiddenRows()
         self._pending_ids = itertools.count(1)
         self._rejections: list[Rejection] = []
         self._split_next: int | None = None
