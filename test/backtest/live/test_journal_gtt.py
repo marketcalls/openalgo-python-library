@@ -234,6 +234,23 @@ def test_the_gtts_not_ended_are_read_on_a_later_day_oldest_first(path):
         ]
 
 
+def test_a_strategys_gtts_of_a_day_are_read_ended_or_not_oldest_first(path):
+    with started_journal(path) as journal:
+        earlier = recorded(journal, 1)
+    clock = ManualClock(ist_ns(NEXT_DAY, 9))
+    with started_journal(path, day=NEXT_DAY, now=clock) as journal:
+        cancelled, resting = recorded(journal, 1, 3), recorded(journal, 2, 4)
+        journal.bind_gtt(cancelled, "T-1")
+        journal.set_gtt_state(cancelled, GttState.CANCELLED)
+        other = journal.record_gtt("swing", 1, 5, "SBIN", "NSE", "CNC", STOP, purpose=Purpose.STOP)
+
+        today = [gtt.seq for gtt in journal.day_gtts("ema")]
+        that_day = [gtt.seq for gtt in journal.day_gtts("ema", day=DAY)]
+
+    assert (today, that_day) == ([cancelled, resting], [earlier])
+    assert other not in today
+
+
 def test_a_handle_never_sees_the_other_ledgers_gtts(path):
     with started_journal(path) as journal:
         journal.bind_gtt(recorded(journal), "T-901")

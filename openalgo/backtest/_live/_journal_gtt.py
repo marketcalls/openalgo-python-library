@@ -7,7 +7,9 @@ meets an unanswered place finds what to look for in the GTT book; the place's an
 it to the broker's trigger ID (`bind_gtt`), and the session notes each later state
 (`set_gtt_state`) and each modify the broker confirmed (`set_gtt_terms`). A GTT lives
 across days: it is recorded on the session's day and read back on any later one, by its
-number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`).
+number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`);
+a strategy's GTTs of one day, ended or not, are what a same-day restart settles its
+restored GTTs by (`day_gtts`).
 A trigger ID is the broker's GTT's, so it is unique in a ledger. A fired GTT's child is
 bound once (`bind_gtt_child`), on the day it fired; an order the session placed itself is
 never one.
@@ -48,6 +50,7 @@ _STATE = "INSERT INTO gtt_states VALUES (?, ?, ?, ?, ?)"
 _BY_SEQ = "SELECT * FROM gtts WHERE ledger = ? AND seq = ?"
 _BY_TRIGGER = "SELECT * FROM gtts WHERE ledger = ? AND trigger_id = ?"
 _OPEN = "SELECT * FROM gtts WHERE ledger = ? AND state NOT IN ({ended}) ORDER BY seq"
+_OF_DAY = "SELECT * FROM gtts WHERE ledger = ? AND strategy = ? AND day = ? ORDER BY seq"
 _ENDED = tuple(state.value for state in GttState if state.terminal)
 _CHILD = "SELECT * FROM gtt_children WHERE ledger = ? AND gtt_seq = ?"
 _CHILD_OF_ORDER = "SELECT * FROM gtt_children WHERE ledger = ? AND day = ? AND order_id = ?"
@@ -199,6 +202,14 @@ class JournalGtts(JournalHandle):
         query = _OPEN.format(ended=", ".join("?" * len(_ENDED)))
         with self._sql("read the open GTTs") as sql:
             rows = sql.execute(query, (self._ledger, *_ENDED)).fetchall()
+        return [binding_from(row) for row in rows]
+
+    def day_gtts(self, strategy: str, *, day: date | None = None) -> list[GttBinding]:
+        """The GTTs of `strategy` recorded on the day (the session's, or `day`), ended or
+        not, oldest first. Raises JournalError with no `day` before `start_session`."""
+        key = self._day_key(day, "read the day's GTTs")
+        with self._sql("read the day's GTTs") as sql:
+            rows = sql.execute(_OF_DAY, (self._ledger, strategy, key)).fetchall()
         return [binding_from(row) for row in rows]
 
     def refused_days(

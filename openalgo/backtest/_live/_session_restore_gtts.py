@@ -19,12 +19,23 @@ saved state still waits for (`settle`), by the kernel's state and the journal's 
   and confirmed (`apply_gtt_modified`).
 - CancelPending, bound with the resting terms: its cancel never reached the worker; taken
   back and cancelled now.
+- CancelPending, the journal's cancelled with the same terms: cancelled before the crash;
+  taken back and confirmed (`apply_gtt_cancelled`), so the kernel goes on with what waited
+  for the cancel (a target's exit). Left unsettled, that exit would never be sent, beside
+  a stop the broker no longer holds (review finding 5 of round 3 of unit N3b).
+- Requested, the journal's not placed (refused by the broker, or never reached it): placed
+  again; a second refusal is answered as one (`apply_gtt_refused`: the leg is exited and
+  entries locked for the day), and a transient one is placed.
 - Anything else: unsettled.
 
 "Bound" is a journal's GTT bound to the broker's trigger ID that has not ended (placed,
-resting, or fired with its child not resolved, which the follower finds). A call the
-crash caught under way (a place, modify or cancel sent and not answered), a GTT that fired
-with its child followed, or terms that agree with neither is **unsettled**: the GTT map
+resting, or fired with its child not resolved, which the follower finds). The journal's
+GTT of a restored one is the latest of the day's GTTs of the strategy with its kernel id
+that has not ended, else the latest that has (`Journal.day_gtts`). A call the crash
+caught under way (a place, modify or cancel sent and not answered: a place's GTT not
+bound to a trigger ID yet may rest at the broker, which only a read of the GTT book can
+tell), a GTT that fired or ended with its child followed, or terms that agree with
+neither is **unsettled**: the GTT map
 sends nothing more about it, the strategy's entries are locked with an ERROR alert naming
 it, and nothing is exited (as for an unresolved GTT, 16-session-design 5.3): the user
 settles it by hand. GTTs of earlier days are unit N5's (the follower follows them).
@@ -65,6 +76,7 @@ class Settle(enum.Enum):
     MODIFY = "modify"
     CONFIRM_MODIFY = "confirm_modify"
     CANCEL = "cancel"
+    CONFIRM_CANCEL = "confirm_cancel"
     UNSETTLED = "unsettled"
 
 
@@ -81,6 +93,8 @@ def settle(view: Mapping[str, Any], row: GttBinding | None) -> Settled:
     GTT that has not ended) given the journal's GTT of it (`row`, None for none): module
     docstring's table."""
     state = view["state"]
+    if row is not None and row.state.terminal:
+        return _ended(view, row)
     bound = row is not None and row.trigger_id is not None and row.state in _BOUND
     if state == "Requested" and row is None:
         return Settled(Settle.PLACE)
@@ -96,6 +110,19 @@ def settle(view: Mapping[str, Any], row: GttBinding | None) -> Settled:
     return Settled(Settle.UNSETTLED, f"the engine's GTT was {state} and {seen}")
 
 
+def _ended(view: Mapping[str, Any], row: GttBinding) -> Settled:
+    """What a restart does with the kernel's restored GTT `view` whose journal's GTT `row`
+    has ended (module docstring's table)."""
+    state = view["state"]
+    if state == "CancelPending" and row.state is GttState.CANCELLED and _same(view, row):
+        return Settled(Settle.CONFIRM_CANCEL)
+    if state == "Requested" and row.state is GttState.NOT_PLACED:
+        return Settled(Settle.PLACE)
+    return Settled(
+        Settle.UNSETTLED, f"the engine's GTT was {state} and the journal's says {row.state.value}"
+    )
+
+
 def restore_gtts(session: Any, trader: Trader) -> None:
     """Take back `trader`'s restored GTTs (module docstring) and hand the order worker the
     calls that never reached it, after the kernel's restore and before its leg is
@@ -107,12 +134,10 @@ def restore_gtts(session: Any, trader: Trader) -> None:
     views = [view for view in views if view["state"] in _LIVE_STATES]
     if not views:
         return
-    day = session.parts.spec.day
-    rows = {
-        row.gtt_id: row
-        for row in session.parts.journal.open_gtts()
-        if row.strategy == trader.name and row.day == day
-    }
+    today = session.parts.journal.day_gtts(trader.name, day=session.parts.spec.day)
+    # By kernel GTT id, the latest that has not ended, else the latest (module docstring).
+    rows = {row.gtt_id: row for row in today if row.state.terminal}
+    rows.update({row.gtt_id: row for row in today if not row.state.terminal})
     requests: list[GttRequest] = []
     for view in views:
         row = rows.get(int(view["gtt_id"]))
@@ -150,6 +175,8 @@ def _apply(
         return []
     if decided.settle is Settle.CONFIRM_PLACE:
         call(trader.engine.apply_gtt_placed, gtt_id)
+    elif decided.settle is Settle.CONFIRM_CANCEL:
+        call(trader.engine.apply_gtt_cancelled, gtt_id)
     elif decided.settle is Settle.CONFIRM_MODIFY:
         call(trader.engine.apply_gtt_modified, gtt_id)
     elif decided.settle is Settle.MODIFY:
