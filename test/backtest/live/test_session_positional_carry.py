@@ -108,6 +108,37 @@ def test_a_stop_gtt_ended_in_the_last_seconds_is_never_reported_as_protecting_th
     assert list(restored["gtts"]) == [1]
 
 
+@pytest.mark.parametrize(
+    ("history", "may_have_fired"),
+    [(True, False), (False, True)],
+    ids=["history rows: cancelled", "active only: gone"],
+)
+def test_a_stop_gtt_gone_after_the_close_may_have_fired_so_the_alert_checks_the_books_first(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, history, may_have_fired
+):
+    # A book of active GTTs only shows a GTT that fired and one cancelled by hand alike:
+    # gone. A stop GTT placed by hand beside a child that sold the units would sell again.
+    world = to_the_close(make_fake_openalgo, monkeypatch, tmp_path, history=history)
+    world.trace.waive("protected", "the stop GTT is cancelled by hand before the close")
+    world.trace.left_unprotected_by_decision("CncHold", "cancelled by hand at the close")
+
+    def cancel_by_hand():
+        world.fake.set_gtt_status(world.fake.gtts()[0].trigger_id, "cancelled")
+
+    world.script.at(LAST_SECONDS, cancel_by_hand)
+
+    world.run(CncHold)
+
+    (alert,) = [a for a in alerts(caplog, "error") if "CncHold" in a]
+    checked_first = (
+        "it may have fired: check the order book and the position first, then place its "
+        "stop GTT in OpenAlgo by hand before the next open"
+    )
+    assert alert.endswith(checked_first) is may_have_fired
+    assert alert.endswith("place its stop GTT in OpenAlgo by hand before the next open")
+    assert "in_flight" not in alert and "ended_outside" not in alert
+
+
 class HoldAndRest(CncHold):
     """CncHold that also rests a GTT buy of 5 SBIN at 490.00 at its second decision."""
 
@@ -137,10 +168,11 @@ def test_a_gtt_order_ended_in_the_last_seconds_is_named_and_leaves_the_stop_conf
 
     assert outcome.stopped_by == "session_end"
     (order,) = [g for g in world.fake.gtts() if g.action == "BUY"]
-    named = [a for a in alerts(caplog, "reject") if "HoldAndRest" in a]
-    assert named
-    assert all(f"GTT order {order.trigger_id} of SBIN NSE was found" in a for a in named)
-    assert all("after the session's close" in a for a in named)
+    (named,) = [a for a in alerts(caplog, "reject") if "HoldAndRest" in a]
+    assert f"GTT order {order.trigger_id} of SBIN NSE " in named
+    assert named.endswith("after the session's close: the session follows it no more")
+    # In plain words, not the follower's event names.
+    assert "in_flight" not in named and "ended_outside" not in named
     assert not [a for a in alerts(caplog, "error") if "HoldAndRest" in a]
     (position,) = outcome.open_positions
     assert position.stop_confirmed is True
