@@ -73,7 +73,7 @@ from ._gtt_follow_intake import FollowerIntake
 from ._gtt_followed import ENDINGS, Followed, other_terms, unknown_status
 from ._gtt_outcomes import GttOutcomes
 from ._gtt_reads import BookRead, GttReader, LegKey
-from ._gtt_types import GttEvent
+from ._gtt_types import GttBookSeen, GttEvent
 from ._gtt_units import LegUnits, References, judge
 from ._journal_gtt_rows import GttState, GttTerms
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, Now, OrderUpdate
@@ -142,6 +142,20 @@ class GttFollower(FollowerIntake):
         and the close's)."""
         self._asked = True
         self.due()
+
+    def close_read(self, legs: set[LegKey]) -> GttBookSeen:
+        """Read the GTT book now with the units of `legs` and of the GTTs followed, judge
+        it, and give what it found as the close's (`GttBookSeen`); while OpenAlgo is silent
+        nothing is read, and the book is given as unread (None)."""
+        if self._busy():
+            return GttBookSeen(self._now(), None, {}, frozenset())
+        read = self._reader.gtt_book(self.legs() | legs)
+        self.observe(read)
+        resting = None
+        if read.rows is not None:
+            rows = read.rows.values()
+            resting = {r.trigger_id: (r.triggers, r.quantity) for r in rows if r.seen.rests}
+        return GttBookSeen(read.read_ns, resting, dict(read.units), frozenset(read.settled))
 
     def order_seen(self, update: OrderUpdate) -> None:
         """The order stream showed an order the journal does not know: read at once when a

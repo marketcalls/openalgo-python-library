@@ -30,10 +30,8 @@ a request"), split from `worker` so each module keeps one job.
 - A restart's `Settle` makes a restored order's modify or cancel unsettled, so a read
   settles it as an unanswered one (3.6); `CancelOrphan` cancels an order of the journal
   the engine does not hold (5.3), with an ERROR alert when it cannot be cancelled.
-- A `GttRequest` goes to the GTT sender (`_gtt_send`); `ReadGtts` asks the GTT follower
-  for a read of the GTT book, and `BindGttChild` binds a fired GTT's child, which the
-  order path follows from then (`_order_children`)
-  (`_gtt_follow`; 20-positional-live 3).
+- A `GttRequest`, `ReadGtts` and `BindGttChild` go to the worker's GTT part
+  (`_worker_gtts`; 20-positional-live 3).
 
 Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -47,19 +45,17 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
-from ._broker_units import broker_units
 from ._gtt_reads import LegKey
 from ._gtt_send import GttSender
-from ._gtt_types import BindGttChild, GttRequest, ReadGtts
 from ._locked_entries import LockedEntries, locked_words
 from ._order_answers import Outcome
 from ._order_check import OrderCheck
-from ._order_children import child_intent
 from ._order_resolve import same_leg
 from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
 from ._worker_books import BookReads
+from ._worker_gtts import GTT_REQUESTS, WorkerGtts
 from ._worker_news import NewsHandover
 from ._worker_queue import (
     CancelOrphan,
@@ -112,7 +108,7 @@ class Sender:
     strategies whose entries the loop has locked; `read_holdings` is True for a session
     with a CNC strategy; `gtts` sends the GTT requests and holds the GTT follower, and
     `gtt_legs` are the (symbol, exchange, product) of the session's CNC and NRML legs, whose
-    units each reconciliation read gives the follower as a reference (`_reference`)."""
+    units each reconciliation read gives the follower as a reference (`_worker_gtts`)."""
 
     def __init__(
         self,
@@ -134,7 +130,16 @@ class Sender:
         gtts: GttSender,
         gtt_legs: Sequence[LegKey] = (),
     ) -> None:
-        self._gtt_legs = tuple(gtt_legs)
+        self._gtt_requests = WorkerGtts(
+            gtts,
+            path=path,
+            journal=journal,
+            news=news,
+            stops=stops,
+            post=post,
+            now=now,
+            legs=gtt_legs,
+        )
         self._books = BookReads(
             client,
             guard=guard,
@@ -142,7 +147,7 @@ class Sender:
             calling=calling,
             now=now,
             read_holdings=read_holdings,
-            positions_read=self._reference if self._gtt_legs else None,
+            positions_read=self._gtt_requests.reference if gtt_legs else None,
         )
         self._gtts = gtts
         self._path = path
@@ -179,38 +184,10 @@ class Sender:
             self.unsettle(request.change)
         elif isinstance(request, CancelOrphan):
             self._cancel_orphan(request.order_id)
-        elif isinstance(request, GttRequest):
-            self._gtts.execute(request)
-        elif isinstance(request, ReadGtts):
-            self._gtts.follower.read_now()
-        elif isinstance(request, BindGttChild):
-            self._bind_child(request)
+        elif isinstance(request, GTT_REQUESTS):
+            self._gtt_requests.execute(request)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
-
-    def _reference(self, positionbook: Any, holdings: Any, read_ns: int) -> None:
-        """Give the GTT follower each GTT leg's units of a reconciliation read begun at
-        `read_ns` (UTC ns), the start's among them, made after the order path's restore
-        (20-positional-live 3.3; the lead's ruling N3b-2): it takes a settled read as the
-        leg's reference and ignores one that is not. A leg whose units the read cannot
-        give is left out."""
-        for symbol, exchange, product in self._gtt_legs:
-            units = broker_units(positionbook, holdings, symbol, exchange, product)
-            if units is not None:
-                self._gtts.follower.reference((symbol, exchange, product), units, read_ns)
-
-    def _bind_child(self, request: BindGttChild) -> None:
-        """Bind a fired GTT's child in the journal and follow it on the order path, its
-        word that came before the binding handed over now (`_order_children`). Raises
-        JournalError as the journal does, and LiveError for a GTT not in the journal."""
-        self._gtts.follower.bind_child(request.seq, request.order_id, request.kernel_order)
-        gtt = self._journal.gtt(request.seq)
-        if gtt is None:
-            raise LiveError(f"GTT {request.seq} is not in the journal: its child is not followed")
-        intent = child_intent(gtt, request.order_id, self._now())
-        news = self._path.follow_child(request.order_id, intent)
-        self._news.taken(1)
-        self._news.hand_over(news, self._stops)
 
     def settle_due(self) -> None:
         """Settle what is due (module docstring). Stops at a guard lock, which the worker

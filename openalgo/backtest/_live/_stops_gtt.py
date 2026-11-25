@@ -6,8 +6,10 @@ its stop is named in an alert or a line are read from the kernel's GTTs of the p
 
 - **Covered**: the units of the leg's stop GTTs that rest confirmed (the kernel's
   "Active", and "ModifyPending", whose old terms rest until the modify's answer). One
-  whose cancel was sent covers nothing (the broker may have cancelled it already), nor
-  one not confirmed yet ("Requested").
+  whose cancel was handed to the order worker covers nothing (the broker may have
+  cancelled it already; `_venue_gtts.KernelGtt.cancel_sent`), nor one not confirmed yet
+  ("Requested"); one whose cancel the kernel decided and the session never handed over
+  (after a guard lock) still rests.
 - **Guarded**: the leg was given a stop GTT, resting, ended or fired.
 - **Waiting**: a stop GTT's place or modify waits for its answer; **cancelling**: a stop
   GTT's cancel does.
@@ -36,10 +38,8 @@ def overnight(trader: Any) -> bool:
 
 
 def stop_gtts(trader: Any) -> list[dict[str, Any]]:
-    """The kernel's stop GTTs of `trader`'s position, in GTT order (none once its kernel
-    session finished)."""
-    if trader.finished:
-        return []
+    """The kernel's stop GTTs of `trader`'s position, in GTT order (its kernel session
+    answers the query after its close too)."""
     gtts = call(trader.engine.gtts, INSTRUMENT, trader.product)
     return [gtt for gtt in gtts if gtt["purpose"] == "stop"]
 
@@ -51,7 +51,23 @@ def gtt_guarded(trader: Any) -> bool:
 
 def gtt_cover(trader: Any) -> int:
     """The units the leg's confirmed stop GTTs cover at the broker (module docstring)."""
-    return sum(round(gtt["quantity_units"]) for gtt in stop_gtts(trader) if gtt["state"] in RESTING)
+    return sum(round(gtt["quantity_units"]) for gtt in resting_gtts(trader))
+
+
+def resting_gtts(trader: Any) -> list[dict[str, Any]]:
+    """The leg's stop GTTs that rest confirmed at the broker (module docstring)."""
+    return [gtt for gtt in stop_gtts(trader) if _rests(trader, gtt)]
+
+
+def _rests(trader: Any, gtt: dict[str, Any]) -> bool:
+    if gtt["state"] in RESTING:
+        return True
+    return gtt["state"] == CANCEL_PENDING and not _cancel_sent(trader, gtt)
+
+
+def _cancel_sent(trader: Any, gtt: dict[str, Any]) -> bool:
+    known = None if trader.gtts is None else trader.gtts.gtt(int(gtt["gtt_id"]))
+    return known is not None and known.cancel_sent
 
 
 def gtt_waiting(trader: Any) -> bool:
@@ -60,15 +76,17 @@ def gtt_waiting(trader: Any) -> bool:
 
 
 def gtt_cancelling(trader: Any) -> bool:
-    """Whether a stop GTT of the leg waits for the answer to its cancel."""
-    return any(gtt["state"] == CANCEL_PENDING for gtt in stop_gtts(trader))
+    """Whether a stop GTT of the leg waits for the answer to a cancel handed over."""
+    return any(
+        gtt["state"] == CANCEL_PENDING and _cancel_sent(trader, gtt) for gtt in stop_gtts(trader)
+    )
 
 
 def gtt_words(trader: Any) -> str:
     """The leg's stop GTT in an alert's words: confirmed (its trigger ID, trigger and
     units), being cancelled, not confirmed yet, or "" for none."""
     gtts = stop_gtts(trader)
-    resting = [gtt for gtt in gtts if gtt["state"] in RESTING]
+    resting = resting_gtts(trader)
     if resting:
         gtt = resting[-1]
         name = _name(trader, gtt)
@@ -76,7 +94,7 @@ def gtt_words(trader: Any) -> str:
             f"{name} confirmed at the broker, trigger {gtt['trigger_price']:.2f} for "
             f"{round(gtt['quantity_units'])} units"
         )
-    if any(gtt["state"] == CANCEL_PENDING for gtt in gtts):
+    if gtt_cancelling(trader):
         return f"{_name(trader, gtts[-1])} being cancelled, with no final word yet"
     if any(gtt["state"] == REQUESTED for gtt in gtts):
         return f"{_name(trader, gtts[-1])} not confirmed at the broker yet"
@@ -85,7 +103,7 @@ def gtt_words(trader: Any) -> str:
 
 def gtt_trigger_id(trader: Any) -> str:
     """The broker's trigger ID of the leg's latest stop GTT that rests confirmed, or ""."""
-    resting = [gtt for gtt in stop_gtts(trader) if gtt["state"] in RESTING]
+    resting = resting_gtts(trader)
     return _trigger_id(trader, resting[-1]) if resting else ""
 
 
@@ -110,5 +128,6 @@ __all__ = [
     "gtt_waiting",
     "gtt_words",
     "overnight",
+    "resting_gtts",
     "stop_gtts",
 ]

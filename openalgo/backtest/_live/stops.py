@@ -44,6 +44,7 @@ from typing import Any
 
 from ._fill_ledger import FillResult
 from ._group_rules import and_join
+from ._gtt_types import GttRequest
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._session_trader import Trader
@@ -116,8 +117,12 @@ class StopsSupervisor:
         self.prices.observe(trader, self.leg(trader).stop, price, at_ns)
 
     def handed(self, requests: Sequence[Any]) -> None:
-        """Requests handed to the order worker."""
+        """Requests handed to the order worker (a GTT's told to its strategy's GTT map)."""
         for request in requests:
+            if isinstance(request, GttRequest):
+                gtts = self._session.trader_named(request.strategy).gtts
+                if gtts is not None:
+                    gtts.handed(request)
             if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
                 self._requests[request.request_id] = request
                 self._legs.setdefault(request.intent.strategy, LegOrders()).handed(request)

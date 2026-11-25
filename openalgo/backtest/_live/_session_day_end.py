@@ -10,6 +10,13 @@ close plus `_session_stop.SESSION_END_GRACE_S` ends the session too, with an ERR
 for every such leg (the caller's lines of the legs left open). After a guard lock the
 session ends at that same time ("mode_breach").
 
+**CNC and NRML legs** (20-positional-live 7.3; the lead's ruling N3b-4) are carried, never
+squared off: no "still not flat after square-off" alert names them, and they need not be
+flat. The session ends at the latest close among their exchanges (MCX by the calendar's
+dated rows), once every MIS leg is done and the close's GTT book read has been judged
+(`_session_carry.CarriedLegs.confirmed`); it then names each carried leg in a line. A
+session with no CNC or NRML strategy ends as before.
+
 Times are UTC nanoseconds, quantities units. Used by the loop only.
 """
 
@@ -19,6 +26,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ._session_trader import Trader
+from ._stops_gtt import overnight
 from ._types import AlertKind
 
 #: How a session ended by the day (1.4 `stopped_by`).
@@ -34,6 +42,9 @@ class DayEnd:
         self, session: Any, *, not_flat_ns: Mapping[str, int], end_ns: int, repeat_ns: int
     ) -> None:
         self._session = session
+        carried = [t.close_ns for t in session.traders if overnight(t)]
+        #: When the latest exchange of a CNC or NRML strategy closes (UTC ns), or None.
+        self._carry_ns = max(carried) if carried else None
         self._not_flat_ns = dict(not_flat_ns)
         self._end_ns = end_ns
         self._repeat_ns = repeat_ns
@@ -50,16 +61,25 @@ class DayEnd:
         session = self._session
         if session.locked:
             return (MODE_BREACH if now_ns >= self._end_ns else None), False
-        traders = session.traders
-        if all(now_ns >= t.square_off_ns and t.flat for t in traders):
+        intraday = [t for t in session.traders if not overnight(t)]
+        done = all(now_ns >= t.square_off_ns and t.flat for t in intraday)
+        if done and self._carry_ns is None:
+            return SESSION_END, False
+        if done and self._carried_done(now_ns):
             return SESSION_END, False
         if now_ns >= self._end_ns:
             return SESSION_END, True
-        for trader in traders:
+        for trader in intraday:
             if now_ns >= self._not_flat_ns[trader.name] and not trader.flat:
                 self._not_flat_ns[trader.name] = now_ns + self._repeat_ns
                 self._not_flat(trader)
         return None, False
+
+    def _carried_done(self, now_ns: int) -> bool:
+        """Whether the carried legs let the session end (module docstring)."""
+        if self._carry_ns is None or now_ns < self._carry_ns:
+            return False
+        return bool(self._session.news.carry.confirmed())
 
     def _not_flat(self, trader: Trader) -> None:
         exits = [trader.order_name(kernel_order) for kernel_order in trader.working()]

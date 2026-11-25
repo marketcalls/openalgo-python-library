@@ -88,6 +88,9 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
+#: How a session ended that writes the day-close records of its carried legs (4.1): its
+#: end, or a Ctrl+C that keeps them (20-positional-live 10.2).
+_CARRIES = _FINAL_READ
 #: How the close warns of a strategy's state it could not save, and what a restart does.
 NOT_SAVED = "its state and the day's figures were not saved at the close"
 RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
@@ -166,7 +169,8 @@ def close_session(
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         compared = {t.name: strategy_rows(session, t) for t in session.traders}
         slipped = {name: slippage_of(rows) for name, rows in compared.items()}
-        stopped = {trader.name: _stop_engine(trader) for trader in session.traders}
+        carry = session.news.carry.write if journal_works and stopped_by in _CARRIES else None
+        stopped = {trader.name: _stop_engine(trader, carry) for trader in session.traders}
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)
         summary = _summary(session, (stopped, slipped), unprotected_s, named)
@@ -351,10 +355,12 @@ def _save_day(session: Session, unprotected_s: float, named: int) -> None:
         session.warn(f"the session's counts of the day were not saved at the close: {error}")
 
 
-def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
+def _stop_engine(trader: Trader, carry: Any = None) -> tuple[Any, tuple[float, float]]:
     """Stop a kernel session where it stands, deliver its last events and call
-    `on_stop` (unless the strategy failed); its `finish()` tables, and its (gross P&L,
-    modelled charges) in rupees."""
+    `on_stop` (unless the strategy failed), then `carry(trader)` writes its day-close
+    record, if any (`_session_carry`, before `finish`, after which the kernel gives no
+    carried state); its `finish()` tables, and its (gross P&L, modelled charges) in
+    rupees."""
     engine, part = trader.engine, trader.part
     _equity, _cash, realized, unrealized, costs, _margin = call(engine.account)
     if not trader.finished:
@@ -370,6 +376,8 @@ def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
             except Exception:
                 logger.exception("%s raised in its last callbacks", trader.name)
         logger.info("%s stopped where it stood", trader.name)
+    if carry is not None:
+        carry(trader)
     return call(engine.finish), (realized + unrealized, costs)
 
 

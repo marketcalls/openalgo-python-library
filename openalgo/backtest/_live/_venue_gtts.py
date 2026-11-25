@@ -111,7 +111,8 @@ class KernelGtt:
     """What the session knows of one of the kernel's GTTs: what it is for, the journal's
     GTT and the broker's trigger ID once a place was answered, the commands waiting for
     them, the terms last asked for, since when (UTC ns) a stop's place waits for its
-    answer (None once answered), and the kernel order of its child once it fired."""
+    answer (None once answered), the kernel order of its child once it fired, and whether
+    a cancel of it was handed to the order worker and not answered (`cancel_sent`)."""
 
     purpose: Purpose
     asked: GttTerms
@@ -120,6 +121,7 @@ class KernelGtt:
     deferred: list[Mapping[str, Any]] = field(default_factory=list)
     placing_ns: int | None = None
     child: int | None = None
+    cancel_sent: bool = False
 
 
 class GttMap:
@@ -149,6 +151,13 @@ class GttMap:
     def gtt(self, gtt_id: int) -> KernelGtt | None:
         """What the session knows of kernel GTT `gtt_id`, or None."""
         return self._gtts.get(gtt_id)
+
+    def handed(self, request: GttRequest) -> None:
+        """`request` was handed to the order worker: a cancel's GTT may be cancelled at the
+        broker from now (`KernelGtt.cancel_sent`)."""
+        known = self._gtts.get(request.gtt_id)
+        if known is not None and request.action is GttAction.CANCEL:
+            known.cancel_sent = True
 
     def gtt_of_child(self, kernel_order: int) -> KernelGtt | None:
         """The GTT whose child the kernel follows as `kernel_order`, or None."""
@@ -221,6 +230,8 @@ class GttMap:
         if known is None:
             raise LiveError(f"GTT answer of g{request.gtt_id}, which {self._strategy} never placed")
         kind, gtt_id = answer.kind, request.gtt_id
+        if request.action is GttAction.CANCEL:
+            known.cancel_sent = False
         if kind is GttAnswerKind.UNRESOLVED:
             known.placing_ns = None
             return GttHandled(GttApplied.UNRESOLVED)

@@ -31,9 +31,10 @@ of its members' journal positions against the broker's net (`_restart_groups`,
 an ERROR alert now, saying what the restart does about it (`_missing_stop_words`): its
 stop is placed again at the end of step 11, unless the books show the broker holding
 fewer units that no trade explains, or the other side (the exit guard then holds a stop
-for the journal's units), or other orders closed the position.
-
-Times are UTC nanoseconds, quantities signed units. Run by the main thread at the start.
+for the journal's units), or other orders closed the position. A CNC leg is judged
+one-sided (`_broker_units.strategy_units`): the user's own units beyond it are no
+unknown position. Times are UTC nanoseconds, quantities signed units. Run by the main
+thread at the start.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._broker_units import strategy_units
 from ._group_rules import GroupFigure, and_join
 from ._groups import InstrumentGroup, instrument_groups
 from ._order_book import Resolved
@@ -248,7 +250,8 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
         if leg.units is None or leg.trades is None:
             raise LiveError(_unread(books))
         units = _journal_units(saved, journal, day, leg)
-        found[each.name] = _Found(each, saved, leg, leg.units, units)
+        broker = strategy_units(each.product, units, leg.units)
+        found[each.name] = _Found(each, saved, leg, broker, units)
     legs: dict[str, LegStart] = {}
     refused: list[str] = []
     named = ((s.name, s.symbol, s.exchange, s.product) for s in spec.strategies)

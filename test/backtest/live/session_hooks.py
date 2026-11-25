@@ -144,13 +144,13 @@ class Hooks:
             run.log_to = len(trace.fake.log.entries)
         return outcome
 
-    def stopped(self, trader: Any) -> Any:
+    def stopped(self, trader: Any, carry: Any = None) -> Any:
         for run in {id(run): run for run in self._runs.values()}.values():
             if any(t is trader for t in run.session.traders):
                 closing = closing_of(run.session, trader)
                 if closing is not None:
                     run.closing[trader.name] = closing
-        return self._stop_engine(trader)
+        return self._stop_engine(trader, carry)
 
     def written(self, logs: Any, kind: str, **fields: Any) -> None:
         self._write(logs, kind, **fields)

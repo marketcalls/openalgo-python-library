@@ -16,6 +16,11 @@ None (unknown), and every caller reads again on its back-off (16-session-design 
 read that succeeded with no row of the symbol is zero. The answers are read as the SDK
 returns them (openalgo/account.py: `positionbook()`, and `holdings()`, whose rows sit
 under `data.holdings`). Quantities are signed whole units (long above 0).
+
+**CNC is checked one-sided** (20-positional-live 7.2, decision 11.3): the broker's units
+must be at least the strategy's for a long; units beyond them are the user's own
+(`own_units`), never a mismatch, so a comparison takes the broker's units as the
+strategy's (`strategy_units`). Every exit and GTT is for the strategy's units only.
 """
 
 from __future__ import annotations
@@ -93,4 +98,21 @@ def _units(rows: Sequence[Any], key: tuple[str, ...], fields: tuple[str, ...]) -
     return total
 
 
-__all__ = ["broker_units"]
+def own_units(product: str, strategy_units: int, broker: int | None) -> int:
+    """The units the broker holds beyond a CNC strategy's long or flat position (the
+    user's own: module docstring); 0 for any other product, a short, or none beyond."""
+    if product != CNC or broker is None or strategy_units < 0:
+        return 0
+    return max(0, broker - strategy_units)
+
+
+def strategy_units(product: str, strategy: int, broker: int | None) -> int | None:
+    """The broker's units of a leg as a comparison with the strategy's `strategy` units
+    takes them: for CNC, without the user's own units beyond the strategy's (module
+    docstring); for any other product, as they are (None stays None)."""
+    if broker is None:
+        return None
+    return broker - own_units(product, strategy, broker)
+
+
+__all__ = ["broker_units", "own_units", "strategy_units"]
