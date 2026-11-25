@@ -21,7 +21,7 @@
   day-close record never report it as protecting the leg. A finding after the close about
   any other GTT (a strategy's GTT order, a stop GTT of a flat leg) touches no leg: it is
   named in a REJECT alert, an ERROR one when it fired or its terms are not the session's.
-  Each finding is named in plain words (`_AFTER_CLOSE`).
+  Each finding is named in plain words (`FINDING_WORDS`).
 - **The reference for the next day** (`references`): each GTT leg's units at the broker,
   by product (`_broker_units`), read just before the close's GTT book read, with the
   read's time and whether the session's own fills on the leg had settled then; without
@@ -59,7 +59,7 @@ from ._carry_start import BINDINGS_KEY, REFERENCES_KEY, UNCONFIRMED_KEY
 from ._gtt_types import GttBookSeen, GttEvent, GttOutcome, ReadGtts
 from ._own_fills import POSITION_BOOK_LAG_S
 from ._session_trader import Trader
-from ._stops_gtt import RESTING, overnight, resting_gtts, stop_gtts
+from ._stops_gtt import PLACE_GTT_BY_HAND, RESTING, overnight, resting_gtts, stop_gtts
 from ._stops_kernel import protect
 from ._types import LOGGER_NAME, AlertKind, Purpose
 from ._venue_gtts import KernelGtt
@@ -75,7 +75,7 @@ _CHECK_BY_HAND = frozenset(
     {GttEvent.TRIGGERED, GttEvent.CHILD_MISSED, GttEvent.MISMATCH, GttEvent.OTHER_TERMS}
 )
 #: The follower's findings after the close in an alert's words (RESTING alerts nothing).
-_AFTER_CLOSE = {
+FINDING_WORDS = {
     GttEvent.IN_FLIGHT: "is no longer resting",
     GttEvent.TRIGGERED: "fired",
     GttEvent.CHILD_MISSED: "fired with no child order found",
@@ -90,8 +90,6 @@ _AFTER_CLOSE = {
 _MAY_HAVE_FIRED = frozenset(
     {GttEvent.IN_FLIGHT, GttEvent.TRIGGERED, GttEvent.CHILD_MISSED, GttEvent.MISMATCH}
 )
-#: What a carried leg's stop GTT not confirmed asks of the operator.
-_PLACE_BY_HAND = "place its stop GTT in OpenAlgo by hand before the next open"
 _LAG_NS = round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
 
 
@@ -170,10 +168,9 @@ class CarriedLegs:
         if known is None or known.purpose is not Purpose.STOP or trader.open_units() == 0:
             self._other_after_close(trader, known, outcome)
             return
-        found = _AFTER_CLOSE[outcome.event]
-        why = f"its stop GTT {outcome.trigger_id} {found} after the close"
+        why = f"it {FINDING_WORDS[outcome.event]} after the close"
         if outcome.message:
-            why += f" ({outcome.message})"
+            why += f": {outcome.message}"
         fired = outcome.event in _MAY_HAVE_FIRED
         self._not_confirmed(trader, outcome.gtt_id, why, fired=fired)
 
@@ -192,7 +189,7 @@ class CarriedLegs:
         kind = "GTT order" if known is not None and known.purpose is not Purpose.STOP else "GTT"
         text = (
             f"{trader.name}: {kind} {outcome.trigger_id} of {trader.symbol} {trader.exchange} "
-            f"{_AFTER_CLOSE[event]} after the session's close: the session follows it no more"
+            f"{FINDING_WORDS[event]} after the session's close: the session follows it no more"
         )
         if event in _CHECK_BY_HAND:
             self._session.alert(AlertKind.ERROR, f"{text}; check the GTT and order books")
@@ -294,17 +291,15 @@ class CarriedLegs:
             gtt_id = int(gtt["gtt_id"])
             row = message.resting.get(known.trigger_id)
             if row is None:
-                why = f"its stop GTT {known.trigger_id} does not rest in the GTT book"
-                return gtt_id, why, True
+                return gtt_id, "it does not rest in the GTT book", True
             triggers, quantity = row
             if quantity == units == round(gtt["quantity_units"]) and any(
                 abs(trigger - gtt["trigger_price"]) < _PAISA for trigger in triggers
             ):
                 return None, "", False
             why = (
-                f"its stop GTT {known.trigger_id} rests for {quantity} units at "
-                f"{', '.join(f'{t:.2f}' for t in triggers)}, not for {units} at "
-                f"{gtt['trigger_price']:.2f}"
+                f"it rests for {quantity} units at {', '.join(f'{t:.2f}' for t in triggers)}, "
+                f"not for {units} at {gtt['trigger_price']:.2f}"
             )
             return gtt_id, why, False
         return None, "no stop GTT of it rests at the broker", False
@@ -321,17 +316,21 @@ class CarriedLegs:
         self._alerted.add(trader.name)
         outcome = protect(trader)
         self._session.event("protect", strategy=trader.name, outcome=outcome)
-        advice = f": {_PLACE_BY_HAND}"
+        advice = f": {PLACE_GTT_BY_HAND}"
         if fired:
             advice = (
                 "; it may have fired: check the order book and the position first, then "
-                f"{_PLACE_BY_HAND}"
+                f"{PLACE_GTT_BY_HAND}"
             )
-        self._session.alert(
-            AlertKind.ERROR,
+        held = (
             f"{trader.name}: {trader.symbol} {trader.exchange} {trader.open_units():g} units "
-            f"carried overnight, but {why}{advice}",
+            "carried overnight"
         )
+        if known is None:
+            text = f"{held}, but {why}{advice}"
+        else:
+            text = f"{held}, and its stop GTT {known.trigger_id} is not confirmed ({why}){advice}"
+        self._session.alert(AlertKind.ERROR, text)
 
     def _settled(self, trader: Trader, read_ns: int) -> bool:
         """Whether `trader`'s own fills had settled for a read begun at `read_ns`: no order
@@ -357,4 +356,4 @@ def _unconfirmed_gtts(trader: Trader) -> list[dict[str, Any]]:
     return named
 
 
-__all__ = ["REFERENCES_KEY", "UNCONFIRMED_KEY", "CarriedLegs", "LegReference"]
+__all__ = ["FINDING_WORDS", "REFERENCES_KEY", "UNCONFIRMED_KEY", "CarriedLegs", "LegReference"]

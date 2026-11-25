@@ -57,7 +57,14 @@ from typing import Any
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
 from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
-from ._stops_gtt import gtt_cancelling, gtt_trigger_id, gtt_words, overnight
+from ._stops_gtt import (
+    CHECK_THEN_PLACE,
+    gtt_cancelling,
+    gtt_trigger_id,
+    gtt_unconfirmed,
+    gtt_words,
+    overnight,
+)
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import MARKET, Purpose
@@ -159,6 +166,9 @@ def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     held = stops.day.words(trader, check=advice == _CHECK)
     if held is not None:
         return "; ".join([*parts, held])
+    if overnight(trader) and gtt_unconfirmed(trader):
+        # Carried with no stop GTT the close confirmed: it may have fired (`_stops_gtt`).
+        return "; ".join([*parts, CHECK_THEN_PLACE])
     if advice == _CHECK:
         return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts

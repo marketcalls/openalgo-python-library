@@ -32,6 +32,11 @@ from ._plan_catch_up import INSTRUMENT
 RESTING = frozenset({"Active", "ModifyPending"})
 REQUESTED = "Requested"
 CANCEL_PENDING = "CancelPending"
+#: What a carried leg whose stop GTT the close did not confirm asks of the operator.
+PLACE_GTT_BY_HAND = "place its stop GTT in OpenAlgo by hand before the next open"
+#: The same in a line of a leg left open, which the operator reads once the session ended:
+#: a stop GTT gone from the book may have fired, so the books come first.
+CHECK_THEN_PLACE = f"check the order book and the position, then {PLACE_GTT_BY_HAND}"
 
 
 def overnight(trader: Any) -> bool:
@@ -110,12 +115,19 @@ def gtt_words(trader: Any) -> str:
     if unconfirmed:
         gtt = unconfirmed[-1]
         return (
-            f"{_name(trader, gtt)} not confirmed at the broker after the close: "
-            f"{_unconfirmed(trader, gtt)}"
+            f"{_name(trader, gtt)} not confirmed at the broker after the close "
+            f"({_unconfirmed(trader, gtt)})"
         )
     if any(gtt["state"] == REQUESTED for gtt in gtts):
         return f"{_name(trader, gtts[-1])} not confirmed at the broker yet"
     return ""
+
+
+def gtt_unconfirmed(trader: Any) -> bool:
+    """Whether the leg has a stop GTT the close's read did not confirm and none resting
+    confirmed: its line asks the operator to check the books, then place it by hand."""
+    gtts = stop_gtts(trader)
+    return not resting_gtts(trader) and any(_unconfirmed(trader, gtt) for gtt in gtts)
 
 
 def gtt_trigger_id(trader: Any) -> str:
@@ -137,12 +149,15 @@ def _name(trader: Any, gtt: dict[str, Any]) -> str:
 
 __all__ = [
     "CANCEL_PENDING",
+    "CHECK_THEN_PLACE",
+    "PLACE_GTT_BY_HAND",
     "REQUESTED",
     "RESTING",
     "gtt_cancelling",
     "gtt_cover",
     "gtt_guarded",
     "gtt_trigger_id",
+    "gtt_unconfirmed",
     "gtt_waiting",
     "gtt_words",
     "overnight",

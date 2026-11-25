@@ -37,8 +37,9 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
-from ._gtt_types import MISSED_DAY, PRICE_UNVERIFIED, GttAction, GttAnswer, GttOutcome
+from ._gtt_types import MISSED_DAY, PRICE_UNVERIFIED, GttAction, GttAnswer, GttEvent, GttOutcome
 from ._journal_gtt_rows import GttTerms
+from ._session_carry import FINDING_WORDS
 from ._session_trader import Trader
 from ._stops_kernel import protect
 from ._types import LOGGER_NAME, AlertKind, OrderStatus, OrderUpdate, Purpose
@@ -62,6 +63,8 @@ class GttNewsHandler:
 
     def __init__(self, session: Any) -> None:
         self._session = session
+        # The (journal GTT, finding) of each GTT named as no strategy's of the session.
+        self._strangers: set[tuple[int, GttEvent]] = set()
 
     def take(self, news: GttAnswer | GttOutcome) -> None:
         """Apply one GTT answer or finding (module docstring)."""
@@ -70,9 +73,13 @@ class GttNewsHandler:
             trader = self._session.trader_named(strategy)
         except LiveError:
             logger.error("GTT news of %s, which runs in no strategy of the session", strategy)
+            if isinstance(news, GttOutcome):
+                self._stranger(news, f"and {strategy} does not run in this session")
             return
         if trader.gtts is not None and isinstance(news, GttOutcome):
             news = trader.gtts.local(news)
+            if not trader.finished and trader.gtts.gtt_found(news) is None:
+                self._stranger(news, "and the session neither placed it nor continued it")
         if trader.gtts is None or trader.finished:
             logger.warning("%s: GTT news after its kernel session ended: %r", strategy, news)
             if trader.gtts is not None and isinstance(news, GttOutcome):
@@ -202,6 +209,22 @@ class GttNewsHandler:
 
     def _unresolved(self, trader: Trader, why: str) -> None:
         lock_unresolved(self._session, trader, why)
+
+    def _stranger(self, outcome: GttOutcome, why: str) -> None:
+        """A finding about a GTT of the journal no strategy of the session holds (a
+        strategy that does not run in it, or a GTT it did not continue): an ERROR alert
+        once per GTT and finding, never only a log line (the lead's ruling N5a-4); a GTT
+        that rests is named by nothing."""
+        key = (outcome.seq, outcome.event)
+        if outcome.event is GttEvent.RESTING or key in self._strangers:
+            return
+        self._strangers.add(key)
+        self._session.alert(
+            AlertKind.ERROR,
+            f"{outcome.strategy}: GTT {outcome.trigger_id} of {outcome.symbol} "
+            f"{outcome.exchange} {FINDING_WORDS[outcome.event]}, {why}: no engine follows "
+            "it, so check the GTT and order books in OpenAlgo",
+        )
 
 
 def lock_unresolved(session: Any, trader: Trader, why: str) -> None:

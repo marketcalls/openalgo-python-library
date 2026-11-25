@@ -196,6 +196,13 @@ def test_each_table_is_a_dataframe_with_its_columns(day, table):
     assert list(frame.columns) == COLUMNS[table]
 
 
+def test_the_trades_are_each_strategys_closed_trades_with_its_name_and_entry_day_first(day):
+    trades = day.results["BuyAndHold"].trades
+    assert list(day.trades.columns) == ["strategy", "entry_day", *trades.columns]
+    assert list(day.trades["strategy"]) == ["BuyAndHold"]
+    assert list(day.trades["entry_day"]) == [DAY]
+
+
 def test_the_result_is_frozen(day):
     with pytest.raises(AttributeError):
         day.mode = "sandbox"

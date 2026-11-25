@@ -79,7 +79,13 @@ not it has rows.
   strategy's version id, broker order ID, purpose, how far it got at the broker and its
   final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
-  released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`).
+  released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`),
+  and the flags the broker's side gave it (`flags`: "price_unverified" for a fired GTT's
+  child the books did not price, recorded at its limit; "missed_day" for one that fired on
+  a trading day no session ran; the contract note holds the true price). `trades`: every
+  round trip this start's strategies closed, each strategy's `results` trades one after
+  the other with `strategy` and `entry_day` first (a position carried from an earlier day
+  shows the day it was entered) and its fills' `flags` last.
 - `fill_comparison`: each fill of the day's orders (every start's, as `summary`) against
   the price a backtest of the session's own bars fills the same order at: `strategy`,
   `version_id`, `symbol`, `exchange`, `order_id`, `purpose` (entry, add, exit, stop,
@@ -109,7 +115,9 @@ not it has rows.
   session without one has none of these columns. `skipped_decisions`: the strategy bars
   whose `on_bar` was skipped for missing data.
 - `open_positions`: the positions still open at the end, each with its stop at the
-  broker, whether that stop was confirmed working, and a note saying what to do; after
+  broker, whether that stop was confirmed working, and a note saying what to do (a CNC or
+  NRML leg carried overnight names its stop GTT by trigger ID, confirmed when the close's
+  read of the GTT book showed it resting with the session's terms); after
   the legs, a row per instrument several strategies share whose net OpenAlgo shows as a
   position or differs from their sum, named by its members ("A and B"), with that net
   and whether it equals their sum (confirmed when it does and each member's stop is).
@@ -171,6 +179,7 @@ class SessionResult:
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame
+    trades: pd.DataFrame
     fill_comparison: pd.DataFrame
     drift: pd.DataFrame
     unprotected: pd.DataFrame
