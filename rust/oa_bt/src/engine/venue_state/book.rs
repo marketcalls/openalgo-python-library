@@ -3,12 +3,13 @@
 //! restart is reported with its entry, its excursion so far and its slippage) and the
 //! session's CNC buys (the sale credit).
 
-use crate::exec::{InstrumentId, OrderBook, OrderId};
+use crate::exec::{FillFlags, InstrumentId, OrderBook, OrderId};
 use crate::portfolio::{Position, PositionKey, SubAccount, Tranche};
 
 use super::super::excursion::Excursion;
 use super::super::excursion_hold::{Hold, ReplacedTerms, SliceTicks};
 use super::super::output::OpenTrade;
+use super::desk::{read_flags, write_flags};
 use super::error::LiveStateError;
 use super::orders::Ids;
 use super::requests::{key_fields, read_instrument, read_key, read_order_type, read_side};
@@ -180,7 +181,8 @@ fn read_hold(read: &Read<'_>, ids: &Ids) -> Result<Hold, LiveStateError> {
 
 /// A round trip still open: its entry, what it has traded so far, its gross P&L, its
 /// initial risk, its excursion so far (unrounded rupees, the last slice with a fill of it
-/// inside the bar, and what holds it back, `write_hold`) and its slippage so far.
+/// inside the bar, and what holds it back, `write_hold`), its slippage so far, and the
+/// flags of its fills so far.
 pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValue {
     let [instrument, product] = key_fields(trade.key);
     let excursion = &trade.excursion;
@@ -207,12 +209,15 @@ pub(super) fn write_open_trade(book: &OrderBook, trade: &OpenTrade) -> StateValu
         ticks,
         replaced,
         ("slippage_rupees", trade.slippage.into()),
+        ("flags", write_flags(trade.flags)),
     ])
 }
 
-/// The round trip `write_open_trade` wrote, its orders named by their new ids (`ids`).
-/// Errors: `Malformed` for a field missing or unusable, or an order that is not a saved
-/// working order.
+/// The round trip `write_open_trade` wrote, its orders named by their new ids (`ids`). A
+/// trade saved without its flags (a layout 6 state written before they were kept) has
+/// none.
+/// Errors: `Malformed` for a field missing or unusable, a flag no flag's name, or an order
+/// that is not a saved working order.
 pub(super) fn read_open_trade(
     read: &Read<'_>,
     instruments: usize,
@@ -238,6 +243,10 @@ pub(super) fn read_open_trade(
             hold: read_hold(read, ids)?,
         },
         slippage: read.opt_f64_of("slippage_rupees")?,
+        flags: match read.added("flags")? {
+            Some(flags) => read_flags(&flags)?,
+            None => FillFlags::NONE,
+        },
     })
 }
 
@@ -272,12 +281,12 @@ mod tests {
     use crate::model::{Product, Side};
 
     #[test]
-    fn an_open_trade_keeps_its_excursion_and_slippage_through_a_restart() {
+    fn an_open_trade_keeps_its_excursion_slippage_and_flags_through_a_restart() {
         // Long 100 since slice 12, a fill inside slice 40's bar, its worst running P&L
         // -310.25 and its best 120.50 so far, ticks of slice 41 from 501.20 to 503.05,
-        // slippage 3.40 so far; and one whose fills the venue priced (no slippage), none
-        // inside a bar and no tick. Neither waits on an order (a restart that keeps one:
-        // tests/excursion_live.rs).
+        // slippage 3.40 so far, no flag; and one whose fills the venue priced (no
+        // slippage), none inside a bar and no tick, its entry's price unverified. Neither
+        // waits on an order (a restart that keeps one: tests/excursion_live.rs).
         let trade = OpenTrade {
             key: PositionKey {
                 instrument: InstrumentId(0),
@@ -308,10 +317,12 @@ mod tests {
                 },
             },
             slippage: Some(3.4),
+            flags: FillFlags::NONE,
         };
         let venue_priced = OpenTrade {
             excursion: Excursion::default(),
             slippage: None,
+            flags: FillFlags::PRICE_UNVERIFIED,
             ..trade.clone()
         };
         let (book, ids) = (OrderBook::default(), Ids { pairs: Vec::new() });
@@ -359,6 +370,7 @@ mod tests {
                 ..Excursion::default()
             },
             slippage: None,
+            flags: FillFlags::NONE,
         };
         let value = write_open_trade(&OrderBook::default(), &trade);
         let read = read_open_trade(&Read::root(&value), 1, &Ids { pairs: Vec::new() });

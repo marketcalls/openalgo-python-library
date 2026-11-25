@@ -19,6 +19,7 @@ use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::kernel::Engine;
+use super::rearm::StopAsk;
 use super::venue::Replacement;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::ExitRequest;
@@ -136,7 +137,8 @@ impl Engine {
         if self.rearms_daily(key) && self.before_session_open(&at) {
             return Ok(Protect::WaitsForOpen);
         }
-        self.sync_leg_stop(at, key)?;
+        // Placed even while the leg's expiry exit is due, as a GTT leg's stop is (`rearm`).
+        self.sync_leg_stop(at, key, StopAsk::Protect)?;
         Ok(match self.working_leg_stop(key) {
             Some(_) => Protect::Placed,
             // Only a rearm_daily leg whose stop the price has crossed is exited here.
