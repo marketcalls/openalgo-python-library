@@ -148,7 +148,7 @@ def test_a_place_is_confirmed_by_the_gtt_resting_in_a_read_made_at_once(rig, bro
         1,
         FIRST_TRIGGER,
     )
-    # The leg's units are read before the GTT book: the baseline of a GTT gone later.
+    # The leg's units are read before the GTT book: the reference of a GTT gone later.
     assert calls(broker)[-4:] == ["placegttorder", "positionbook", "holdings", "gttorderbook"]
     assert journal_gtt(rig, 1).state is GttState.ACTIVE
 
@@ -727,7 +727,7 @@ def test_a_cancel_soon_after_a_partial_exit_is_cancelled(rig, broker):
     bought(broker)
     seq = placed(rig)
     # The partial exit (20-positional-live 2): the stop modified to the 5 units left, then
-    # the session's own exit sells 5. The GTT's baseline moves with the session's own fill.
+    # the session's own exit sells 5. The GTT's reference moves with the session's own fill.
     rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
     rig.run(rig.own_exit(5))
     rig.clock.advance(2.0)
@@ -797,7 +797,7 @@ def test_a_cancel_of_a_stop_that_fired_just_after_an_own_exit_is_refused(
     rig, broker, history, hidden_reads, sign
 ):
     # Every fill is the session's own: its entry of 10, settled before a read gives the
-    # stop its baseline, then the partial exit (the stop modified to the 5 left, then the
+    # stop its reference, then the partial exit (the stop modified to the 5 left, then the
     # exit sells 5).
     rig.run(rig.own_entry(UNITS))
     seq = placed(rig)

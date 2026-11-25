@@ -8,7 +8,7 @@ the active ones only, where they are simply gone.
 
 The worker runs on the fake OpenAlgo (`gtt_samples`): the account bought 10 SBIN CNC at
 800.00, and the stop GTT (sell 10 at a trigger of 790.00, child limit 780.00) rests with that
-position as its baseline. Expected prices and units are worked by hand from the scenario.
+position as its reference. Expected prices and units are worked by hand from the scenario.
 """
 
 from __future__ import annotations
@@ -402,11 +402,13 @@ def test_a_missed_child_with_no_trade_in_the_trade_book_is_priced_at_its_limit_f
     rig.worker.close()
 
 
-@SHAPES
 def test_a_gtt_gone_with_the_position_unchanged_ended_outside_the_session(
-    make_fake_openalgo, tmp_path, history
+    make_fake_openalgo, tmp_path
 ):
-    fake, rig, _ = world(make_fake_openalgo, tmp_path, history=history)
+    # A book of active GTTs only: the GTT is simply gone. A history row that says it
+    # triggered is never taken as ended outside the session (the lead's ruling N3b-0 (a),
+    # `test_gtt_replace_gap.py`).
+    fake, rig, _ = world(make_fake_openalgo, tmp_path, history=False)
     fake.set_gtt_status(FIRST_TRIGGER, "triggered")
 
     news = rig.send(ReadGtts()) + until_settled(rig)
@@ -452,7 +454,7 @@ def test_a_gtt_first_seen_gone_with_no_reference_cannot_be_told(make_fake_openal
     restarted.worker.close()
 
 
-def test_a_restart_does_not_judge_a_gtt_gone_unseen_by_the_baseline_the_journal_kept(
+def test_a_restart_does_not_judge_a_gtt_gone_unseen_by_a_day_one_reference(
     make_fake_openalgo, tmp_path
 ):
     fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
@@ -466,7 +468,7 @@ def test_a_restart_does_not_judge_a_gtt_gone_unseen_by_the_baseline_the_journal_
 
     news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
 
-    # The day-1 baseline is not a reference (`_gtt_units`), and no read of this process
+    # The journal keeps no reference (`_gtt_units`), and no read of this process
     # showed the stop resting: whether it fired cannot be told, and the journal keeps it
     # triggered for the user to settle.
     assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
@@ -510,9 +512,9 @@ def test_a_restart_never_takes_an_own_exit_that_filled_while_no_session_ran_for_
 
     news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
 
-    # The restart hears the exit's fill. Against the baseline of 10 the earlier process
-    # kept, the 5 the books show would read as the stop's 5 sold with its child missed: a
-    # sale that never happened. Nothing judges the gone stop instead.
+    # The restart hears the exit's fill. Against the 10 the earlier process last read, the
+    # 5 the books show would read as the stop's 5 sold with its child missed: a sale that
+    # never happened. Nothing judges the gone stop instead.
     assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
     assert fake.position("SBIN", "NSE") == 5
     restarted.worker.close()
@@ -567,8 +569,8 @@ def test_a_gtt_cancelled_by_hand_after_a_partial_exit_ended_outside_the_session(
 
     news = rig.send(ReadGtts()) + until_settled(rig)
 
-    # The position fell from 10 to 5 by the session's own exit, not by the GTT: its
-    # baseline moves with the session's own fills.
+    # The position fell from 10 to 5 by the session's own exit, not by the GTT: the units
+    # it is judged against move with the session's own fills.
     assert fake.position("SBIN", "NSE") == 5
     expected = [GttEvent.ENDED_OUTSIDE] if history else [GttEvent.IN_FLIGHT, GttEvent.ENDED_OUTSIDE]
     assert events(news) == expected
@@ -592,22 +594,10 @@ def test_a_gtt_that_fired_after_a_partial_exit_fired_with_its_child_missed(
     rig.worker.close()
 
 
-def test_the_baseline_a_partial_exit_moved_is_noted_in_the_journal(make_fake_openalgo, tmp_path):
-    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
-    partly_exited(rig, seq, 5)
-
-    # The worker takes the exit's fill at its next step, with no read of the GTT book.
-    rig.worker.step()
-
-    with rig.journal() as journal:
-        assert journal.gtt(seq).baseline_units == 5
-    rig.worker.close()
-
-
 def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(
     make_fake_openalgo, tmp_path
 ):
-    fake, rig, _ = world(make_fake_openalgo, tmp_path)
+    fake, rig, _ = world(make_fake_openalgo, tmp_path, history=False)
     fake.set_gtt_status(FIRST_TRIGGER, "triggered")
     rig.send(ReadGtts())
 
@@ -621,9 +611,12 @@ def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(
 # ----- the session's own fills on the leg, not settled yet (16-session-design 5.3, F78) ---------
 
 
-def baseline(rig, seq):
-    with rig.journal() as journal:
-        return journal.gtt(seq).baseline_units
+def expected_units(rig, seq):
+    """The units GTT `seq`'s leg would hold had it not fired: its reference moved by the
+    session's own fills on the leg since (`_gtt_units.Reference.expected`)."""
+    follower = rig.worker._started.gtts.follower
+    leg = ("SBIN", "NSE", "CNC")
+    return follower._references.of(seq).expected(follower._reader.own.units(leg))
 
 
 def test_a_read_while_the_exits_word_is_on_its_way_counts_the_exit_once(
@@ -639,7 +632,7 @@ def test_a_read_while_the_exits_word_is_on_its_way_counts_the_exit_once(
 
     rig.step_for(2.0)
 
-    assert baseline(rig, seq) == 5
+    assert expected_units(rig, seq) == 5
     rig.worker.close()
 
 
@@ -661,7 +654,7 @@ def lagged_through_a_read(fake, rig, seq, *, on_the_clock=False):
 
 
 @pytest.mark.parametrize("on_the_clock", [False, True], ids=["a read asked for", "on the clock"])
-def test_a_read_while_the_position_book_lags_the_exit_keeps_the_baseline_the_exit_moved(
+def test_a_read_while_the_position_book_lags_the_exit_keeps_the_units_the_exit_moved(
     make_fake_openalgo, tmp_path, on_the_clock
 ):
     fake, rig, seq = world(make_fake_openalgo, tmp_path, market_open=lambda now_ns: on_the_clock)
@@ -673,7 +666,7 @@ def test_a_read_while_the_position_book_lags_the_exit_keeps_the_baseline_the_exi
     assert gtt_reads(fake) - reads == 2
 
     # 10 units less the exit's 5, never the 10 the lagging book still showed.
-    assert baseline(rig, seq) == 5
+    assert expected_units(rig, seq) == 5
     rig.worker.close()
 
 
@@ -683,7 +676,7 @@ def test_a_read_while_the_position_book_lags_the_exit_keeps_the_baseline_the_exi
     ids=["cancelled by hand", "fired, its child never listed"],
 )
 @SHAPES
-def test_a_gtt_that_ends_after_a_read_of_a_lagging_book_is_judged_by_the_baseline_the_exit_moved(
+def test_a_gtt_that_ends_after_a_read_of_a_lagging_book_is_judged_by_the_units_the_exit_moved(
     make_fake_openalgo, tmp_path, history, ending, decided
 ):
     fake, rig, seq = world(make_fake_openalgo, tmp_path, history=history)
@@ -759,8 +752,6 @@ def test_a_gone_gtt_waits_for_an_own_fill_that_comes_during_the_wait_to_settle(
     # 10 units less the exit's 5 against the 5 the books show: unchanged, ended outside
     # the session, never a MISMATCH 90 s after it went while the fill settles.
     assert (events(waited), events(settled)) == ([], [GttEvent.ENDED_OUTSIDE])
-    with rig.journal() as journal:
-        assert journal.gtt(seq).baseline_units == 5
     rig.worker.close()
 
 

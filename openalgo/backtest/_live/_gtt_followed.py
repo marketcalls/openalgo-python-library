@@ -3,12 +3,10 @@ journal binding with what the follower knows of it since (`Followed`), the endin
 row shows and the outcome each is (`ENDINGS`), and the outcome posted to the loop for it
 (`outcome_of`). Pure: the follower reads the books and the journal.
 
-**The baseline** (3.3, 4.3) a GTT keeps in the journal is the units its leg would hold had
-it not fired: its reference moved by the session's own fills since (`_gtt_units`). A
-partial exit that sold 5 of 10 while the stop rested leaves a baseline of 5, so the exit
-is never taken for the GTT firing. A restart does not take it back as the GTT's reference
-(`_gtt_units` says why); `Followed.kept` is the figure last noted, so an unchanged one is
-not written again.
+A GTT whose modify could not be told and whose cancel to place it again was refused for
+its firing is followed with the modify's terms too (`Followed.also`, the lead's ruling
+N3b-0 (a)): the broker may hold either, so its child is looked for, and its leg's units
+judged, by both.
 
 Times are UTC nanoseconds, prices rupees, quantities signed whole units.
 """
@@ -20,7 +18,7 @@ from dataclasses import dataclass
 from ._gtt_book import GttRow, Seen
 from ._gtt_reads import LegKey
 from ._gtt_types import GttEvent, GttOutcome
-from ._journal_gtt_rows import GttBinding
+from ._journal_gtt_rows import GttBinding, GttTerms
 
 #: How each ending the book shows is noted, and the outcome it is.
 ENDINGS = {
@@ -32,21 +30,21 @@ ENDINGS = {
 
 @dataclass
 class Followed:
-    """A GTT followed: its journal binding, the baseline the journal keeps for it (module
-    docstring; None before any) and when the last read that showed it resting began, and
-    once it fired or is gone, since when and when its child is looked for next (the
-    sandbox's child, when its row names one); whether its unknown status was alerted, and
+    """A GTT followed: its journal binding, when the last read that showed it resting
+    began, and once it fired or is gone, since when and when its child is looked for next
+    (the sandbox's child, when its row names one); whether its unknown status was alerted,
     the broker's trigger prices and units a resting row showed against the journal's terms
-    that were reported (`other_terms`)."""
+    that were reported (`other_terms`), and the terms of a modify the broker may hold
+    instead of the journal's (`also`, module docstring; None for none)."""
 
     gtt: GttBinding
-    kept: int | None = None
     active_ns: int | None = None
     since_ns: int | None = None
     next_ns: int = 0
     child: str | None = None
     warned: bool = False
     reported_terms: tuple[tuple[float, ...], int] | None = None
+    also: GttTerms | None = None
 
     @property
     def leg(self) -> LegKey:

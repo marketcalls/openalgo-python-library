@@ -4,15 +4,18 @@ worker's GTT confirmations (`_gtt_send`) read the books and act on what these gi
 GTT's leg's units say of it is `_gtt_units`'.
 
 - **The child** (`child_candidates`, 3.2 rule 2): an order of the order book on the GTT's
-  symbol, exchange, product and side, for its units, placed at or after the last read that
+  symbol, exchange, product and side, for its units (or for the units of a modify that
+  cannot be told, which the broker may hold instead: the lead's ruling N3b-0 (a)), placed
+  at or after the last read that
   showed the GTT resting (less the clock skew the preflight allows, as an unbound intent's
   order is looked for: `_order_book.CLOCK_SKEW_LIMIT_NS`), and taken by nothing of the
   session (no intent of the journal is bound to it, nor is it another GTT's child). A row
   whose units or time cannot be read is a possible child the engine cannot tell apart
   (`unsure`): with any, or with more than one sure, the engine never guesses (rule 5).
 - **A missed child's price** (`missed_price`): the trade book's trades of the leg on the
-  GTT's side by orders the session did not send, newest first, for the GTT's units,
-  averaged; None when the trade book holds none (the GTT's limit stands in, flagged).
+  GTT's side by orders the session did not send, newest first, for the units of the terms
+  it fired on, averaged; None when the trade book holds none (the limit of those terms
+  stands in, flagged).
 
 Times are UTC nanoseconds, prices rupees, quantities signed whole units.
 """
@@ -25,7 +28,7 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._journal_gtt_rows import GttBinding
+from ._journal_gtt_rows import GttBinding, GttTerms
 from ._order_book import CLOCK_SKEW_LIMIT_NS, book_time_ns
 from ._order_updates import units
 from ._reconcile_rules import adoption_price, leg_books
@@ -61,9 +64,12 @@ def child_candidates(
     *,
     since_ns: int | None,
     taken: Callable[[str], bool],
+    also: GttTerms | None = None,
 ) -> Candidates:
     """The orders of `rows` (the order book's) that may be `gtt`'s child (module
-    docstring), placed at or after `since_ns` (any time for None)."""
+    docstring), placed at or after `since_ns` (any time for None): for the units of its
+    terms, or of `also` (a modify that cannot be told)."""
+    quantities = {gtt.terms.quantity} | ({also.quantity} if also is not None else set())
     earliest = None
     if since_ns is not None:
         earliest = since_ns - since_ns % NANOS_PER_SECOND - CLOCK_SKEW_LIMIT_NS
@@ -78,7 +84,7 @@ def child_candidates(
         except LiveError:
             unsure.append(order_id)
             continue
-        if quantity != gtt.terms.quantity:
+        if quantity not in quantities:
             continue
         placed_ns = book_time_ns(row.get("timestamp"))
         if placed_ns is None:
@@ -89,16 +95,19 @@ def child_candidates(
 
 
 def missed_price(
-    gtt: GttBinding, tradebook: Mapping[str, Any] | None, taken: Callable[[str], bool]
+    gtt: GttBinding,
+    terms: GttTerms,
+    tradebook: Mapping[str, Any] | None,
+    taken: Callable[[str], bool],
 ) -> float | None:
-    """The price of `gtt`'s missed child from the trade book's answer (module docstring);
-    None when it holds no such trade or could not be read."""
+    """The price of `gtt`'s missed child, fired on `terms`, from the trade book's answer
+    (module docstring); None when it holds no such trade or could not be read."""
     if tradebook is None:
         return None
     books = leg_books({}, tradebook, {}, gtt.symbol, gtt.exchange, product=gtt.product)
     others = [trade for trade in books.trades or () if not taken(trade.order_id)]
     try:
-        return adoption_price(others, gtt.terms.quantity, gtt.terms.side)
+        return adoption_price(others, terms.quantity, terms.side)
     except ValueError:
         return None
 

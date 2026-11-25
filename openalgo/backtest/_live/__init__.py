@@ -51,10 +51,11 @@ the values both hash, `_version_values`),
 holidays against the tables), and `_fill_comparison` (each fill against a backtest of the
 same bars, priced by `_session_slippage`); `_exit_reasons` names why an order closes a
 position. The order worker's GTT parts (20-positional-live 3) are `_gtt_send` (each GTT
-request sent journal first and confirmed by the GTT book, `_gtt_confirm`, and by the
-order book, `_gtt_checks`) and `_gtt_follow` (the GTTs the broker holds followed, each
-one's record `_gtt_followed`, a fired GTT's child found, `_gtt_child`, each finding
-posted, `_gtt_outcomes`), on `_gtt_calls` and `_gtt_reads`; a GTT's leg's units are
+request sent journal first and confirmed, `_gtt_send_confirm`, by the GTT book,
+`_gtt_confirm`, and by the order book, `_gtt_checks`) and `_gtt_follow` (the GTTs the
+broker holds followed, what it takes in `_gtt_follow_intake`, each one's record
+`_gtt_followed`, a fired GTT's child found, `_gtt_child`, each finding posted,
+`_gtt_outcomes`), on `_gtt_calls` and `_gtt_reads`; a GTT's leg's units are
 judged against its reference by `_gtt_units` (the session's own fills on a leg, settled or
 not, are the order path's `_own_fills`); their values
 are `_gtt_types` and the book's rows `_gtt_book`; `_gtt_flight` holds a leg in flight for

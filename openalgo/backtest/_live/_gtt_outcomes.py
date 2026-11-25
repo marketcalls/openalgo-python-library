@@ -11,10 +11,12 @@ a GTT's child (3.2 rule 2: `taken`).
 **A GTT gone with no child found** (`gone`, 3.3; the lead's ruling M4 on N3a's review
 round 5) is decided by what its leg's units say against its reference (`_gtt_units`):
 fallen (or, for a strategy's GTT entry, risen) by its units, it fired with its child
-missed; unchanged, it ended outside the session; moved by anything else, or with no
-reference, a MISMATCH. A read made while the session's own fills on the leg had not settled,
-or whose units could not be read, decides nothing until the wait for a settled read is
-over (`_gtt_reads.BookRead.waited_out`): then it is a MISMATCH too.
+missed; unchanged, it ended outside the session, unless the book's row says it triggered
+(the lead's ruling N3b-0 (a): a child of it may work unlisted, so it is a MISMATCH); moved
+by anything else, or with no reference, a MISMATCH. A read made while the session's own
+fills on the leg had not settled, or whose units could not be read, decides nothing until
+the wait for a settled read is over (`_gtt_reads.BookRead.waited_out`): then it is a
+MISMATCH too.
 
 Prices are rupees, quantities whole units. Used by the worker's thread only.
 """
@@ -29,7 +31,7 @@ from ._gtt_child import missed_price
 from ._gtt_followed import Followed, outcome_of
 from ._gtt_types import PRICE_UNVERIFIED, GttEvent
 from ._gtt_units import UNTOLD, LegUnits, References, UnitsSign, went
-from ._journal_gtt_rows import GttState
+from ._journal_gtt_rows import GttState, GttTerms
 from ._types import LOGGER_NAME
 from .inbox import GttNews, Message
 from .journal import Journal
@@ -67,18 +69,20 @@ class GttOutcomes:
         self._stop(followed.gtt.seq)
         self.post(followed, GttEvent.TRIGGERED, order_id=child)
 
-    def missed(self, followed: Followed, tradebook: Mapping[str, Any] | None) -> None:
-        """`followed`'s GTT fired with its child missed: its units at the price of
-        `tradebook`'s trades (the trade book's answer, None when not read), or at its limit
-        flagged; the journal notes it fired."""
+    def missed(
+        self, followed: Followed, terms: GttTerms, tradebook: Mapping[str, Any] | None
+    ) -> None:
+        """`followed`'s GTT fired on `terms` with its child missed: their units at the
+        price of `tradebook`'s trades (the trade book's answer, None when not read), or at
+        their limit flagged; the journal notes it fired."""
         gtt = followed.gtt
-        price = missed_price(gtt, tradebook, self.taken)
+        price = missed_price(gtt, terms, tradebook, self.taken)
         flags = () if price is not None else (PRICE_UNVERIFIED,)
-        price = gtt.terms.limit_price if price is None else price
-        note = f"fired, its child missed: {gtt.terms.quantity} units at {price:.2f}"
+        price = terms.limit_price if price is None else price
+        note = f"fired, its child missed: {terms.quantity} units at {price:.2f}"
         self._journal.set_gtt_state(gtt.seq, GttState.FIRED, note=note)
         self._stop(gtt.seq)
-        units = gtt.terms.quantity
+        units = terms.quantity
         self.post(followed, GttEvent.CHILD_MISSED, units=units, price=price, flags=flags)
 
     def unresolved(self, followed: Followed, words: str, candidates: tuple[str, ...] = ()) -> None:
@@ -100,12 +104,21 @@ class GttOutcomes:
         *,
         waited_out: bool,
         trades: Callable[[], Mapping[str, Any] | None],
+        triggered: bool = False,
     ) -> None:
         """`followed`'s GTT is gone with no child found: `found` is what its leg's units
         say against its reference, `waited_out` whether the wait for the leg to settle is
-        over, and `trades()` reads the trade book (module docstring)."""
+        over, `trades()` reads the trade book, and `triggered` is True when the book's row
+        says it fired (module docstring)."""
         if found.sign is UnitsSign.FIRED:
-            self.missed(followed, trades())
+            self.missed(followed, found.terms or followed.gtt.terms, trades())
+        elif found.sign is UnitsSign.UNCHANGED and triggered:
+            words = (
+                "the GTT book shows it triggered, yet no child of it was found and the "
+                "position is unchanged: its child may work unlisted, so it is not taken as "
+                "ended outside the session"
+            )
+            self.unresolved(followed, words)
         elif found.sign is UnitsSign.UNCHANGED:
             note = "gone with no child found and the position unchanged: ended outside the session"
             self.end(followed, GttEvent.ENDED_OUTSIDE, note)
