@@ -113,11 +113,15 @@ pub enum RejectCode {
     /// An entry or add whose value (units times the price the order is judged at times
     /// the instrument's multiplier) is above `max_order_value` (`engine::daily_caps`).
     OrderValueLimit = 28,
+    /// An order that would open or add on a derivatives contract once its positional exit
+    /// has passed: the square-off time of its positional exit day, or any later day
+    /// (`engine::expiry`). Exits are never refused by it.
+    ContractExpiring = 29,
 }
 
 impl RejectCode {
     /// Every code, in code order.
-    pub const ALL: [RejectCode; 29] = [
+    pub const ALL: [RejectCode; 30] = [
         RejectCode::QuantityRule,
         RejectCode::Tick,
         RejectCode::FreezeQty,
@@ -147,6 +151,7 @@ impl RejectCode {
         RejectCode::DailyProfitGate,
         RejectCode::AccountProfitGate,
         RejectCode::OrderValueLimit,
+        RejectCode::ContractExpiring,
     ];
 
     /// The code string used in events and results.
@@ -181,6 +186,7 @@ impl RejectCode {
             RejectCode::DailyProfitGate => "daily_profit_gate",
             RejectCode::AccountProfitGate => "account_profit_gate",
             RejectCode::OrderValueLimit => "order_value_limit",
+            RejectCode::ContractExpiring => "contract_expiring",
         }
     }
 
@@ -317,6 +323,7 @@ mod tests {
             freeze_quantity_units: Some(1_800),
             cost_segment: None,
             last_trading_day: None,
+            positional_exit_day: None,
         }
     }
 
@@ -400,7 +407,7 @@ mod tests {
     #[test]
     fn codes_are_the_ruled_vocabulary() {
         let codes: Vec<&str> = RejectCode::ALL.iter().map(|code| code.code()).collect();
-        assert_eq!(codes.len(), 29);
+        assert_eq!(codes.len(), 30);
         assert!(codes.contains(&"market_closed") && codes.contains(&"instrument_unknown"));
         assert!(codes.contains(&"scale_in_limit") && codes.contains(&"venue"));
         assert!(codes.contains(&"exit_cover"));
@@ -440,6 +447,11 @@ mod tests {
                 "order_value_limit"
             ]
         );
+    }
+
+    #[test]
+    fn an_entry_after_a_contracts_positional_exit_refuses_with_a_code_of_its_own() {
+        assert_eq!(RejectCode::ContractExpiring.code(), "contract_expiring");
     }
 
     #[test]

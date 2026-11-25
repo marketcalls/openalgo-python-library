@@ -63,6 +63,7 @@ pub fn equity(symbol: &str) -> InstrumentSpec {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: None,
+        positional_exit_day: None,
     }
 }
 

@@ -164,10 +164,13 @@ impl Engine {
     /// blocks it, or send it once nothing does; an exit of a position waits behind an
     /// earlier one of it that still waits, and every exit of a position a margin rejection
     /// holds waits (`venue_group`). Then forget the exits whose orders have all ended, and
-    /// keep the legs' stops on their legs (`venue_legs`).
+    /// keep the legs' stops on their legs (`venue_legs`). First, once the session has
+    /// reached its open, what waited for it goes (`pre_open::reach_session_open`).
     ///
-    /// Errors: those of the order book, of `fills::end_order` and of the leg stops.
+    /// Errors: those of the order book, of `fills::end_order`, of the leg stops and of
+    /// `reach_session_open`.
     pub(super) fn progress_exits(&mut self, at: SendAt) -> Result<(), KernelError> {
+        self.reach_session_open(at)?;
         self.tidy_venue();
         let waiting: Vec<PositionExit> = self
             .venue

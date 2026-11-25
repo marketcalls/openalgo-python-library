@@ -3,6 +3,9 @@
 
 use std::fmt;
 
+use crate::market::calendar::format_day;
+use crate::model::Day;
+
 use super::value::CARRIED_ROOT;
 
 /// Why a saved state was not restored.
@@ -41,6 +44,18 @@ pub enum LiveStateError {
     CarriedMismatch {
         /// What differs.
         reason: String,
+    },
+    /// A carried position on a contract the engine exits before the exchange settles it
+    /// (it has a positional exit day: a stock future, a stock option, every option, an MCX
+    /// delivery contract) whose last trading day is before the session's day: that exit was
+    /// missed (no session ran that day, or the exit did not fill), so the exchange has
+    /// settled the position, by delivery or at its settlement price, which the kernel
+    /// cannot record (`carry`).
+    MissedExpiryExit {
+        /// The contract's symbol.
+        symbol: String,
+        /// Its last trading day.
+        last_trading_day: Day,
     },
 }
 
@@ -89,6 +104,20 @@ impl fmt::Display for LiveStateError {
                 f,
                 "the carried state does not fit this session ({reason}): restore it into the \
                  session of a later trading day that trades its instruments with its capital"
+            ),
+            LiveStateError::MissedExpiryExit {
+                symbol,
+                last_trading_day,
+            } => write!(
+                f,
+                "the carried state holds a position on {symbol}, whose last trading day {} \
+                 has passed: the engine exits such a contract on its positional exit day, \
+                 that exit was missed, and the exchange has settled the position (by \
+                 delivery for a stock future, a stock option or an MCX delivery contract, \
+                 at its settlement price for an index option), which the engine cannot \
+                 record; settle it in the account, then start the strategy without this \
+                 carried state",
+                format_day(*last_trading_day)
             ),
         }
     }

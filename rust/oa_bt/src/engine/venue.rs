@@ -102,6 +102,7 @@ use super::config::{QuantityMode, RunConfig};
 use super::error::KernelError;
 use super::event::{EventStamp, Step};
 use super::kernel::Engine;
+use super::pre_open::PreOpenDesk;
 use super::venue_group::GroupDesk;
 use super::venue_gtts::VenueGtts;
 use super::venue_legs::LegStop;
@@ -225,11 +226,13 @@ pub(super) struct VenueDesk {
     /// The legs' stop GTTs, the strategy's GTT orders and the children of fired GTTs
     /// (`venue_gtts`).
     pub(super) gtts: VenueGtts,
-    /// The flags of the engine's exit orders whose fills are flagged, by order
-    /// (`PositionExit::flags`).
+    /// The flags of the orders whose fills are flagged, by order: the engine's exit orders
+    /// (`PositionExit::flags`), and a late pre-open decision's orders (`pre_open`).
     pub(super) exit_flags: Vec<(OrderId, FillFlags)>,
     /// The session took a saved state (`venue_state`): it takes one once.
     pub(super) restored: bool,
+    /// A daily or longer strategy's pre-open decision and its orders (`pre_open`).
+    pub(super) pre_open: PreOpenDesk,
 }
 
 impl VenueDesk {
@@ -305,10 +308,12 @@ impl Engine {
 
     /// True for a strategy's exit that waits for the orders it cancels: not sent yet.
     pub(super) fn is_unsent(&self, id: OrderId) -> bool {
-        self.venue
+        let waiting_exit = self
+            .venue
             .exits
             .iter()
-            .any(|exit| exit.by == ExitBy::Strategy(id) && exit.sent.is_empty())
+            .any(|exit| exit.by == ExitBy::Strategy(id) && exit.sent.is_empty());
+        waiting_exit || self.waiting_for_open(id)
     }
 
     /// True when the engine's exit holds `key` (`venue_owner`).

@@ -43,8 +43,10 @@ impl CalendarUnit {
         }
     }
 
-    /// First and last calendar date (inclusive) of the period that contains `day`.
-    pub(super) fn range(self, day: Day) -> (Day, Day) {
+    /// First and last calendar date (inclusive) of the period that contains `day`: the
+    /// Monday to Sunday of a week, the first to the last day of a month, a quarter or a
+    /// year.
+    pub fn range(self, day: Day) -> (Day, Day) {
         let months = match self {
             CalendarUnit::Week => {
                 let monday = day - weekday(day) as Day;

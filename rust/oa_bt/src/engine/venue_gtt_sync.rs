@@ -42,7 +42,6 @@ use crate::portfolio::PositionKey;
 use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::Step;
-use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue::SendAt;
 use super::venue_gtts::{GttLegStop, GttTerms};
@@ -112,7 +111,8 @@ impl Engine {
         let Some(record) = self.leg_gtt_of(key) else {
             return Ok(());
         };
-        let trigger = if self.held_units(key) == 0.0 {
+        // No stop of a contract the session has closed the last trading day of (`expiry`).
+        let trigger = if self.held_units(key) == 0.0 || self.contract_has_ended(key.instrument) {
             None
         } else {
             self.stop_trigger(key)?
@@ -326,7 +326,7 @@ impl Engine {
 
     /// True when `key` is a position whose stop a live session holds as a GTT.
     pub(super) fn holds_stop_gtt(&self, key: PositionKey) -> bool {
-        self.is_external() && held_as_gtt(key.product)
+        self.is_external() && self.stop_is_gtt(key.product)
     }
 }
 

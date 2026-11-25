@@ -370,4 +370,5 @@ def test_the_protect_vocabulary_is_the_kernels():
         "flat",
         "market_closed",
         "stop_crossed",
+        "waits_for_open",
     )

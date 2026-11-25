@@ -4,7 +4,7 @@
 //!
 //! | Call | What |
 //! |---|---|
-//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; a resting order sent only to close the position is cancelled first for the room the stop takes (`venue_stop_terms`); says what it did (`Protect`). A CNC or NRML leg's stop is a GTT, placed also while the market is closed, and a leg whose stop the price has crossed is exited instead (`venue_gtt_protect`) |
+//! | `protect(instrument, product)` | place the leg's stop again at its level for what the position's exits leave, when no stop of it works and no exit of the position waits or holds it; a resting order sent only to close the position is cancelled first for the room the stop takes (`venue_stop_terms`); says what it did (`Protect`). A CNC or NRML leg's stop is a GTT, placed also while the market is closed, and a leg whose stop the price has crossed is exited instead (`venue_gtt_protect`); with `positional_stops="rearm_daily"` it is a DAY stop order that waits for the session's open, and the leg is exited then instead when the price is at or beyond the stop (`rearm`) |
 //! | `reprice_exit(order, limit_rupees)` | modify a leg's stop the price has reached and not filled (or an engine exit at a limit) to a LIMIT at `limit_rupees`, for the order's total units (a broker's modify takes the total), a partly filled one too; sent now, or with the venue's answer to a modification of it that waits |
 //! | `request_limit_exit(instrument, product, exit, limit_rupees)` | `request_exit` (`venue_session`) whose orders are LIMIT orders at `limit_rupees`: the price rule's marketable fallback |
 //!
@@ -43,13 +43,18 @@ pub enum Protect {
     MarketClosed,
     /// A CNC or NRML leg's stop: the session's last price is already at or beyond it, so
     /// no GTT was placed and the leg is exited at market, flagged `stop_crossed`
-    /// (`venue_gtt_protect`).
+    /// (`venue_gtt_protect`); or a rearm_daily leg's stop, the price at or beyond it when
+    /// the stop was to be placed again at the open, the leg exited the same way (`rearm`).
     StopCrossed,
+    /// A rearm_daily leg's stop (`positional_stops="rearm_daily"`): the session has not
+    /// reached its open, so the stop is placed at the open, or the leg exited then when
+    /// the price is at or beyond the stop (`rearm`).
+    WaitsForOpen,
 }
 
 impl Protect {
     /// Every outcome's code, in the order of the variants.
-    pub const CODES: [&'static str; 8] = [
+    pub const CODES: [&'static str; 9] = [
         "placed",
         "waits_for_cancels",
         "stop_works",
@@ -58,6 +63,7 @@ impl Protect {
         "flat",
         "market_closed",
         "stop_crossed",
+        "waits_for_open",
     ];
 
     /// The code the bindings use.
@@ -71,6 +77,7 @@ impl Protect {
             Protect::Flat => "flat",
             Protect::MarketClosed => "market_closed",
             Protect::StopCrossed => "stop_crossed",
+            Protect::WaitsForOpen => "waits_for_open",
         }
     }
 }
@@ -126,9 +133,14 @@ impl Engine {
             return Ok(Protect::MarketClosed);
         }
         self.renew_leg_stop(key, false);
+        if self.rearms_daily(key) && self.before_session_open(&at) {
+            return Ok(Protect::WaitsForOpen);
+        }
         self.sync_leg_stop(at, key)?;
         Ok(match self.working_leg_stop(key) {
             Some(_) => Protect::Placed,
+            // Only a rearm_daily leg whose stop the price has crossed is exited here.
+            None if self.has_engine_exit(key) => Protect::StopCrossed,
             None => Protect::WaitsForCancels,
         })
     }

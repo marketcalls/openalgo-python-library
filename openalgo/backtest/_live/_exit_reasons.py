@@ -56,6 +56,7 @@ EXIT_REASON_WORDS: Mapping[str, str] = MappingProxyType(
         "account_loss_limit": "kill switch at the account daily loss limit",
         "daily_profit_target": "daily profit target",
         "account_profit_target": "kill switch at the account daily profit target",
+        "expiry_exit": "exit before the contract's expiry",
     }
 )
 #: The session's own risk exits the kernel records as `MANUAL`, in the trader's terms, by

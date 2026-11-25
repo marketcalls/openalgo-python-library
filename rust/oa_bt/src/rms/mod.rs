@@ -54,8 +54,8 @@ pub use leg::{
     TickOutcome, TrailPlan,
 };
 pub use rules::{
-    AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, RiskBasis, ScaleLimits,
-    StrategyRiskConfig, TargetSpec, TrailSpec,
+    AfterFirstTarget, AfterRiskExit, BreakevenSpec, Distance, LegRules, PositionalStops, RiskBasis,
+    ScaleLimits, StrategyRiskConfig, TargetSpec, TrailSpec,
 };
 pub use scale_in::{scale_in_gate, AddFacts, PositionCap, RiskCap, Spacing};
 pub use trade_count::{AccountTrades, TradeCount};

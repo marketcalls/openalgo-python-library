@@ -70,6 +70,7 @@
 mod book;
 mod carry;
 mod carry_checks;
+mod carry_expired;
 mod carry_restore;
 mod checks;
 mod desk;
@@ -243,6 +244,7 @@ impl Engine {
             orders: &orders,
             exits: &desk.exits,
             leg_stops: &desk.leg_stops,
+            at_open: &desk.orders_at_open,
         };
         check_parts(read, &parts)?;
         let drawdown_limit = self.config.risk.drawdown_halt_percent;
@@ -313,6 +315,7 @@ impl Engine {
         venue.reprices = desk.reprices;
         venue.exit_flags = desk.exit_flags;
         venue.gtts = desk.gtts;
+        venue.pre_open.at_open = desk.orders_at_open;
         self.gtts.book = saved.gtts;
         if venue.controls.sizing_cap_rupees.is_none() {
             venue.controls.sizing_cap_rupees = desk.sizing_cap_rupees;

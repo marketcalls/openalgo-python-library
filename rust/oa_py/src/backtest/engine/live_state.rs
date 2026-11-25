@@ -10,7 +10,9 @@
 //!   "reason", "sent", "request", "status", units, filled units and what its fills were
 //!   charged), "desk" (cancellations and modifications waiting for the broker's answer,
 //!   the exits of the positions, the legs' stops, the targets fired, the entry locks, the
-//!   sizing cap), "commands" (not yet taken), "risk" (trading state, daily loss totals,
+//!   sizing cap, and "orders_at_open": a pre-open decision's orders waiting for the
+//!   session's open, which a restore sends at the open), "commands" (not yet taken),
+//!   "risk" (trading state, daily loss totals,
 //!   drawdown peak, the cooldown and time exit counters), "open_trades" and
 //!   "session_buys". An order is named by its id while it works and by "ended" once it
 //!   has ended. An order's "sent" is False only for a strategy exit that waits for the
@@ -46,12 +48,26 @@
 //!   leg's stop, which the next session cancels at once), "stop_gtt_rejections" (each open
 //!   leg's stop GTTs the broker rejected after placement), "risk" (the trading state, the
 //!   daily loss measure's totals, the drawdown peak and the slices each position has been
-//!   held) and the "open_trades". Before the close it raises `NativeEngineError`.
+//!   held), the "open_trades" and "last_closes" (each instrument's last close of the day,
+//!   by "instrument" index, in "close_rupees"). Before the close it raises
+//!   `NativeEngineError`.
 //! - `restore_carried_state(state)`: give it to the session of a later trading day, once,
 //!   after its catch-up and before any order. Returns `{"gtts": {saved id: new id},
-//!   "orders": {saved id: new id}}`. The daily loss measure and the trading state start the
-//!   session as a backtest's do at a session boundary; positions are marked at the
-//!   catch-up's last close; a stop GTT to cancel is cancelled at once ("cancel_gtt"). A
+//!   "orders": {saved id: new id}, "expired": [instrument index]}`. The daily loss measure
+//!   and the trading state start the session as a backtest's do at a session boundary;
+//!   positions are marked at the catch-up's last close; a stop GTT to cancel is cancelled
+//!   at once ("cancel_gtt"). A position on a contract whose last trading day is before the
+//!   session's day (an index future left to the exchange at its last close) is recorded
+//!   exited at its carried last close, reason "expiry", flagged "filled_at_last_close",
+//!   its instrument listed in "expired": the session never trades it (an order on it is
+//!   rejected "market_closed") and its stop GTTs are not restored; that exit is recorded
+//!   before the session's boundary, so it does not count toward the day's loss limit. A
+//!   position on a contract the engine exits before its settlement (one with a
+//!   "positional_exit_day") carried past its last trading day missed that exit: the state
+//!   is refused with `NativeEngineInputError` naming the contract and the day, as is an
+//!   expired position with neither a last close nor a mark. A rearm_daily leg
+//!   (`positional_stops="rearm_daily"`) gets its DAY stop placed once the session reaches
+//!   its open. A
 //!   state of the same or a later day, other instruments, another capital, an MIS
 //!   position, or parts that do not hold together raises `NativeEngineInputError` (the
 //!   message names the part of `carried_state`), and nothing of it is restored.
@@ -229,9 +245,15 @@ pub(super) fn restore_carried_state<'py>(
     for (saved, new) in carried.orders {
         orders.set_item(saved.0, new.0)?;
     }
+    let expired: Vec<u32> = carried
+        .expired
+        .iter()
+        .map(|instrument| instrument.0)
+        .collect();
     let ids = PyDict::new_bound(py);
     ids.set_item("gtts", gtts)?;
     ids.set_item("orders", orders)?;
+    ids.set_item("expired", expired)?;
     Ok(ids)
 }
 

@@ -89,6 +89,7 @@ AUDITED_RUN_ARGUMENTS = {
     "max_trades_per_day",
     "daily_profit_target",
     "max_order_value",
+    "positional_stops",
     "round_levels",
     "strict_config",
     "roll",

@@ -8,7 +8,8 @@
 //! `tables` (pauses, events, positions, orders) and `results` (the result tables). A
 //! live session, its commands and its venue's results are in `venue`, its controls in
 //! `session`, its legs (ticks, the broker-held stops, the price rule's calls) in `legs`,
-//! its saved state and the broker's own fills in `live_state`. The methods' bodies are
+//! its saved state and the broker's own fills in `live_state`, a daily or longer
+//! strategy's decision before the open in `pre_open`. The methods' bodies are
 //! helpers in those files and in `orders` (the order calls of a decision point),
 //! `queries`, `timers` and `signals`, so this file holds the one `#[pymethods]` block.
 //!
@@ -33,6 +34,7 @@ mod legs;
 mod live_state;
 mod market;
 mod orders;
+mod pre_open;
 mod queries;
 mod request;
 mod results;
@@ -118,7 +120,9 @@ impl NativeEngine {
     /// commands of an order that has ended since they were made (rejected, cancelled or
     /// filled whole) are dropped.
     fn take_commands<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        venue::commands(py, &self.engine_mut()?.take_commands())
+        let engine = self.engine_mut()?;
+        let commands = engine.take_commands();
+        venue::commands(py, &commands, |order| engine.order_flags(order))
     }
 
     /// Record the venue's fill of `units` newly filled of an order at `price` rupees at
@@ -394,6 +398,24 @@ impl NativeEngine {
     #[pyo3(signature = (limit, others))]
     fn set_account_trades(&mut self, limit: Option<u32>, others: u32) -> PyResult<()> {
         session::set_account_trades(self.engine_mut()?, limit, others)
+    }
+
+    /// Decide before the open of a daily or longer strategy's live session on the latest
+    /// completed bar of `bars` (`pre_open`); None when none was decided.
+    #[pyo3(signature = (bars, last_decided, now))]
+    fn pre_open_decision<'py>(
+        &mut self,
+        py: Python<'py>,
+        bars: Vec<pre_open::DecisionBar>,
+        last_decided: Option<i64>,
+        now: i64,
+    ) -> PyResult<Option<Dict<'py>>> {
+        pre_open::decision(py, self.engine_mut()?, bars, (last_decided, now))
+    }
+
+    /// The names of the flags a working order's fills carry (`pre_open`).
+    fn order_flags(&self, order_id: u64) -> PyResult<Vec<&'static str>> {
+        Ok(pre_open::order_flags(self.engine()?, order_id))
     }
 
     /// End a live session where it stands (`session`); the "finished" pause tuple.

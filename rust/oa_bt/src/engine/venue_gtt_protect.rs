@@ -46,6 +46,9 @@ impl Engine {
         if self.held_units(key) == 0.0 {
             return Ok(Protect::Flat);
         }
+        if self.contract_has_ended(key.instrument) {
+            return Ok(Protect::MarketClosed);
+        }
         let Some(trigger) = self.stop_trigger(key)? else {
             return Ok(Protect::NoStopLevel);
         };
@@ -78,7 +81,7 @@ impl Engine {
 
     /// True when the session's last price of `key`'s instrument is at or beyond the stop
     /// `trigger_rupees`: at or below it for a long, at or above it for a short.
-    fn stop_crossed(&self, key: PositionKey, trigger_rupees: f64) -> bool {
+    pub(super) fn stop_crossed(&self, key: PositionKey, trigger_rupees: f64) -> bool {
         let held = self.held_units(key);
         let mark = self
             .portfolio

@@ -3,7 +3,9 @@
 //!
 //! A backtest holds a leg's stop itself and fills it at its level (`legs`). A live session
 //! hands an MIS leg's stop to the broker as an order and keeps that order on the leg (a
-//! CNC or NRML leg's stop is a GTT instead, kept by `venue_gtt_sync`):
+//! CNC or NRML leg's stop is a GTT instead, kept by `venue_gtt_sync`, unless the run's
+//! `positional_stops="rearm_daily"` holds it as an MIS leg's, placed again at each session's
+//! open: `rearm`):
 //!
 //! - **Placed** once the leg has a stop level: with the fill that opens the leg, for the
 //!   units filled, or when a trail or a breakeven first sets one. It is a reduce-only DAY
@@ -50,7 +52,6 @@ use crate::rms::{ExitReason, RiskEvent, RiskEventName, RiskScope};
 
 use super::error::KernelError;
 use super::event::{Event, EventStamp};
-use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue::SendAt;
 use super::venue_owner::closing_side;
@@ -108,7 +109,7 @@ impl Engine {
     /// side that no longer closes, where it is cancelled (`venue_cover`).
     pub(super) fn open_leg_stop(&mut self, key: PositionKey) {
         self.venue.leg_stops.retain(|stop| stop.key != key);
-        if held_as_gtt(key.product) {
+        if self.stop_is_gtt(key.product) {
             self.open_leg_gtt(key);
         } else {
             self.venue.leg_stops.push(LegStop::new(key));
@@ -329,6 +330,9 @@ impl Engine {
         };
         let key = stop.key;
         if self.held_units(key) == 0.0 || self.exit_closes_leg(key)? {
+            return Ok(());
+        }
+        if self.rearm_stop_expired(&at, key, how) {
             return Ok(());
         }
         let reason = match (how, stop.replaced) {

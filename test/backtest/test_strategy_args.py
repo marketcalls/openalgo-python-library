@@ -307,9 +307,11 @@ def test_none_in_a_dict_is_that_strategys_value(resolve, setting):
 
 
 def test_the_shared_table_holds_every_per_strategy_setting_but_those_refused_live():
-    # product and base are refused live (bt.live takes no product= and no base=).
+    # product and base are refused live (bt.live takes no product= and no base=), and
+    # bt.live does not read positional_stops yet (test/backtest/test_positional_stops.py
+    # holds its by-name rows for bt.backtest).
     shared = {row[1] for row in SHARED}
-    assert shared == set(PER_STRATEGY) - {"product", "base"}
+    assert shared == set(PER_STRATEGY) - {"product", "base", "positional_stops"}
     assert {"product", "base"} <= set(NOT_LIVE)
 
 

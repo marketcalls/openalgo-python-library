@@ -60,7 +60,8 @@ pub(super) struct GttDesk {
 /// By decision GTT-10 reading A, 04-execution 4.4 then governs their stop (a trigger and
 /// a child LIMIT) instead of the engine-held rule that a level crossed at the open fills
 /// at the open; their targets keep that rule, as an MIS leg's (design
-/// 20-positional-live P6).
+/// 20-positional-live P6). `positional_stops="rearm_daily"` holds their stop as an MIS
+/// leg's instead: `Engine::stop_is_gtt` (`rearm`) says which a run does.
 pub(super) fn held_as_gtt(product: Product) -> bool {
     matches!(product, Product::Cnc | Product::Nrml)
 }
@@ -120,7 +121,7 @@ impl Engine {
         key: PositionKey,
         effect: &FillEffect,
     ) -> Result<(), KernelError> {
-        if effect.kind != FillKind::Entry || !held_as_gtt(key.product) || self.is_external() {
+        if effect.kind != FillKind::Entry || !self.stop_is_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let Some(planned) = self
@@ -189,7 +190,7 @@ impl Engine {
             let purpose = self.gtts.book.get(id).map(|gtt| gtt.purpose);
             purpose == Some(GttPurpose::Protect)
         });
-        if own_exit || !held_as_gtt(key.product) || self.is_external() {
+        if own_exit || !self.stop_is_gtt(key.product) || self.is_external() {
             return Ok(());
         }
         let held = self.held_units(key);
@@ -233,7 +234,7 @@ impl Engine {
             .legs
             .iter()
             .map(|(key, _)| *key)
-            .filter(|key| held_as_gtt(key.product))
+            .filter(|key| self.stop_is_gtt(key.product))
             .collect();
         for key in keys {
             let waiting = self.gtts.follow_ups.iter().any(|exit| exit.key == key);

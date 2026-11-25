@@ -66,6 +66,12 @@ impl Engine {
             let kind = OrderEventKind::Canceled;
             return self.end_order(at.stamp(), id, OrderAction::Cancel, kind);
         }
+        let rests_as_gtt = order.request.validity == Validity::Gtt;
+        if self.waits_for_open(id, rests_as_gtt) {
+            // A pre-open decision's order goes as the session reaches its open (`pre_open`).
+            return Ok(());
+        }
+        let order = self.book.get(id).ok_or(KernelError::UnknownOrder(id))?;
         let role = self.submission_role(&order.request, order.quantity_units, Some(id));
         if order.request.validity == Validity::Gtt {
             // It rests as its GTT, whose place `place_order_gtt` has sent.

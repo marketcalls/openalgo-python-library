@@ -45,11 +45,15 @@ pub enum ExitReason {
     /// The account's daily profit target of a portfolio run or live session, across its
     /// strategies (`account_daily_profit_target`; `engine::account_breach`).
     AccountProfitTarget = 16,
+    /// A derivatives position exited at the square-off of its positional exit day, before
+    /// the exchange settles the contract by delivery (stock futures and options, every
+    /// option, MCX contracts before their tender period; design 20-positional-live 9).
+    ExpiryExit = 17,
 }
 
 impl ExitReason {
     /// Every reason, in code order.
-    pub const ALL: [ExitReason; 17] = [
+    pub const ALL: [ExitReason; 18] = [
         ExitReason::LegSl,
         ExitReason::LegTarget,
         ExitReason::TimeExit,
@@ -67,6 +71,7 @@ impl ExitReason {
         ExitReason::AccountLossLimit,
         ExitReason::DailyProfitTarget,
         ExitReason::AccountProfitTarget,
+        ExitReason::ExpiryExit,
     ];
 
     /// The reason string, as the live module writes it.
@@ -89,6 +94,7 @@ impl ExitReason {
             ExitReason::AccountLossLimit => "account_loss_limit",
             ExitReason::DailyProfitTarget => "daily_profit_target",
             ExitReason::AccountProfitTarget => "account_profit_target",
+            ExitReason::ExpiryExit => "expiry_exit",
         }
     }
 

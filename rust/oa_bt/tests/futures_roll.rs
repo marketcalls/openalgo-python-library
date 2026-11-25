@@ -50,6 +50,7 @@ fn future(symbol: &str, lot: u32, last_day: Day) -> InstrumentSpec {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: Some(last_day),
+        positional_exit_day: None,
     }
 }
 

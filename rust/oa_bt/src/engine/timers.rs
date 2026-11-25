@@ -153,6 +153,7 @@ impl Engine {
             };
             self.risk_exits_at_open(slice, instrument, bar.open)?;
             self.gtt_exits_at_open(slice, instrument, bar.open)?;
+            self.rearm_stops_at_open(slice, instrument, bar.open)?;
             let queued = self
                 .fill_model()
                 .is_none()

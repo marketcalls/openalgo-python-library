@@ -8,7 +8,8 @@ NotImplementedError (a part not built yet) passes through with the kernel's mess
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import datetime as dt
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -32,8 +33,11 @@ def call(func: Callable[..., Any], *args: Any) -> Any:
         raise BacktestError(str(exc)) from None
 
 
-def instrument_dict(instrument: Instrument) -> dict[str, Any]:
-    """The binding's instrument dict. Raises ConfigError when the tick size is unknown."""
+def instrument_dict(
+    instrument: Instrument, positional_exit_day: dt.date | None = None
+) -> dict[str, Any]:
+    """The binding's instrument dict, with the contract's positional exit day
+    (`_positional_exit`; None: none). Raises ConfigError when the tick size is unknown."""
     if instrument.tick_size is None:
         raise ConfigError(
             f"{instrument.symbol}: the tick size depends on a price slab; pass an instrument "
@@ -49,6 +53,7 @@ def instrument_dict(instrument: Instrument) -> dict[str, Any]:
         "multiplier": float(instrument.multiplier),
         "freeze_qty": instrument.freeze_qty,
         "last_trading_day": None if last_day is None else to_day(last_day),
+        "positional_exit_day": None if positional_exit_day is None else to_day(positional_exit_day),
     }
 
 
@@ -67,11 +72,16 @@ def build_engine(
     config: dict[str, Any],
     instruments: list[Instrument],
     frames: list[pd.DataFrame],
+    exit_days: Sequence[dt.date | None] | None = None,
 ) -> Any:
-    """A native Engine for one run. Raises ConfigError, BacktestError or
-    NotImplementedError (see the module docstring)."""
+    """A native Engine for one run; `exit_days` are the instruments' positional exit days
+    in the same order (`_positional_exit`; None for none). Raises ConfigError,
+    BacktestError or NotImplementedError (see the module docstring)."""
     engine_class = native_attr("Engine")
-    specs = [instrument_dict(instrument) for instrument in instruments]
+    days = list(exit_days) if exit_days is not None else [None] * len(instruments)
+    specs = [
+        instrument_dict(instrument, day) for instrument, day in zip(instruments, days, strict=True)
+    ]
     arrays = [bar_arrays(frame) for frame in frames]
     return call(engine_class, native_calendar, config, specs, arrays)
 

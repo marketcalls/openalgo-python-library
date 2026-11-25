@@ -4,8 +4,11 @@ percent), `cooldown`, `max_hold` and `max_positions` as whole numbers (base bars
 positions), the scale-in limits as `_scale_in` reads them, and `reinvest` and
 `size_caps` as `_size_controls` reads them. The daily limits of 18-multi-strategy 2.5a:
 `max_trades_per_day` a whole number of entries a session day, `daily_profit_target` and
-`max_order_value` rupees (a number or `bt.rupees`); each off when None. The combined
-rules of a run are refused until Phase 3 builds them.
+`max_order_value` rupees (a number or `bt.rupees`); each off when None. How a CNC or NRML
+position's stop is held, `positional_stops` (design 20-positional-live section 6): "gtt"
+(the default, one SINGLE GTT resting overnight) or "rearm_daily" (a DAY stop order placed
+again at each session's open), whose run carries one warning for the trader
+(`rearm_warning`). The combined rules of a run are refused until Phase 3 builds them.
 """
 
 from __future__ import annotations
@@ -24,6 +27,11 @@ GROSS_BASIS = "gross"
 NET_BASIS = "net"
 RISK_BASES = (GROSS_BASIS, NET_BASIS)
 AFTER_RISK_EXIT = ("lock_session", "allow_reentry")
+#: How a CNC or NRML position's stop is held: one SINGLE GTT (the default), or a DAY stop
+#: order placed again at each session's open (rust/oa_bt/src/engine/rearm.rs).
+GTT_STOPS = "gtt"
+REARM_DAILY = "rearm_daily"
+POSITIONAL_STOPS = (GTT_STOPS, REARM_DAILY)
 # Combined rules of a run, class attributes for strategies that open single positions
 # (14-strategy-api 2.1); refused until Phase 3 builds them.
 COMBINED_RULES = ("combined_stop", "combined_target", "lock_profit", "trail_sl_to_entry")
@@ -77,6 +85,21 @@ def _bars(value: Any, name: str) -> int | None:
     return _count(value, name, "base bars")
 
 
+def rearm_warning(product: str) -> str:
+    """The warning of a run with `positional_stops="rearm_daily"`, for a trader, whose
+    product is `product`."""
+    note = (
+        "positional_stops='rearm_daily': each CNC or NRML position's stop is a DAY stop "
+        "order placed again at every session's open, and nothing protects the position from "
+        "a session's close to the next open. This backtest assumes the engine was started "
+        "before the open on every trading day a position was held; live, start it before "
+        "the open on each of those days"
+    )
+    if product == "MIS":
+        note += "; this run's product is MIS, so it applies only to orders placed as CNC or NRML"
+    return note
+
+
 def refuse_combined_rules(strategy: type) -> None:
     """Combined rules of a run (05-risk-management 4) are Phase 3; never ignore them.
     Raises NotImplementedError for one the strategy declares."""
@@ -110,6 +133,9 @@ def risk_settings(
         "max_hold_bars": _bars(getattr(strategy, "max_hold", None), "max_hold"),
         "risk_basis": choice(args["risk_basis"], RISK_BASES, "risk_basis"),
         "after_risk_exit": choice(args["after_risk_exit"], AFTER_RISK_EXIT, "after_risk_exit"),
+        "positional_stops": choice(
+            args.get("positional_stops", GTT_STOPS), POSITIONAL_STOPS, "positional_stops"
+        ),
         "round_levels": bool(args["round_levels"]),
         "strict_config": bool(args["strict_config"]),
         **scale_limits(strategy),
@@ -121,9 +147,13 @@ __all__ = [
     "AFTER_RISK_EXIT",
     "COMBINED_RULES",
     "GROSS_BASIS",
+    "GTT_STOPS",
     "NET_BASIS",
+    "POSITIONAL_STOPS",
+    "REARM_DAILY",
     "RISK_BASES",
     "choice",
+    "rearm_warning",
     "refuse_combined_rules",
     "risk_settings",
     "rupees_amount",

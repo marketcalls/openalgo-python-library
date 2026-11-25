@@ -34,9 +34,12 @@
 //! `order_id` (the kernel order, an integer; Python shows `o<n>`); "place" adds
 //! `instrument` (the registration index), `product` ("CNC", "MIS", "NRML"), `side`
 //! ("BUY", "SELL"), `role` (what the order is for, one of `ORDER_ROLES`: "entry", "add",
-//! "leg_stop", "exit", "risk_exit", "square_off") and `reason` (the risk reason of a
-//! "risk_exit", one of `RISK_EXIT_REASONS`; None for any other role); "place" and
-//! "modify" add `quantity_units` (units, never lots),
+//! "leg_stop", "exit", "risk_exit", "square_off"), `reason` (the risk reason of a
+//! "risk_exit", one of `RISK_EXIT_REASONS`; None for any other role) and `flags` (the
+//! names of the flags its fills carry: "late_decision" for an order of a pre-open decision
+//! made after the open, "gtt_child_unfilled" or "stop_crossed" for the engine's exits that
+//! carry them; empty for any other order); "place" and "modify" add `quantity_units`
+//! (units, never lots),
 //! `order_type` ("MARKET", "LIMIT", "SL", "SL-M"), `price` (the limit in rupees, None for
 //! MARKET and SL-M) and `trigger_price` (rupees, None for MARKET and LIMIT). A result
 //! returns the stamp it was recorded with as (slice index, slice open in UTC nanoseconds,
@@ -44,7 +47,7 @@
 //! sizing cap, the stop) are in `session`; a GTT's commands and answers in `gtts`.
 
 use oa_bt::engine::{BaseBar, Engine, EventStamp, KernelError, VenueCommand, VENUE_REFUSAL_KINDS};
-use oa_bt::exec::{InstrumentId, OrderId, OrderType, RejectCode};
+use oa_bt::exec::{FillFlags, InstrumentId, OrderId, OrderType, RejectCode};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -111,14 +114,15 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )
 }
 
-/// The commands as a list of dicts (module docs).
+/// The commands as a list of dicts (module docs); `flags` gives an order's fill flags.
 pub(super) fn commands<'py>(
     py: Python<'py>,
     commands: &[VenueCommand],
+    flags: impl Fn(OrderId) -> FillFlags,
 ) -> PyResult<Bound<'py, PyList>> {
     let dicts = commands
         .iter()
-        .map(|item| command(py, item))
+        .map(|item| command(py, item, &flags))
         .collect::<PyResult<Vec<_>>>()?;
     Ok(PyList::new_bound(py, dicts))
 }
@@ -140,7 +144,11 @@ fn order_type_into(dict: &Bound<'_, PyDict>, units: f64, order_type: OrderType) 
 }
 
 /// One command as a dict (module docs).
-fn command<'py>(py: Python<'py>, command: &VenueCommand) -> PyResult<Bound<'py, PyDict>> {
+fn command<'py>(
+    py: Python<'py>,
+    command: &VenueCommand,
+    flags: &impl Fn(OrderId) -> FillFlags,
+) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new_bound(py);
     match *command {
         VenueCommand::Place {
@@ -160,6 +168,7 @@ fn command<'py>(py: Python<'py>, command: &VenueCommand) -> PyResult<Bound<'py, 
             let (role, reason) = role_codes(role);
             dict.set_item("role", role)?;
             dict.set_item("reason", reason)?;
+            dict.set_item("flags", flags(order).names())?;
             order_type_into(&dict, units, order_type)?;
         }
         VenueCommand::Modify {

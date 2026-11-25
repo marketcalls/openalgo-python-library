@@ -182,6 +182,18 @@ impl<'a> Read<'a> {
         })
     }
 
+    /// The value of `key`, `None` when it is missing or null: a part a later version of
+    /// the same layout added, read from a state saved before it with its default.
+    ///
+    /// Errors: `Malformed` when this is not a map.
+    pub(super) fn added(&self, key: &str) -> Result<Option<Read<'a>>, LiveStateError> {
+        let entries = self.entries()?;
+        if !entries.iter().any(|(known, _)| known == key) {
+            return Ok(None);
+        }
+        self.maybe(key)
+    }
+
     /// The value of `key`, `None` when it is null.
     ///
     /// Errors: those of `field`.

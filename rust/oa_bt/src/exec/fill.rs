@@ -76,13 +76,19 @@ impl FillFlags {
     /// when the stop was to be placed again: no stop was placed and the leg was exited at
     /// market (design 20-positional-live 3.4, `engine::venue_gtt_protect`).
     pub const STOP_CROSSED: FillFlags = FillFlags(8);
+    /// An order of a daily or longer strategy's pre-open decision made after the session's
+    /// open had passed (a late start): sent at once rather than at the open, so it fills
+    /// later than a backtest of the same bars would (design 20-positional-live section 8,
+    /// `engine::pre_open`).
+    pub const LATE_DECISION: FillFlags = FillFlags(16);
 
     /// Every flag with its name, in bit order.
-    pub const NAMED: [(FillFlags, &'static str); 4] = [
+    pub const NAMED: [(FillFlags, &'static str); 5] = [
         (FillFlags::FILLED_AT_LAST_CLOSE, "filled_at_last_close"),
         (FillFlags::GTT_CHILD_UNFILLED, "gtt_child_unfilled"),
         (FillFlags::EXTERNAL, "external"),
         (FillFlags::STOP_CROSSED, "stop_crossed"),
+        (FillFlags::LATE_DECISION, "late_decision"),
     ];
 
     /// True when every bit of `other` is set.

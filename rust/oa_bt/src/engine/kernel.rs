@@ -29,6 +29,7 @@ use super::live_clock::range_end;
 use super::market_data::MarketData;
 use super::output::{settle_trade_charges, FinalPosition, GrossPnl, Recorder, RunOutput};
 use super::pause::Pause;
+use super::rearm::RearmDesk;
 use super::run_end::{end_of_run, Ending, RunEnd};
 use super::sale_credit::SessionBuys;
 use super::session::SessionTimes;
@@ -55,6 +56,10 @@ pub(crate) enum Phase {
     /// A live session's close of this slice, waiting for the venue to end its orders
     /// (`venue_clock`); the rest of step 8 runs once they have.
     Closing(SliceInfo),
+    /// A live session paused at its pre-open decision, decided at the bar's close (UTC
+    /// nanoseconds), before this slice, which has not run (`pre_open`); the next `advance`
+    /// runs it.
+    PreOpen(SliceInfo, TsNanos),
     /// The grid is exhausted.
     Finished,
 }
@@ -111,6 +116,8 @@ pub struct Engine {
     /// The account of a portfolio run: the link, an account breach's lock and the breach
     /// waiting to be recorded (`account_link`, `account_breach`).
     pub(super) account: AccountDesk,
+    /// What a backtest keeps for `positional_stops="rearm_daily"` (`rearm`).
+    pub(super) rearm: RearmDesk,
 }
 
 impl Engine {
@@ -185,6 +192,7 @@ impl Engine {
             model_opened: Vec::new(),
             exit_scales: ExitScales::default(),
             account: AccountDesk::default(),
+            rearm: RearmDesk::default(),
         })
     }
 
@@ -230,6 +238,10 @@ impl Engine {
                     self.resume_ahead(&next)?;
                     None
                 }
+                Phase::PreOpen(next, _) => {
+                    self.phase = Phase::Ready(next.index);
+                    None
+                }
             };
             if let Some(pause) = pause {
                 return Ok(pause);
@@ -273,6 +285,7 @@ impl Engine {
             Phase::Timers(slice) | Phase::Ahead(slice) => {
                 Some((slice, slice.open, Step::OpenFills))
             }
+            Phase::PreOpen(slice, decided_at) => Some((slice, decided_at, Step::Callbacks)),
             Phase::Ready(_) | Phase::Opened(_) | Phase::Closing(_) | Phase::Finished => None,
         }
     }

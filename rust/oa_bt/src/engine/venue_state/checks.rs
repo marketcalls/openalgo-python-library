@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `positions` | an open position's tranches hold its units; a flat one has none |
 //! | `legs` | each leg is of an open position, on its side, holding its units, and every open position has its leg (each entry opens one: `fills::update_leg`) |
-//! | `orders` | `sent` is false for a strategy exit that waits for its cancels, and only for it (units and filled units: `orders::read_order`) |
+//! | `orders` | `sent` is false for a strategy exit that waits for its cancels and for a pre-open decision's order waiting for the open (`desk.orders_at_open`), and only for them (units and filled units: `orders::read_order`) |
 //! | `desk.leg_stops` | a leg's working stop is a `leg_stop` order of the leg's position |
 
 use crate::exec::OrderId;
@@ -56,6 +56,8 @@ pub(super) struct Parts<'a> {
     pub(super) orders: &'a [SavedOrder],
     pub(super) exits: &'a [PositionExit],
     pub(super) leg_stops: &'a [LegStop],
+    /// A pre-open decision's orders waiting for the session's open (`pre_open`).
+    pub(super) at_open: &'a [OrderId],
 }
 
 /// Check that the parts of the state at `read` agree (module docs).
@@ -120,9 +122,12 @@ fn waits_unsent(exits: &[PositionExit], id: OrderId) -> bool {
 
 fn check_sent(read: &Read<'_>, parts: &Parts<'_>) -> Result<(), LiveStateError> {
     for (index, saved) in parts.orders.iter().enumerate() {
-        if saved.sent == waits_unsent(parts.exits, saved.order.id) {
+        let id = saved.order.id;
+        let unsent = waits_unsent(parts.exits, id) || parts.at_open.contains(&id);
+        if saved.sent == unsent {
             let reason = format!(
-                "is saved {}sent, which only a strategy exit waiting for its cancels is not",
+                "is saved {}sent, which only a strategy exit waiting for its cancels and an \
+                 order waiting for the session's open are not",
                 if saved.sent { "" } else { "not " }
             );
             return Err(refuse(read, &["orders"], index, reason));

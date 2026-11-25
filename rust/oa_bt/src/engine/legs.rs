@@ -39,7 +39,6 @@ use super::clock::SliceInfo;
 use super::error::KernelError;
 use super::event::{Event, EventStamp, Step};
 use super::fills::FillRequest;
-use super::gtt::held_as_gtt;
 use super::kernel::Engine;
 use super::venue_owner::closing_side;
 
@@ -54,7 +53,7 @@ impl Engine {
             let Some(bar) = self.market.bar(key.instrument, slice.index) else {
                 continue;
             };
-            if held_as_gtt(key.product) {
+            if self.stop_is_gtt(key.product) {
                 self.test_positional_leg(slice, key, (&bar, &bar), Step::Levels)?;
                 continue;
             }

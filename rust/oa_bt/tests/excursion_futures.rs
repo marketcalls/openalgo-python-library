@@ -43,6 +43,7 @@ fn the_running_pnl_of_a_future_counts_its_multiplier() {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: Some(days_from_civil(2025, 8, 5)),
+        positional_exit_day: None,
     };
     let bars = [
         (2, (97_000.0, 97_050.0, 96_900.0, 97_020.0)),
@@ -84,6 +85,7 @@ fn future(symbol: &str, last_day: Day) -> InstrumentSpec {
         freeze_quantity_units: None,
         cost_segment: None,
         last_trading_day: Some(last_day),
+        positional_exit_day: None,
     }
 }
 

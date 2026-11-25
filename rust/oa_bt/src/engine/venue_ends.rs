@@ -107,7 +107,7 @@ impl Engine {
             | Phase::Timers(slice)
             | Phase::Ahead(slice)
             | Phase::Closing(slice) => return Ok(slice),
-            Phase::Paused(_) => return Err(VenueError::AtBarClose.into()),
+            Phase::Paused(_) | Phase::PreOpen(..) => return Err(VenueError::AtBarClose.into()),
             Phase::Finished => return Err(VenueError::SessionOver.into()),
         };
         self.timeline

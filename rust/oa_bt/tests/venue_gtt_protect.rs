@@ -152,7 +152,9 @@ fn protect_keeps_its_other_outcomes_for_a_gtt_leg() {
 }
 
 #[test]
-fn the_protect_outcomes_end_with_stop_crossed() {
+fn the_protect_outcomes_end_with_stop_crossed_then_waits_for_open() {
+    // `waits_for_open` is a rearm_daily leg's (unit N4, tests/rearm_daily_live.rs).
     assert_eq!(Protect::StopCrossed.code(), "stop_crossed");
-    assert_eq!(Protect::CODES.last(), Some(&"stop_crossed"));
+    assert_eq!(Protect::WaitsForOpen.code(), "waits_for_open");
+    assert_eq!(Protect::CODES[7..], ["stop_crossed", "waits_for_open"]);
 }

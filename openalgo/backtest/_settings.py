@@ -28,7 +28,7 @@ from ._intraday_assumptions import intraday_times
 from ._layout import parse_interval
 from ._perturbation import FILL_MODELS, delay, delay_assumption
 from ._products import CNC, MIS, NRML
-from ._risk_settings import choice, refuse_combined_rules, risk_settings
+from ._risk_settings import REARM_DAILY, choice, rearm_warning, refuse_combined_rules, risk_settings
 from ._run_dates import instant, run_dates
 from ._run_plan import RunPlan
 from ._scale_in import describe as describe_scale_limits
@@ -122,6 +122,9 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
     start, end = run_dates(strategy, args)
     product = _product(strategy, args["product"], strategy.interval, strategy.exchange)
     warnings += unused_settings(strategy, args, product, overrides)
+    risk = risk_settings(strategy, args, overrides)
+    if risk["positional_stops"] == REARM_DAILY:
+        warnings.append(rearm_warning(product))
     return RunPlan(
         symbols=symbols,
         exchange=strategy.exchange,
@@ -138,7 +141,7 @@ def resolve(strategy: type, args: dict[str, Any]) -> RunPlan:
         quantity_mode=choice(args["quantity_mode"], QUANTITY_MODES, "quantity_mode"),
         costs=args["costs"],
         slippage=_slippage(args["slippage"]),
-        risk=risk_settings(strategy, args, overrides),
+        risk=risk,
         entry_from=overrides["entry_from"],
         entry_until=overrides["entry_until"],
         square_off=overrides["square_off"],
@@ -193,6 +196,8 @@ def _risk_assumptions(plan: RunPlan) -> dict[str, Any]:
         **describe_size_controls(risk),
         **{name: risk[name] for name in DAILY_LIMITS if risk[name] is not None},
     }
+    if risk["positional_stops"] == REARM_DAILY:
+        block["positional_stops"] = REARM_DAILY
     exits = ("max_daily_loss", "drawdown_halt", "daily_profit_target")
     if any(risk[name] is not None for name in exits):
         block["risk_exit_fill"] = (

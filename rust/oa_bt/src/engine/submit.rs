@@ -297,6 +297,9 @@ impl Engine {
                 return Ok(Err(code));
             }
         }
+        if opening && self.past_positional_exit(request.instrument, slice.day, decided_at)? {
+            return Ok(Err(RejectCode::ContractExpiring));
+        }
         // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
         // and entry gates (6, 7), the scale-in limits (7), then an excess over the
         // position without `reverse` (7).
@@ -322,14 +325,17 @@ impl Engine {
     /// would fall in a later session than the decision (lead ruling). Orders of daily
     /// and longer strategies are valid for the first session that opens at or after the
     /// decision: the next session for a decision at a close, the same session for a
-    /// timer at its open.
+    /// timer at its open. In a live session every DAY order is valid to its session's close
+    /// (`pre_open`).
     pub(super) fn day_validity(
         &self,
         slice: &SliceInfo,
         decided_at: TsNanos,
     ) -> Result<TsNanos, RejectCode> {
         let exchange = self.timeline.exchange();
-        if self.config.strategy_interval.is_intraday() {
+        // A live session's DAY orders end with its session whatever the strategy's interval:
+        // a daily strategy decides before the open (`pre_open`).
+        if self.config.strategy_interval.is_intraday() || self.is_external() {
             return match self.calendar.session(exchange, slice.day) {
                 Some(session) if decided_at < session.close => Ok(session.close),
                 _ => Err(RejectCode::MarketClosed),
