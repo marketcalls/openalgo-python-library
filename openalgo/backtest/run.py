@@ -224,7 +224,8 @@ def backtest(
         contract) is sold or bought back at the square-off time of its last trading day
         (an MCX one of the trading day before its tender period, where the reference
         table gives that period, else it settles at expiry and the run warns), exit
-        reason "expiry_exit", as is an option held to its last trading day. A futures
+        reason "expiry_exit", as is an option held to its last trading day; an entry or
+        add on such a contract from then on is rejected "contract_expiring". A futures
         strategy names its underlying (`underlying`, or underlyings in `symbols`) and
         the contract rank in `expiry` ("current_month" or "next_month"); see `_futures`.
     params: parameter values for the strategy.

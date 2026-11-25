@@ -29,7 +29,13 @@
 //!
 //! Also at each open: an MIS order that would open or add, still working once the open is
 //! at or after `entry_until`, is withdrawn (`Cancel`), since a backtest rejects it at its
-//! fill bar (the entry window, SPEC-04).
+//! fill bar (the entry window, SPEC-04); so is any order that would open or add on a
+//! contract past its positional exit (`contract_expiring`, `expiry`).
+//!
+//! At the session's first open nothing is reached from a slice before it: the expiry exit
+//! of a position carried past its contract's exit day is made as the session reaches that
+//! open (`expiry_exits_at_session_open`, called by `pre_open`), the others from the next
+//! open on.
 //!
 //! In the slice that closes the session the market is closed: nothing is sent, and a
 //! position still open is reported open.
@@ -133,21 +139,53 @@ impl Engine {
         Some(EngineExit::Risk(reason))
     }
 
-    /// Withdraw the MIS orders that would open or add and still work at an open at or
-    /// after `entry_until` (module docs).
+    /// Withdraw the orders that would open or add and still work at the open of `next`:
+    /// an MIS order once the open is at or after `entry_until`, and any order on a contract
+    /// past its positional exit (module docs).
     fn withdraw_late_entries(&mut self, next: &SliceInfo) -> Result<(), KernelError> {
-        let entries: Vec<OrderId> = self
+        let entries: Vec<(OrderId, InstrumentId, Product)> = self
             .book
             .working()
-            .filter(|order| order.request.product == Product::Mis && self.opens_or_adds(order))
-            .map(|order| order.id)
+            .filter(|order| self.opens_or_adds(order))
+            .map(|order| (order.id, order.request.instrument, order.request.product))
             .collect();
-        if entries.is_empty() || next.open < self.session_times(next.day)?.entry.until {
+        if entries.is_empty() {
             return Ok(());
         }
         let stamp = Self::stamp(next, Step::OpenFills);
-        for id in entries {
-            self.withdraw_order(stamp, id)?;
+        for (id, instrument, product) in entries {
+            let late =
+                product == Product::Mis && next.open >= self.session_times(next.day)?.entry.until;
+            if late || self.past_positional_exit(instrument, next.day, next.open)? {
+                self.withdraw_order(stamp, id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// At a live session's first open: a position on a contract past its positional exit,
+    /// whose exit day the engine missed (no session ran that day, or the exit did not
+    /// fill), gets its expiry exit as the session reaches the open, as a backtest exits it
+    /// at that open (`expiry`). The engine's other exits are made from the next open on.
+    ///
+    /// Errors: `InvalidConfig` when the session has no intraday times; those of the exit
+    /// owner.
+    pub(super) fn expiry_exits_at_session_open(&mut self, at: SendAt) -> Result<(), KernelError> {
+        let open: Vec<PositionKey> = self
+            .portfolio
+            .positions()
+            .iter()
+            .filter(|position| !position.is_flat())
+            .map(|position| position.key)
+            .collect();
+        for key in open {
+            if self.has_engine_exit(key) || self.venue.group.holds(key) {
+                continue;
+            }
+            if self.expiry_exit_due(&at.slice, key.instrument)? {
+                let exit = EngineExit::Risk(RiskExitReason::ExpiryExit);
+                self.request_engine_exit(at, key, exit, None)?;
+            }
         }
         Ok(())
     }

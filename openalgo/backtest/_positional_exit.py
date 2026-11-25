@@ -9,7 +9,9 @@ day is worked out here from the reference tables and passed with the instrument.
 - An NFO or BFO future settled by delivery (stock futures, `settlement.csv`): its last
   trading day.
 - An MCX future settled by delivery: the trading day before its tender period, the
-  `tender_days` of `mcx_contracts.csv` trading days that end on its last trading day.
+  `tender_days` of `mcx_contracts.csv` trading days that end on its last trading day, read
+  from the row in force on that day (the terms of its tender period, whatever day the run
+  starts on).
 - An MCX delivery future the table gives no tender period for: none. It settles at expiry
   as before, and the run warns, naming the contract and the table.
 - A future settled in cash (index futures, MCX cash contracts, currency futures): none. It
@@ -78,16 +80,16 @@ def _no_tender_warning(symbol: str) -> str:
     )
 
 
-def _mcx_exit_day(
-    instrument: Instrument, trade_day: dt.date, calendar: Any
-) -> tuple[dt.date | None, str | None]:
-    """(exit day, warning) of an MCX future settled by delivery (module docstring)."""
+def _mcx_exit_day(instrument: Instrument, calendar: Any) -> tuple[dt.date | None, str | None]:
+    """(exit day, warning) of an MCX future settled by delivery (module docstring). The
+    figure is read from the row in force on the contract's last trading day, the terms of
+    its tender period, so a run gets the same day whatever date it starts on."""
     last_day = _last_trading_day(instrument)
     underlying = instrument.underlying or instrument.symbol
     tender_days = None
     if last_day is not None and instrument.expiry is not None:
         try:
-            tender_days = default_tables().tender_days(underlying, trade_day, instrument.expiry)
+            tender_days = default_tables().tender_days(underlying, last_day, instrument.expiry)
         except ReferenceDataError:
             tender_days = None
     if tender_days is None or last_day is None:
@@ -98,12 +100,10 @@ def _mcx_exit_day(
     return day, None
 
 
-def exit_day(
-    instrument: Instrument, trade_day: dt.date, calendar: Any
-) -> tuple[dt.date | None, str | None]:
-    """(positional exit day, warning) of `instrument` traded from `trade_day`, on the
-    session `calendar` (module docstring). Raises nothing: a delivery contract the tables
-    do not cover is left to settle at expiry, with a warning."""
+def exit_day(instrument: Instrument, calendar: Any) -> tuple[dt.date | None, str | None]:
+    """(positional exit day, warning) of `instrument` on the session `calendar` (module
+    docstring). Raises nothing: a delivery contract the tables do not cover is left to
+    settle at expiry, with a warning."""
     if instrument.kind == "option":
         return _last_trading_day(instrument), None
     if instrument.kind != "future" or instrument.settlement != PHYSICAL:
@@ -111,17 +111,15 @@ def exit_day(
     if instrument.exchange in LISTED_DERIVATIVES:
         return _last_trading_day(instrument), None
     if instrument.exchange == MCX:
-        return _mcx_exit_day(instrument, trade_day, calendar)
+        return _mcx_exit_day(instrument, calendar)
     return None, None
 
 
-def positional_exits(
-    instruments: Sequence[Instrument], trade_day: dt.date, calendar: Any
-) -> PositionalExits:
-    """The positional exit day of each of `instruments` (registration order), traded from
-    `trade_day` on the session `calendar`, and the warnings of the delivery contracts the
-    tables give no tender period for."""
-    found = [exit_day(instrument, trade_day, calendar) for instrument in instruments]
+def positional_exits(instruments: Sequence[Instrument], calendar: Any) -> PositionalExits:
+    """The positional exit day of each of `instruments` (registration order) on the
+    session `calendar`, and the warnings of the delivery contracts the tables give no
+    tender period for."""
+    found = [exit_day(instrument, calendar) for instrument in instruments]
     days = tuple(day for day, _ in found)
     warnings = tuple(warning for _, warning in found if warning is not None)
     return PositionalExits(days, warnings)

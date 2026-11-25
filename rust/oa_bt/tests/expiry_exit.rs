@@ -13,11 +13,11 @@
 
 use oa_bt::engine::{
     run, BarColumns, CostConfig, Engine, FillTiming, IntradayOverrides, Perturbation, QuantityMode,
-    RunConfig, RunOutput, RunSetup, SettlementKind, StrategyInterval,
+    RunConfig, RunOutput, RunSetup, SettlementKind, StrategyInterval, Submission,
 };
 use oa_bt::exec::{
     FillAt, FillFlags, FillReason, InstrumentId, InstrumentSpec, OrderRequest, OrderType,
-    QuantitySpec,
+    QuantitySpec, RejectCode,
 };
 use oa_bt::market::calendar::{BaseInterval, Calendar};
 use oa_bt::market::facts::MarketFacts;
@@ -130,14 +130,8 @@ fn nrml_buy() -> OrderRequest {
 
 /// The backtest of `bars` on 1-minute slices of 2025-07-31, bought at the 09:15 close.
 fn minute_run(instrument: InstrumentSpec, bars: BarColumns) -> RunOutput {
-    let minute = 60_000_000_000;
-    let config = config(
-        BaseInterval::Intraday(minute),
-        StrategyInterval::Intraday(minute),
-        last_day(),
-    );
     let decided = ts_from_ist(last_day(), OPEN_MINUTE + 1);
-    run_with(config, instrument, bars, decided)
+    run_with(minute_config(), instrument, bars, decided)
 }
 
 fn run_with(
@@ -146,6 +140,18 @@ fn run_with(
     bars: BarColumns,
     decided: i64,
 ) -> RunOutput {
+    let acts = vec![(decided, Act::Submit(nrml_buy()))];
+    run_script(config, instrument, bars, acts).0
+}
+
+/// The backtest of `bars` acting as `acts` say; its output and what each submission
+/// returned.
+fn run_script(
+    config: RunConfig,
+    instrument: InstrumentSpec,
+    bars: BarColumns,
+    acts: Vec<(i64, Act)>,
+) -> (RunOutput, Vec<Submission>) {
     let setup = RunSetup {
         config,
         calendar: Calendar::new().expect("the embedded calendar tables parse"),
@@ -153,9 +159,20 @@ fn run_with(
         bars: vec![bars],
     };
     let mut kernel = Engine::new(setup).expect("a valid backtest");
-    let mut script = Script::new(vec![(decided, Act::Submit(nrml_buy()))]);
+    let mut script = Script::new(acts);
     run(&mut kernel, &mut script).expect("the backtest completes");
-    kernel.finish().expect("the backtest finished")
+    let output = kernel.finish().expect("the backtest finished");
+    (output, script.submissions)
+}
+
+/// The configuration of a run on 1-minute slices of 2025-07-31.
+fn minute_config() -> RunConfig {
+    let minute = 60_000_000_000;
+    config(
+        BaseInterval::Intraday(minute),
+        StrategyInterval::Intraday(minute),
+        last_day(),
+    )
 }
 
 const EXPIRY_EXIT: FillReason = FillReason::Exit(ExitReason::ExpiryExit);
@@ -311,4 +328,106 @@ fn an_mcx_delivery_contract_exits_at_mcx_square_off_on_its_exit_day() {
         (exit.fill.price_rupees, exit.fill.reason),
         (98_009.0, EXPIRY_EXIT)
     );
+}
+
+const REFUSED: RejectCode = RejectCode::ContractExpiring;
+
+#[test]
+fn entries_after_the_square_off_of_the_exit_day_are_refused_so_the_contract_is_traded_once() {
+    // A buy at the 09:15 close, then one at every close from 15:11 to 15:29, after the
+    // 15:10 expiry exit left the strategy flat. Those 19 would each fill at the next open
+    // and be exited at that same open, paying the slippage twice: they are refused at
+    // submission, `contract_expiring`, and the contract is bought and exited once.
+    let mut acts = vec![(
+        ts_from_ist(last_day(), OPEN_MINUTE + 1),
+        Act::Submit(nrml_buy()),
+    )];
+    for k in SQUARE_OFF + 1..SLICES {
+        acts.push((
+            ts_from_ist(last_day(), OPEN_MINUTE + k),
+            Act::Submit(nrml_buy()),
+        ));
+    }
+    let bars = minute_bars(1000.0, 1000.0);
+    let (output, submissions) = run_script(minute_config(), stock_future(), bars, acts);
+    let refused = submissions
+        .iter()
+        .filter(|outcome| matches!(outcome, Submission::Rejected(_, code) if *code == REFUSED))
+        .count();
+    assert_eq!((submissions.len(), refused), (20, 19), "{submissions:?}");
+    assert_eq!(output.trades.len(), 1);
+    assert_eq!(output.trades[0].exit_reason, EXPIRY_EXIT);
+}
+
+#[test]
+fn a_resting_entry_reached_after_the_square_off_of_the_exit_day_is_refused_at_its_fill() {
+    // A BUY LIMIT at 990.00 placed at the 09:15 close rests all day (bars 999.50 to
+    // 1,000.50) until the 15:20 bar dips to 985.00, after the 15:10 square-off: it is
+    // refused there, `contract_expiring`, and nothing is bought.
+    let mut bars = minute_bars(1000.0, 1000.0);
+    bars.low[365] = 985.0;
+    let request = OrderRequest {
+        order_type: OrderType::Limit {
+            limit_rupees: 990.0,
+        },
+        ..nrml_buy()
+    };
+    let acts = vec![(
+        ts_from_ist(last_day(), OPEN_MINUTE + 1),
+        Act::Submit(request),
+    )];
+    let (output, _) = run_script(minute_config(), stock_future(), bars, acts);
+    assert!(output.fills.is_empty(), "{:?}", output.fills);
+    assert_eq!(output.orders[0].reject_code, Some(REFUSED));
+}
+
+#[test]
+fn an_mcx_delivery_contract_is_not_bought_once_its_exit_day_has_closed() {
+    // GOLDM05FEB26FUT on daily bars: its exit day is Mon 2 February 2026, the trading day
+    // before its tender period (Tue 3 to Thu 5 February). A buy decided at the close of
+    // Mon 2 February would fill at the Tue 3 February open, inside the tender period: it is
+    // refused, and nothing is held into the tender period or settled at expiry.
+    let exit_day = days_from_civil(2026, 2, 2);
+    let last = days_from_civil(2026, 2, 5);
+    let goldm = InstrumentSpec {
+        symbol: "GOLDM05FEB26FUT".to_string(),
+        exchange: Exchange::Mcx,
+        kind: InstrumentKind::Future,
+        lot_size_units: 100,
+        tick_size_rupees: 1.0,
+        multiplier: 0.1,
+        freeze_quantity_units: None,
+        cost_segment: None,
+        last_trading_day: Some(last),
+        positional_exit_day: Some(exit_day),
+    };
+    let mut bars = BarColumns::default();
+    for (n, close) in [78_000.0, 78_100.0, 78_200.0, 78_300.0]
+        .into_iter()
+        .enumerate()
+    {
+        bars.ts_open.push(ts_from_ist(exit_day + n as i32, 9 * 60));
+        bars.open.push(close);
+        bars.high.push(close + 50.0);
+        bars.low.push(close - 50.0);
+        bars.close.push(close);
+        bars.volume.push(100.0);
+    }
+    let calendar = Calendar::new().expect("the embedded calendar tables parse");
+    let session = calendar.session(Exchange::Mcx, exit_day);
+    let decided = session.expect("an MCX session on 2026-02-02").close;
+    let config = RunConfig {
+        last_day: last,
+        ..config(BaseInterval::Daily, StrategyInterval::Daily, exit_day)
+    };
+    let buy = OrderRequest {
+        quantity: QuantitySpec::Units(100.0),
+        ..nrml_buy()
+    };
+    let (output, submissions) = run_script(config, goldm, bars, vec![(decided, Act::Submit(buy))]);
+    assert!(
+        matches!(submissions[..], [Submission::Rejected(_, REFUSED)]),
+        "{submissions:?}"
+    );
+    assert!(output.fills.is_empty(), "{:?}", output.fills);
 }

@@ -91,10 +91,12 @@ def session(
     return engine_class.session(default_calendar()._cal, config, [instrument], [NO_BARS])
 
 
-def release(engine: Any, minute: int, day: dt.date) -> tuple:
-    """Hand the session the flat bar of `minute`, release it and return its next pause."""
+def release(engine: Any, minute: int, day: dt.date, close: float = 500.0) -> tuple:
+    """Hand the session the bar of `minute`, opening at 500.00 and closing at `close`,
+    release it and return its next pause."""
     assert engine.advance()[0] == "waiting"
-    engine.add_bar(0, (at(minute, day), 500.0, 500.0, 500.0, 500.0, 1_000.0))
+    low = min(close, 500.0)
+    engine.add_bar(0, (at(minute, day), 500.0, max(close, 500.0), low, close, 1_000.0))
     engine.release(minute + 1)
     return engine.advance()
 
@@ -123,11 +125,14 @@ def bought(engine: Any, day: dt.date, units: float, product: str, rules: dict) -
     return engine
 
 
-def to_close(engine: Any, day: dt.date, first: int) -> list[dict[str, Any]]:
-    """Run `engine` from minute `first` to its close, confirming each cancellation the
-    close sends; the commands of the close."""
+def to_close(
+    engine: Any, day: dt.date, first: int, last_close: float = 500.0
+) -> list[dict[str, Any]]:
+    """Run `engine` from minute `first` to its close, the last bar closing at
+    `last_close`, confirming each cancellation the close sends; the commands of the
+    close."""
     for minute in range(first, SLICES):
-        release(engine, minute, day)
+        release(engine, minute, day, last_close if minute == SLICES - 1 else 500.0)
     # The last slice paused at its close; its step 8 is the session's close.
     waits = engine.advance()[0] == "waiting"
     closed = engine.take_commands()
@@ -212,18 +217,21 @@ def test_a_stock_future_is_exited_at_the_square_off_of_its_exit_day():
 
 
 def test_an_expired_index_future_is_recorded_exited_at_its_last_close_the_next_day():
+    # Bought at 500.00; the expiry day's last bar closes at 512.00, apart from every other
+    # price, so the exit's 75 x 12.00 = 900.00 shows that last close was used.
     index = future("NIFTY31JUL25FUT", None)
     engine = bought(session(EXPIRY, index), EXPIRY, 75.0, "NRML", STOP_3)
     (place_gtt,) = engine.take_commands()
     engine.apply_gtt_placed(place_gtt["gtt_id"])
-    closed = to_close(engine, EXPIRY, 1)
+    closed = to_close(engine, EXPIRY, 1, last_close=512.0)
     assert [command["command"] for command in closed] == ["cancel_gtt"]
     carried = json.loads(json.dumps(engine.carried_state()))
-    assert carried["last_closes"] == [{"instrument": 0, "close_rupees": 500.0}]
+    assert carried["last_closes"] == [{"instrument": 0, "close_rupees": 512.0}]
     tomorrow = session(AFTER_EXPIRY, index)
     ids = tomorrow.restore_carried_state(carried)
     assert ids["expired"] == [0]
-    assert tomorrow.position(0, "NRML")["quantity_units"] == 0.0
+    position = tomorrow.position(0, "NRML")
+    assert (position["quantity_units"], position["realized_rupees"]) == (0.0, 900.0)
     assert tomorrow.take_commands() == []
 
 

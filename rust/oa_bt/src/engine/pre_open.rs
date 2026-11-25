@@ -287,14 +287,21 @@ impl Engine {
 
     /// At the open of a session's first slice, in a live session: the session's clock
     /// reaches that open, so what waited for it goes (a pre-open decision's orders, a
-    /// rearm_daily leg's stop: `rearm`), as the exits move on (`progress_exits`). A tick at
-    /// or after the open has done so already when one came first. A backtest does nothing
-    /// here.
+    /// rearm_daily leg's stop: `rearm`), as the exits move on (`progress_exits`), after the
+    /// expiry exit of a position carried past its contract's exit day
+    /// (`venue_exits::expiry_exits_at_session_open`). A tick at or after the open has moved
+    /// them on already when one came first; when none did, the open of the slice's bar is
+    /// the session's first price, and its open positions are marked there first, so a
+    /// rearm_daily stop the open is already beyond exits the leg rather than being placed
+    /// (`rearm_waits_or_crosses`). A backtest does nothing here.
     ///
-    /// Errors: those of `progress_exits`.
+    /// Errors: those of the expiry exits and of `progress_exits`.
     pub(super) fn venue_at_session_open(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if !self.is_external() || !slice.opens_session {
             return Ok(());
+        }
+        if self.venue.clock_ns < slice.open {
+            self.mark_at_first_open(slice);
         }
         self.venue.clock_ns = self.venue.clock_ns.max(slice.open);
         let at = SendAt {
@@ -302,7 +309,22 @@ impl Engine {
             step: Step::OpenFills,
             decided_at: slice.open,
         };
+        self.expiry_exits_at_session_open(at)?;
         self.progress_exits(at)
+    }
+
+    /// Mark every open position whose instrument has a bar in the session's first slice
+    /// at that bar's open: no tick reached the open before the slice ran (module docs of
+    /// `venue_at_session_open`).
+    fn mark_at_first_open(&mut self, slice: &SliceInfo) {
+        for position in self.portfolio.positions_mut() {
+            if position.is_flat() {
+                continue;
+            }
+            if let Some(bar) = self.market.bar(position.key.instrument, slice.index) {
+                position.mark_rupees = Some(bar.open);
+            }
+        }
     }
 
     /// The flags of working order `id`'s fills (`FillFlags`): `late_decision` for an order

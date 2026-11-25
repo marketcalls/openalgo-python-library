@@ -30,7 +30,8 @@ from openalgo.backtest.reference import Instrument
 # entry after its daily loss limit, "group_other_side" and "shared_resting", a live
 # session's gates on an instrument several of its strategies trade, and the daily limits
 # of 18-multi-strategy 2.5a: "trade_limit", "account_trade_limit", "daily_profit_gate",
-# "account_profit_gate" and "order_value_limit". `RejectCode::RateLimit`
+# "account_profit_gate" and "order_value_limit", and "contract_expiring", an entry on a
+# derivatives contract after its positional exit. `RejectCode::RateLimit`
 # is left out: no kernel check makes it, because no order rate limit is enforced in a
 # backtest.
 KERNEL_REJECT_CODES = {
@@ -62,6 +63,7 @@ KERNEL_REJECT_CODES = {
     "daily_profit_gate",
     "account_profit_gate",
     "order_value_limit",
+    "contract_expiring",
 }
 NIFTY_INDEX = Instrument(
     symbol="NIFTY", exchange="NSE_INDEX", kind="index", tick_size=0.05, settlement="none"
@@ -126,6 +128,10 @@ def test_the_daily_limits_refuse_as_rules_working():
     # only, as the entry window is (18-multi-strategy 2.5a rule 9).
     daily = {"trade_limit", "account_trade_limit", "daily_profit_gate", "account_profit_gate"}
     assert daily | {"order_value_limit"} <= RUN_RULE_CODES
+
+
+def test_an_entry_after_a_contracts_positional_exit_is_the_expiry_rule_working():
+    assert "contract_expiring" in RUN_RULE_CODES
 
 
 def test_the_accounts_loss_gate_is_a_rule_working_and_its_margin_refusal_is_not():

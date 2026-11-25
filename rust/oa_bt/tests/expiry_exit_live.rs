@@ -13,8 +13,8 @@
 //! at 1,000.00 at the 09:16 open.
 
 use oa_bt::engine::{
-    BaseBar, Driver, Engine, KernelError, OrderRole, Pause, RiskExitReason, RunConfig, StateValue,
-    Submission, VenueCommand,
+    BaseBar, Driver, Engine, KernelError, LiveStateError, OrderRole, Pause, RiskExitReason,
+    RunConfig, StateValue, Submission, VenueCommand,
 };
 use oa_bt::exec::{
     FillAt, FillFlags, FillReason, InstrumentSpec, OrderId, OrderRequest, OrderType, RejectCode,
@@ -85,21 +85,29 @@ fn stop_50() -> LegRules {
     }
 }
 
-/// Run `kernel`, a session of `day`, adding flat bars at 1,000.00 and releasing each
-/// slice, until it waits before slice `until` or finishes; the venue confirms every GTT
-/// request it takes on the way only when `confirm_gtts`.
+/// The close of the last bar of every session, 15:29 to 15:30: apart from the entry's
+/// 1,000.00 and every other bar's, so a record at the wrong price shows.
+const LAST_CLOSE: f64 = 988.0;
+
+/// Run `kernel`, a session of `day`, adding bars flat at 1,000.00 (the last one closing at
+/// `LAST_CLOSE`) and releasing each slice, until it waits before slice `until` or
+/// finishes.
 fn run_until(kernel: &mut Engine, day: Day, script: &mut Script, until: usize) {
     loop {
         match kernel.advance().expect("the slice runs") {
             Pause::Waiting { next_slice } if next_slice >= until => return,
             Pause::Waiting { next_slice } => {
                 let k = u32::try_from(next_slice).expect("a slice of the day");
+                let close = match next_slice + 1 == SLICES {
+                    true => LAST_CLOSE,
+                    false => 1000.0,
+                };
                 let bar = BaseBar {
                     ts_open: minute_on(day, k),
                     open: 1000.0,
                     high: 1000.0,
-                    low: 1000.0,
-                    close: 1000.0,
+                    low: close,
+                    close,
                     volume: 1_000.0,
                 };
                 kernel.add_bar(SBIN, bar).expect("a bar of a closed slice");
@@ -114,13 +122,18 @@ fn run_until(kernel: &mut Engine, day: Day, script: &mut Script, until: usize) {
 /// The session of 2025-07-31 holding one lot of `instrument` bought at 1,000.00, with
 /// `rules`, its stop GTT (if any) confirmed, waiting before 09:16 with no command left.
 fn holding(instrument: InstrumentSpec, rules: LegRules) -> Engine {
-    let mut kernel = session_on(last_day(), instrument);
-    let decided = minute_on(last_day(), 1);
+    holding_on(last_day(), instrument, rules)
+}
+
+/// `holding`, in the session of `day`.
+fn holding_on(day: Day, instrument: InstrumentSpec, rules: LegRules) -> Engine {
+    let mut kernel = session_on(day, instrument);
+    let decided = minute_on(day, 1);
     let mut script = Script::new(vec![(decided, Act::Submit(buy(rules)))]);
-    run_until(&mut kernel, last_day(), &mut script, 1);
+    run_until(&mut kernel, day, &mut script, 1);
     kernel.take_commands();
     kernel
-        .apply_fill(ENTRY, 75.0, 1000.0, minute_on(last_day(), 1))
+        .apply_fill(ENTRY, 75.0, 1000.0, minute_on(day, 1))
         .expect("the entry fills");
     for command in kernel.take_commands() {
         if let VenueCommand::PlaceGtt { gtt, .. } = command {
@@ -275,7 +288,7 @@ fn the_next_days_session_records_the_expired_position_at_its_last_close() {
     let expiry = FillReason::Exit(ExitReason::Expiry);
     assert_eq!(
         (exit.price_rupees, exit.at, exit.reason),
-        (1000.0, FillAt::Close, expiry)
+        (LAST_CLOSE, FillAt::Close, expiry)
     );
     assert!(exit.flags.contains(FillFlags::FILLED_AT_LAST_CLOSE));
     assert_eq!(output.trades.len(), 1);
@@ -283,6 +296,175 @@ fn the_next_days_session_records_the_expired_position_at_its_last_close() {
         .final_positions
         .iter()
         .all(|p| p.quantity_units == 0.0));
+}
+
+#[test]
+fn the_expired_positions_result_belongs_to_its_last_day_not_to_the_next_days_loss_limit() {
+    // Bought at 1,000.00 and carried at its 988.00 last close: a loss of 900.00 (75 x
+    // 12.00) that the exchange's settlement ended on 07-31, as a backtest's settlement at
+    // expiry ends it that day. The next day's daily loss measure starts at nothing, as a
+    // backtest's next session does, rather than counting that loss again.
+    let (_, carried) = index_future_carried();
+    let mut kernel = session_on(next_day(), index_future());
+    kernel
+        .restore_carried_state(&carried)
+        .expect("the next day takes it");
+    assert_eq!(kernel.daily_loss_measure(), 0.0);
+}
+
+/// The commands that place an order: (side, units, order type, role).
+fn placed(commands: &[VenueCommand]) -> Vec<(Side, f64, OrderType, OrderRole)> {
+    commands
+        .iter()
+        .filter_map(|command| match *command {
+            VenueCommand::Place {
+                side,
+                units,
+                order_type,
+                role,
+                ..
+            } => Some((side, units, order_type, role)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_carried_position_whose_exit_day_was_missed_is_exited_at_the_next_sessions_first_open() {
+    // A stock future bought on Mon 07-28 with its exit day Tue 07-29, when no session ran.
+    // The Wed 07-30 session, before the contract's last trading day, exits it as it reaches
+    // its first open.
+    let monday = days_from_civil(2025, 7, 28);
+    let wednesday = days_from_civil(2025, 7, 30);
+    let instrument = contract("SBIN31JUL25FUT", Some(days_from_civil(2025, 7, 29)));
+    let mut kernel = holding_on(monday, instrument.clone(), LegRules::default());
+    close_day(&mut kernel, monday);
+    let carried = kernel.carried_state().expect("Monday has closed");
+    let mut kernel = session_on(wednesday, instrument);
+    kernel
+        .restore_carried_state(&carried)
+        .expect("Wednesday takes it");
+    assert_eq!(
+        kernel.take_commands(),
+        Vec::new(),
+        "nothing before the open"
+    );
+    run_until(&mut kernel, wednesday, &mut Script::new(Vec::new()), 1);
+    let expiry = OrderRole::RiskExit(RiskExitReason::ExpiryExit);
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        vec![(Side::Sell, 75.0, OrderType::Market, expiry)]
+    );
+}
+
+#[test]
+fn an_entry_submitted_after_the_square_off_of_the_exit_day_is_refused_and_sends_nothing() {
+    // Decided at the 15:16 close of the exit day, after its 15:10 square-off.
+    let mut kernel = session_on(last_day(), stock_future());
+    let decided = minute_on(last_day(), 361);
+    let mut script = Script::new(vec![(decided, Act::Submit(buy(LegRules::default())))]);
+    run_until(&mut kernel, last_day(), &mut script, 362);
+    assert!(
+        matches!(
+            script.submissions[..],
+            [Submission::Rejected(_, RejectCode::ContractExpiring)]
+        ),
+        "{:?}",
+        script.submissions
+    );
+    assert_eq!(kernel.take_commands(), Vec::new());
+}
+
+#[test]
+fn a_resting_entry_still_working_at_the_square_off_of_the_exit_day_is_withdrawn() {
+    // A BUY LIMIT at 990.00 placed at the 09:15 close rests below the market; the session
+    // reaching the 15:10 open cancels it, as a backtest refuses it at a fill after then.
+    let mut kernel = session_on(last_day(), stock_future());
+    let request = OrderRequest {
+        order_type: OrderType::Limit {
+            limit_rupees: 990.0,
+        },
+        ..buy(LegRules::default())
+    };
+    let mut script = Script::new(vec![(minute_on(last_day(), 1), Act::Submit(request))]);
+    run_until(&mut kernel, last_day(), &mut script, SQUARE_OFF - 1);
+    assert_eq!(placed(&kernel.take_commands()).len(), 1, "the LIMIT rests");
+    run_until(
+        &mut kernel,
+        last_day(),
+        &mut Script::new(Vec::new()),
+        SQUARE_OFF,
+    );
+    assert_eq!(
+        kernel.take_commands(),
+        vec![VenueCommand::Cancel { order: ENTRY }]
+    );
+}
+
+#[test]
+fn a_position_on_a_contract_settled_by_delivery_carried_past_its_last_day_is_refused() {
+    // The stock future's expiry exit at 15:10 is never filled and the close cancels it, so
+    // the session closes holding the position. On 08-01 the exchange has settled it by
+    // delivery, which the engine cannot record: the restore is refused, nothing restored.
+    let mut kernel = holding(stock_future(), LegRules::default());
+    close_day(&mut kernel, last_day());
+    let carried = kernel.carried_state().expect("the day has closed");
+    let mut next = session_on(next_day(), stock_future());
+    let refused = next.restore_carried_state(&carried);
+    let Err(KernelError::LiveState(LiveStateError::MissedExpiryExit {
+        symbol,
+        last_trading_day,
+    })) = refused
+    else {
+        panic!("refused for its missed exit: {refused:?}");
+    };
+    assert_eq!(
+        (symbol.as_str(), last_trading_day),
+        ("SBIN31JUL25FUT", last_day())
+    );
+    assert_eq!(next.take_commands(), Vec::new());
+    assert!(next.position(SBIN, Product::Nrml).is_none());
+}
+
+/// `state` with `edit` applied to its part `name`.
+fn edit_part(state: &StateValue, name: &str, edit: impl Fn(&mut StateValue)) -> StateValue {
+    let mut state = state.clone();
+    if let StateValue::Map(parts) = &mut state {
+        for (key, value) in parts.iter_mut() {
+            if key == name {
+                edit(value);
+            }
+        }
+    }
+    state
+}
+
+#[test]
+fn an_expired_position_with_no_last_close_and_no_mark_is_refused_as_malformed() {
+    let (_, carried) = index_future_carried();
+    let no_closes = edit_part(&carried, "last_closes", |closes| {
+        *closes = StateValue::List(Vec::new());
+    });
+    let no_mark = edit_part(&no_closes, "positions", |positions| {
+        if let StateValue::List(items) = positions {
+            for item in items.iter_mut() {
+                if let StateValue::Map(fields) = item {
+                    for (key, value) in fields.iter_mut() {
+                        if key == "mark_rupees" {
+                            *value = StateValue::Null;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let mut kernel = session_on(next_day(), index_future());
+    let refused = kernel.restore_carried_state(&no_mark);
+    let Err(KernelError::LiveState(LiveStateError::Malformed { path, reason })) = refused else {
+        panic!("refused as malformed: {refused:?}");
+    };
+    assert_eq!(path, "carried_state.positions[0]");
+    assert!(reason.contains("NIFTY31JUL25FUT"), "{reason}");
 }
 
 #[test]

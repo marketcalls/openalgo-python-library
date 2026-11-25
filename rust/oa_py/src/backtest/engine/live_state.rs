@@ -60,7 +60,12 @@
 //!   session's day (an index future left to the exchange at its last close) is recorded
 //!   exited at its carried last close, reason "expiry", flagged "filled_at_last_close",
 //!   its instrument listed in "expired": the session never trades it (an order on it is
-//!   rejected "market_closed") and its stop GTTs are not restored. A rearm_daily leg
+//!   rejected "market_closed") and its stop GTTs are not restored; that exit is recorded
+//!   before the session's boundary, so it does not count toward the day's loss limit. A
+//!   position on a contract the engine exits before its settlement (one with a
+//!   "positional_exit_day") carried past its last trading day missed that exit: the state
+//!   is refused with `NativeEngineInputError` naming the contract and the day, as is an
+//!   expired position with neither a last close nor a mark. A rearm_daily leg
 //!   (`positional_stops="rearm_daily"`) gets its DAY stop placed once the session reaches
 //!   its open. A
 //!   state of the same or a later day, other instruments, another capital, an MIS

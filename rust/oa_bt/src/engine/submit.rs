@@ -297,6 +297,9 @@ impl Engine {
                 return Ok(Err(code));
             }
         }
+        if opening && self.past_positional_exit(request.instrument, slice.day, decided_at)? {
+            return Ok(Err(RejectCode::ContractExpiring));
+        }
         // Pre-trade check order of 03-architecture 4.4: closed market (5), trading state
         // and entry gates (6, 7), the scale-in limits (7), then an excess over the
         // position without `reverse` (7).

@@ -52,11 +52,15 @@
 //! A carried position on a contract whose last trading day is before the session's day
 //! (an index future or a cash-settled MCX contract left to the exchange at its last
 //! close, `expiry`) is not traded by the session: its exit is recorded at the contract's
-//! carried last close (the position's mark when the state has none), reason `expiry`,
-//! flagged `filled_at_last_close`, with no charges, once the rest is in place, and its
-//! stop GTTs are not restored (the broker ends them with the contract). Its instrument is
-//! reported in `CarriedIds::expired`. Reading, checking and applying it is
-//! `carry_restore`.
+//! carried last close (the position's mark when the state has none; a state with neither
+//! is refused as `Malformed`), reason `expiry`, flagged `filled_at_last_close`, with no
+//! charges, once the books are in place and before the session's boundary (the exit
+//! belongs to the carried day, as a backtest's settlement at expiry), and its stop GTTs are
+//! not restored (the broker ends them with the contract). Its instrument is reported in
+//! `CarriedIds::expired`. A position on a contract with a positional exit day carried past
+//! its last trading day missed the engine's exit and was settled by the exchange: the
+//! state is refused, `MissedExpiryExit` (`carry_expired`). Reading, checking and applying
+//! it is `carry_restore`.
 
 use crate::exec::{Gtt, GttId, GttPurpose, InstrumentId, OrderId};
 use crate::portfolio::PositionKey;
@@ -247,8 +251,10 @@ impl Engine {
     /// Errors: `Venue(NotExternal)` in a backtest; `LiveState` when the state is refused,
     /// whole: `NotRestorable` for a session that has traded or was restored already;
     /// `Version`, `CarriedMismatch` (the same or a later day, other instruments, another
-    /// capital, an MIS position) and `Malformed` (a field that cannot be read, or parts
-    /// that do not hold together) for the state itself.
+    /// capital, an MIS position), `MissedExpiryExit` (a position on a contract with a
+    /// positional exit day past its last trading day) and `Malformed` (a field that cannot
+    /// be read, parts that do not hold together, an expired position with no price to
+    /// record its exit at) for the state itself.
     pub fn restore_carried_state(&mut self, state: &StateValue) -> Result<CarriedIds, KernelError> {
         if !self.is_external() {
             return Err(VenueError::NotExternal.into());

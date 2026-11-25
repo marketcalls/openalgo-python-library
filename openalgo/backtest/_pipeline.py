@@ -35,6 +35,7 @@ run calls `begin` and `conclude` for each strategy, with the fund's driver betwe
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import pickle
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -114,6 +115,9 @@ class PreparedRun:
     history: LoadedHistory | None = None
     needs: dict[tuple, tuple[SeriesNeed, ...]] = dataclasses.field(default_factory=dict)
     measured: dict[str, WarmUp] = dataclasses.field(default_factory=dict)
+    # Each instrument's positional exit day in registration order (`_positional_exit`),
+    # worked out once in `load`; None for a run prepared elsewhere, whose engine has none.
+    exit_days: tuple[dt.date | None, ...] | None = None
 
     @property
     def portable(self) -> bool:
@@ -223,7 +227,8 @@ def load(checked: CheckedRun, client: Any, args: dict[str, Any]) -> PreparedRun:
     benchmark = load_benchmark(checked.benchmark, plan, args, client, calendar, frames)
     extra = [market.warnings, () if futures is None else futures.warnings]
     extra.append(() if benchmark is None else benchmark.warnings)
-    extra.append(positional_exits(instruments, plan.start, calendar).warnings)
+    exits = positional_exits(instruments, calendar)
+    extra.append(exits.warnings)
     return PreparedRun(
         plan=plan,
         calendar=checked.calendar,
@@ -245,6 +250,7 @@ def load(checked: CheckedRun, client: Any, args: dict[str, Any]) -> PreparedRun:
         history=load_history(plan, source, needs.values()),
         needs=needs,
         measured=checked.measured,
+        exit_days=exits.days,
     )
 
 
@@ -276,8 +282,9 @@ def _bound(
     before the run's bars)."""
     plan, calendar = prepared.plan, prepared.session_calendar()
     config = plan.native_config(deliver_events=strategy.wants_events()) | market.config
-    exits = positional_exits(prepared.instruments, plan.start, calendar)
-    engine = build_engine(calendar._cal, config, prepared.instruments, prepared.frames, exits.days)
+    engine = build_engine(
+        calendar._cal, config, prepared.instruments, prepared.frames, prepared.exit_days
+    )
     futures = None
     if prepared.futures is not None:
         futures = (prepared.futures, attach(engine, prepared.futures, list(plan.symbols)))

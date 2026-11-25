@@ -140,7 +140,7 @@ fn risk(dict: &Bound<'_, PyDict>) -> PyResult<StrategyRiskConfig> {
 }
 
 /// How a CNC or NRML leg's stop is held, from the risk dict's "positional_stops" ("gtt" or
-/// "rearm_daily"; absent: "gtt", `openalgo/backtest/_positional_stops.py`).
+/// "rearm_daily"; absent: "gtt"; `POSITIONAL_STOPS` in `openalgo/backtest/_risk_settings.py`).
 fn positional_stops(dict: &Bound<'_, PyDict>) -> PyResult<PositionalStops> {
     let Some(code) = optional::<String>(dict, "positional_stops")? else {
         return Ok(PositionalStops::default());

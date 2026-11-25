@@ -126,7 +126,8 @@ fn check_sent(read: &Read<'_>, parts: &Parts<'_>) -> Result<(), LiveStateError> 
         let unsent = waits_unsent(parts.exits, id) || parts.at_open.contains(&id);
         if saved.sent == unsent {
             let reason = format!(
-                "is saved {}sent, which only a strategy exit waiting for its cancels and an                  order waiting for the session's open are not",
+                "is saved {}sent, which only a strategy exit waiting for its cancels and an \
+                 order waiting for the session's open are not",
                 if saved.sent { "" } else { "not " }
             );
             return Err(refuse(read, &["orders"], index, reason));

@@ -308,8 +308,9 @@ fn protect_at_the_open_beyond_the_stop_exits_flagged_stop_crossed() {
         Ok(Protect::WaitsForOpen)
     );
     run_until(&mut kernel, day(2), &mut Script::new(Vec::new()), 0);
-    // A last price at or below the stop when the session reaches its open: the first
-    // slice's open phase exits the leg instead of placing the stop.
+    // A price at or below the stop when the session reaches its open: the first slice's
+    // open phase exits the leg instead of placing the stop. With no tick at or after the
+    // open, that price is the open of the slice's bar, 949.00 as the pre-open tick.
     let at = minute_on(day(2), 0) - SECOND;
     kernel.push_tick(SBIN, 949.0, at).expect("a pre-open tick");
     assert_eq!(
@@ -317,11 +318,51 @@ fn protect_at_the_open_beyond_the_stop_exits_flagged_stop_crossed() {
         Vec::new(),
         "nothing before the open"
     );
+    let bar = BaseBar {
+        ts_open: minute_on(day(2), 0),
+        open: 949.0,
+        high: 950.0,
+        low: 948.0,
+        close: 949.0,
+        volume: 1_000.0,
+    };
+    kernel.add_bar(SBIN, bar).expect("the first slice's bar");
+    kernel.release(1);
     run_until(&mut kernel, day(2), &mut Script::new(Vec::new()), 1);
     let sent = places(&kernel.take_commands());
     let crossed = OrderRole::RiskExit(RiskExitReason::StopCrossed);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].4, crossed);
+}
+
+#[test]
+fn with_no_tick_before_the_first_slice_its_open_beyond_the_stop_exits_flagged_stop_crossed() {
+    // No tick comes before the session runs its first slice, so the session's first price
+    // is that slice's open, 940.00, beyond the 950.00 stop, not the carried close of
+    // 1,000.00: the leg is exited at market, flagged stop_crossed, and no stop is placed.
+    let (carried, _) = carried_day_1();
+    let mut kernel = restored(day(2), &carried);
+    assert!(matches!(
+        kernel.advance(),
+        Ok(Pause::Waiting { next_slice: 0 })
+    ));
+    let bar = BaseBar {
+        ts_open: minute_on(day(2), 0),
+        open: 940.0,
+        high: 945.0,
+        low: 935.0,
+        close: 942.0,
+        volume: 1_000.0,
+    };
+    kernel.add_bar(SBIN, bar).expect("the first slice's bar");
+    kernel.release(1);
+    run_until(&mut kernel, day(2), &mut Script::new(Vec::new()), 1);
+    let crossed = OrderRole::RiskExit(RiskExitReason::StopCrossed);
+    let sent: Vec<(Side, f64, OrderType, OrderRole)> = places(&kernel.take_commands())
+        .into_iter()
+        .map(|(_, side, units, order_type, role)| (side, units, order_type, role))
+        .collect();
+    assert_eq!(sent, vec![(Side::Sell, 100.0, OrderType::Market, crossed)]);
 }
 
 #[test]

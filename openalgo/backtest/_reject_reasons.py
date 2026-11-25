@@ -18,7 +18,9 @@ covers, and the account's daily loss limit
 locking entries (`rust/oa_bt/src/engine/account_link.rs`, `account_breach.rs`), and so are
 `account_trade_limit` and `account_profit_gate`. `trade_limit`, `daily_profit_gate` and
 `order_value_limit` are a strategy's daily limits (`rust/oa_bt/src/engine/daily_caps.rs`,
-18-multi-strategy 2.5a). Each entry is (what happened, what to do). The product rule
+18-multi-strategy 2.5a). `contract_expiring` is an entry on a derivatives contract after
+its positional exit (`rust/oa_bt/src/engine/expiry.rs`, `_positional_exit`). Each entry is
+(what happened, what to do). The product rule
 covers three refusals that need different advice, so it has one entry per case, told
 apart by the order and its
 instrument (`_rejections.product_rule_case`). The entry window is the window working, not
@@ -29,9 +31,10 @@ entry window (given or the calendar's default), the limits a strategy or run set
 (max_daily_loss, drawdown_halt, cooldown, max_positions, and the REDUCING or HALTED
 state they lead to, the daily limits max_trades_per_day, daily_profit_target and
 max_order_value, and the account's daily loss limit, daily profit target and trade cap of
-a portfolio run) and the delay a run holds its orders for (delay_entries=,
-delay_exits=). The end-of-run notice leaves them out (`_rejection_notice`); each is told
-once in `result.warnings` (`_rejections`).
+a portfolio run), the delay a run holds its orders for (delay_entries=,
+delay_exits=) and the exit of a derivatives contract before the exchange settles it. The
+end-of-run notice leaves them out (`_rejection_notice`); each is told once in
+`result.warnings` (`_rejections`).
 """
 
 from __future__ import annotations
@@ -45,6 +48,8 @@ ACCOUNT_LOSS_GATE = "account_loss_gate"
 ACCOUNT_MARGIN = "account_margin"
 ACCOUNT_PROFIT_GATE = "account_profit_gate"
 ACCOUNT_TRADE_LIMIT = "account_trade_limit"
+#: An entry on a derivatives contract after its positional exit (`_positional_exit`).
+CONTRACT_EXPIRING = "contract_expiring"
 #: The codes of a strategy's daily limits (18-multi-strategy 2.5a).
 DAILY_LIMIT_CODES = ("trade_limit", "daily_profit_gate", "order_value_limit")
 RUN_RULE_CODES = frozenset(
@@ -58,6 +63,7 @@ RUN_RULE_CODES = frozenset(
         ACCOUNT_LOSS_GATE,
         ACCOUNT_PROFIT_GATE,
         ACCOUNT_TRADE_LIMIT,
+        CONTRACT_EXPIRING,
         *DAILY_LIMIT_CODES,
     }
 )
@@ -196,6 +202,15 @@ REASONS = MappingProxyType(
             "this is the account's target working; raise account_daily_profit_target to "
             "keep trading longer",
         ),
+        CONTRACT_EXPIRING: (
+            "an entry or add came on a derivatives contract after its positional exit (the "
+            "square-off time of the last trading day of a stock future, a stock option or any "
+            "option, or of the trading day before an MCX delivery contract's tender period, "
+            "and every later day), when the engine exits every position on it before the "
+            "exchange settles it; exits are never refused by it",
+            "this is the expiry rule working: trade the next contract from then on, as a "
+            "futures strategy with roll= does",
+        ),
         "order_value_limit": (
             "an entry or add was worth more than max_order_value (its units times its "
             "limit, an SL-M's trigger or the last close, times the multiplier), or was a "
@@ -252,6 +267,7 @@ __all__ = [
     "ACCOUNT_MARGIN",
     "ACCOUNT_PROFIT_GATE",
     "ACCOUNT_TRADE_LIMIT",
+    "CONTRACT_EXPIRING",
     "DAILY_LIMIT_CODES",
     "DELAY_PAST_CLOSE",
     "ENTRY_WINDOW",

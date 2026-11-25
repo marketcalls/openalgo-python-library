@@ -8,13 +8,21 @@
 //! every option; the trading day before an MCX delivery contract's tender period begins;
 //! none for a contract the exchange settles in cash.
 //!
+//! The positional exit is the square-off time of that day. From then on, and on every
+//! later day, the contract is not entered (`past_positional_exit`):
+//!
 //! | Contract | Backtest | Live session |
 //! |---|---|---|
-//! | With a positional exit day | on that day every position still open on it exits at the first base-bar open at or after the exchange's square-off time, as MIS positions are squared off, reason `expiry_exit`, at the open plus slippage (`expiry_exit_at_open`, step 2, after the square-off); its stop GTT is cancelled first (`gtt`); one still open at that session's close exits at its last close, flagged `filled_at_last_close` (`close_expiring_positions`, step 8, as `eod` closes an MIS position), so its settlement never happens | the engine's exit at that open, `EngineExit::Risk(ExpiryExit)` (`venue_exits`), its stop GTT or stop order cancelled first by the exit owner (`venue_owner`) |
+//! | With a positional exit day | on that day every position still open on it exits at the first base-bar open at or after the exchange's square-off time, as MIS positions are squared off, reason `expiry_exit`, at the open plus slippage (`expiry_exit_at_open`, step 2, after the square-off); its stop GTT is cancelled first (`gtt`); one still open at that session's close exits at its last close, flagged `filled_at_last_close` (`close_expiring_positions`, step 8, as `eod` closes an MIS position), so its settlement never happens. A position still open on a later day (an exit day the run has no session for) exits at that day's first open, or at its close when it has no bar | the engine's exit at that open, `EngineExit::Risk(ExpiryExit)` (`venue_exits`), its stop GTT or stop order cancelled first by the exit owner (`venue_owner`); a position carried past its exit day (a session not started that day, an exit not filled), up to the contract's last trading day, is exited as the next session reaches its first open (`venue_exits::expiry_exits_at_session_open`); one carried past its last trading day is refused at the restore (`venue_state::carry_expired`) |
 //! | Settled in cash (index futures, MCX cash contracts, an MCX delivery contract the tables give no tender period for) | settled at expiry as before (`settlement`) | at the close of its last trading day its stop GTT is cancelled (`cancel_expiring_stop_gtts`), and none is placed again; the position is left to the exchange. The next day's session records its exit at the carried last close, reason `expiry`, flagged `filled_at_last_close` (`venue_state::carry_restore`) |
+//!
+//! An order that would open or add on a contract past its positional exit is refused,
+//! `contract_expiring`, at submission (`submit`) and at its fill (`fill_bar`); in a live
+//! session one still working when the session reaches an open past the exit is withdrawn
+//! (`venue_exits`). Exits are never refused by it.
 
 use crate::exec::{FillAt, FillFlags, InstrumentId};
-use crate::model::Day;
+use crate::model::{Day, TsNanos};
 use crate::portfolio::PositionKey;
 use crate::rms::ExitReason;
 
@@ -32,19 +40,44 @@ impl Engine {
             .and_then(|spec| spec.positional_exit_day)
     }
 
-    /// True when `slice` opens at or after the square-off time of `instrument`'s
-    /// positional exit day (module docs).
+    /// True when `at` (UTC nanoseconds) on the session `day` is at or after `instrument`'s
+    /// positional exit: the square-off time of its positional exit day, or any later day
+    /// (module docs). False for a contract with no positional exit day.
     ///
-    /// Errors: `InvalidConfig` when the session has no intraday times.
+    /// Errors: `InvalidConfig` when the exit day's session has no intraday times.
+    pub(super) fn past_positional_exit(
+        &mut self,
+        instrument: InstrumentId,
+        day: Day,
+        at: TsNanos,
+    ) -> Result<bool, KernelError> {
+        match self.positional_exit_day(instrument) {
+            Some(exit_day) if day == exit_day => Ok(at >= self.session_times(day)?.square_off),
+            Some(exit_day) => Ok(day > exit_day),
+            None => Ok(false),
+        }
+    }
+
+    /// True when `slice` opens past `instrument`'s positional exit while the contract
+    /// still trades: at or after the square-off time of its exit day, or on any later day
+    /// up to its last trading day, so a position the exit missed (an exit day with no
+    /// session, a live session not started that day) is exited at the next open (module
+    /// docs).
+    ///
+    /// Errors: those of `past_positional_exit`.
     pub(super) fn expiry_exit_due(
         &mut self,
         slice: &SliceInfo,
         instrument: InstrumentId,
     ) -> Result<bool, KernelError> {
-        if self.positional_exit_day(instrument) != Some(slice.day) {
+        let last_trading_day = self
+            .instruments
+            .get(instrument.index())
+            .and_then(|spec| spec.last_trading_day);
+        if last_trading_day.is_some_and(|last| slice.day > last) {
             return Ok(false);
         }
-        Ok(slice.open >= self.session_times(slice.day)?.square_off)
+        self.past_positional_exit(instrument, slice.day, slice.open)
     }
 
     /// The open positions of `instrument`, every product, in key order.
@@ -81,9 +114,10 @@ impl Engine {
     }
 
     /// Step 8 of a backtest's session close: a position still open on an instrument whose
-    /// positional exit day this session is (no base bar at or after the square-off time,
-    /// or a daily base) exits at its last close, flagged `filled_at_last_close`, reason
-    /// `expiry_exit`, before the futures settlement (module docs).
+    /// positional exit day this session is, or was before it (no base bar at or after the
+    /// square-off time, a daily base, or no bar of it since), exits at its last close,
+    /// flagged `filled_at_last_close`, reason `expiry_exit`, before the futures settlement
+    /// (module docs).
     ///
     /// Errors: those of `execute_fill`.
     pub(super) fn close_expiring_positions(
@@ -93,7 +127,10 @@ impl Engine {
         let stamp = Self::stamp(slice, Step::SessionClose);
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u32);
-            if self.positional_exit_day(instrument) != Some(slice.day) {
+            if !self
+                .positional_exit_day(instrument)
+                .is_some_and(|exit_day| slice.day >= exit_day)
+            {
                 continue;
             }
             let Some(last) = self.last_close(instrument) else {

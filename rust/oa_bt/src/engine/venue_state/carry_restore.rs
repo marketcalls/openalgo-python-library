@@ -20,7 +20,7 @@ use super::super::venue_gtts::{GttFollow, GttLegStop};
 use super::book::{read_account, read_open_trade, read_position};
 use super::carry::{CarriedIds, CARRIED, NO_CARRIED_GTT};
 use super::carry_checks::{check_carried_gtts, CarriedGtt, ReadGtt};
-use super::carry_expired::read_last_closes;
+use super::carry_expired::{expired_instruments, read_last_closes, ExpiredExit};
 use super::checks::{check_parts, Parts};
 use super::error::LiveStateError;
 use super::gtts::read_gtt;
@@ -40,8 +40,9 @@ pub(super) struct Carried {
     rejections: Vec<(PositionKey, u8)>,
     risk: CarriedRisk,
     open_trades: Vec<OpenTrade>,
-    /// Each instrument's last close of the carried day (`carry`, part `last_closes`).
-    last_closes: Vec<(InstrumentId, f64)>,
+    /// The positions on contracts that expired before the session's day, with the price
+    /// each exit is recorded at (`carry_expired`).
+    expired: Vec<ExpiredExit>,
     ids: Ids,
 }
 
@@ -61,13 +62,14 @@ fn mismatch<T>(reason: String) -> Result<T, LiveStateError> {
 impl Engine {
     /// Read and check a carried state whole (module docs).
     ///
-    /// Errors: `Version`, `CarriedMismatch` and `Malformed` (`restore_carried_state`).
+    /// Errors: `Version`, `CarriedMismatch`, `MissedExpiryExit` and `Malformed`
+    /// (`restore_carried_state`).
     pub(super) fn read_carried(&self, read: &Read<'_>) -> Result<Carried, LiveStateError> {
         self.check_carried(read)?;
         let count = self.instruments.len();
         let (orders, ids) = self.read_carried_orders(read)?;
-        let positions = read
-            .items_of("positions")?
+        let position_reads = read.items_of("positions")?;
+        let positions = position_reads
             .iter()
             .map(|position| read_position(position, count))
             .collect::<Result<Vec<_>, _>>()?;
@@ -102,6 +104,8 @@ impl Engine {
             .iter()
             .map(|leg| Ok((read_key(leg, count)?, leg.whole_of("rejections")?)))
             .collect::<Result<_, LiveStateError>>()?;
+        let last_closes = read_last_closes(read, count)?;
+        let expired = self.read_expired_exits(&positions, &position_reads, &last_closes)?;
         Ok(Carried {
             portfolio: Portfolio::resume(read_account(&read.field("account")?)?, positions),
             legs,
@@ -114,7 +118,7 @@ impl Engine {
                 .iter()
                 .map(|trade| read_open_trade(trade, count, &ids))
                 .collect::<Result<_, _>>()?,
-            last_closes: read_last_closes(read, count)?,
+            expired,
             ids,
         })
     }
@@ -215,7 +219,7 @@ impl Engine {
         }
         self.portfolio.account.credit_sale_proceeds();
         self.legs = carried.legs;
-        let expired = self.expired_instruments();
+        let expired = expired_instruments(&carried.expired);
         let mut ids = CarriedIds {
             gtts: Vec::new(),
             orders: carried.ids.pairs,
@@ -232,7 +236,10 @@ impl Engine {
             self.charges.resume_trade(trade.key);
         }
         self.record.trades.open = carried.open_trades;
-        self.record_expired_exits(&expired, &carried.last_closes)?;
+        // The exchange settled them at the carried day's close: their exits end their runs
+        // before the session's boundary, as a backtest's settlement at expiry does.
+        self.record_expired_exits(&carried.expired)?;
+        self.start_carried_session();
         self.venue.restored = true;
         Ok(ids)
     }
@@ -312,13 +319,12 @@ impl Engine {
         }
     }
 
-    /// The carried risk bookkeeping, then the session boundary a backtest crosses at the
-    /// next session's open (module docs).
+    /// The carried risk bookkeeping as it stood at the carried day's close (module docs);
+    /// the session's boundary is `start_carried_session`.
     fn resume_carried_risk(&mut self, carried: CarriedRisk) {
         let risk = &mut self.risk;
         risk.lock = carried.lock;
         risk.daily_loss = DailyLossMeasure::resume(carried.daily);
-        risk.daily_loss.start_session();
         let limit = self.config.risk.drawdown_halt_percent;
         if let (Some(limit), Some(peak)) = (limit, carried.drawdown_peak) {
             risk.drawdown = Some(DrawdownWatch::new(limit, peak));
@@ -329,6 +335,13 @@ impl Engine {
             .map(|(key, _)| (*key, 0))
             .collect();
         risk.carried_slices = carried.held_slices;
+    }
+
+    /// The session boundary a backtest crosses at the next session's open: the daily loss
+    /// measure starts the session (a run still open counts from its first fill), then the
+    /// trading state.
+    fn start_carried_session(&mut self) {
+        self.risk.daily_loss.start_session();
         self.carried_session_boundary();
     }
 

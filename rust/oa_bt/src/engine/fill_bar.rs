@@ -1,6 +1,7 @@
 //! The checks of a queued or resting order at its fill bar (`fills::fill_order`): what
 //! the position makes of it (reduce, reverse, nothing left to reduce), the entry window of
-//! an MIS entry, and no delivery short.
+//! an MIS entry, no entry on a contract past its positional exit (`expiry`), and no
+//! delivery short.
 
 use crate::exec::{Order, QuantitySpec, RejectCode};
 use crate::model::{Product, Side};
@@ -55,12 +56,14 @@ impl Engine {
                 AtFill::Cancel
             });
         }
+        // The opening part of a reversal is refused whole, as at submission (`expiry`).
+        let expiring = self.past_positional_exit(key.instrument, slice.day, slice.open)?;
         if reduces {
             if order.quantity_units > held.abs() {
-                return Ok(if request.reverse {
-                    AtFill::Reverse(held.abs(), order.quantity_units - held.abs())
-                } else {
-                    AtFill::Reject(RejectCode::ReverseNotAllowed)
+                return Ok(match (request.reverse, expiring) {
+                    (false, _) => AtFill::Reject(RejectCode::ReverseNotAllowed),
+                    (true, true) => AtFill::Reject(RejectCode::ContractExpiring),
+                    (true, false) => AtFill::Reverse(held.abs(), order.quantity_units - held.abs()),
                 });
             }
             return Ok(AtFill::Fill(order.quantity_units, false));
@@ -69,6 +72,9 @@ impl Engine {
             if let Err(code) = self.session_times(slice.day)?.entry.check(slice.open) {
                 return Ok(AtFill::Reject(code));
             }
+        }
+        if expiring {
+            return Ok(AtFill::Reject(RejectCode::ContractExpiring));
         }
         // Delivery cannot be shorted (04-execution 2): a resting sale whose long was
         // closed after it was placed must not open a short.
