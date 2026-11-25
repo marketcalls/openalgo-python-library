@@ -14,7 +14,9 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
    package calendar disagree are the event `CALENDAR_DISAGREES` once the session exists.
 8. The order worker starts journal handle W, the journal's session of the day and the
    order path (on its own thread, or inline under the test seam), and the main thread
-   opens journal handle L (`_session_worker`).
+   opens journal handle L (`_session_worker`). A strategy a kept stop GTT refusal names,
+   or one that holds a position or a GTT from an earlier day, is refused now, before
+   anything is sent (`_preflight_carry`: PreflightError).
 9. and 10. Unbound intents of the day resolved first, then the books read and each
    strategy's journal position judged against the broker's (`_restart_books`): a broker
    position on a traded symbol that the journal does not hold, or a journal position the
@@ -50,7 +52,7 @@ from ..errors import LiveError
 from ..strategy import Strategy
 from ._alerts_logs import SessionLogs, configure_session_logs
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
-from ._preflight_carry import refuse_kept
+from ._preflight_carry import refuse_carried, refuse_kept
 from ._preflight_lock import live_root
 from ._preflight_plan import WARNING
 from ._restart_books import judge_start, read_start
@@ -170,6 +172,8 @@ def _open(
     )
     journal = started.journal
     refuse_kept(journal.kept_refusals(), spec.positional)
+    names = tuple(each.name for each in spec.strategies)
+    refuse_carried(journal.day_closes(), journal.open_gtts(), names, spec.day)
     start = read_start(started.worker, inbox, settings, journal, spec.day, opened.shared)
     restart = judge_start(spec, journal, start, opened.shared)
     snapshot = journal.snapshot(day=spec.day)
