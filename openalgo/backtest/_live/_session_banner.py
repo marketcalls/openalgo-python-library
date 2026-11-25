@@ -19,6 +19,7 @@ from .._calendar_convert import format_ist
 from ..calendar import default_calendar
 from ..report._format import indian_digits
 from ._groups import shared_lines
+from ._preflight_gtt import SANDBOX_GTT_LINE
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
 from ._shared_alerts import warning_line
@@ -93,7 +94,7 @@ def banner_lines(session: Any) -> list[str]:
     lines += session.versions.banner_lines()
     lines += shared_lines(session.groups.groups)
     lines.append(STOPS_LINE)
-    lines += positional_lines(spec)
+    lines += positional_lines(spec, parts.mode)
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss
         lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
@@ -112,13 +113,16 @@ def banner_lines(session: Any) -> list[str]:
     return lines
 
 
-def positional_lines(spec: Any) -> list[str]:
-    """The banner's lines of a session with a CNC or NRML strategy (20-positional-live 2
-    and 10.2): how their stops are held, and what Ctrl+C does with their positions by
-    `on_stop` (`ON_STOP_LINES`); none for an MIS-only session, whose banner is as before."""
+def positional_lines(spec: Any, mode: Mode) -> list[str]:
+    """The banner's lines of a session with a CNC or NRML strategy (20-positional-live 2,
+    5 and 10.2): how their stops are held, in `mode` SANDBOX that the live broker's GTT
+    support is checked in LIVE mode only (`SANDBOX_GTT_LINE`), and what Ctrl+C does with
+    their positions by `on_stop` (`ON_STOP_LINES`); none for an MIS-only session, whose
+    banner is as before."""
     if not spec.gtt_legs:
         return []
-    return [POSITIONAL_STOPS_LINE, ON_STOP_LINES[spec.arguments.on_stop]]
+    sandbox = [SANDBOX_GTT_LINE] if mode is Mode.SANDBOX else []
+    return [POSITIONAL_STOPS_LINE, *sandbox, ON_STOP_LINES[spec.arguments.on_stop]]
 
 
 def daily_limit_words(risk: Mapping[str, Any]) -> str:

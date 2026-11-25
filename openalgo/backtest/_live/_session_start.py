@@ -50,6 +50,7 @@ from ..errors import LiveError
 from ..strategy import Strategy
 from ._alerts_logs import SessionLogs, configure_session_logs
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
+from ._preflight_carry import refuse_kept
 from ._preflight_lock import live_root
 from ._preflight_plan import WARNING
 from ._restart_books import judge_start, read_start
@@ -168,6 +169,7 @@ def _open(
         stack=stack,
     )
     journal = started.journal
+    refuse_kept(journal.kept_refusals(), spec.positional)
     start = read_start(started.worker, inbox, settings, journal, spec.day, opened.shared)
     restart = judge_start(spec, journal, start, opened.shared)
     snapshot = journal.snapshot(day=spec.day)
@@ -314,6 +316,7 @@ def _preflight(
         mode=mode,
         alerts=alerts,
         contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
+        gtt=bool(spec.gtt_legs),
     )
     calendar = default_calendar()
     opens = [calendar.session(exchange, spec.day) for _, exchange in spec.instruments]

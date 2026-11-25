@@ -36,8 +36,8 @@ from ..errors import LiveError
 from ..reference import Instrument
 from ..report._format import indian_digits
 from ._journal_carry import DayClose, KeptRefusal
-from ._preflight_gtt import REARM_DAILY
-from ._preflight_plan import Check
+from ._preflight_gtt import GTT_STOPS, REARM_DAILY
+from ._preflight_plan import Check, refused
 from ._preflight_server import funds_check
 from ._types import Mode
 
@@ -177,6 +177,18 @@ def kept_refusal_checks(
     return checks
 
 
+def refuse_kept(
+    refusals: Sequence[KeptRefusal], strategies: Sequence[tuple[str, str, str, str]]
+) -> None:
+    """Refuse the start of a session whose CNC or NRML strategies (name, symbol, exchange,
+    product) a kept refusal names (`kept_refusal_checks`, with the GTT stops a live session
+    holds; the lead's ruling N3b-3). Raises PreflightError quoting each stored message."""
+    checks = kept_refusal_checks(refusals, strategies, GTT_STOPS)
+    failures = tuple(check.message for check in checks)
+    if failures:
+        raise refused(failures)
+
+
 def _units(position: CarriedPosition) -> str:
     """A carried position's signed units, whole and grouped as Indian figures are
     ("12,34,567")."""
@@ -202,4 +214,5 @@ __all__ = [
     "kept_refusal_checks",
     "missed_days",
     "other_ledger_lines",
+    "refuse_kept",
 ]

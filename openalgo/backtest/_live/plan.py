@@ -119,6 +119,17 @@ class SessionSpec:
         )
 
     @property
+    def positional(self) -> tuple[tuple[str, str, str, str], ...]:
+        """The (name, symbol, exchange, product) of the CNC and NRML strategies, in call
+        order: those a stop GTT refusal kept from an earlier day refuses at start
+        (`_preflight_carry.refuse_kept`)."""
+        return tuple(
+            (spec.name, spec.symbol, spec.exchange, spec.product)
+            for spec in self.strategies
+            if spec.product in OVERNIGHT_PRODUCTS
+        )
+
+    @property
     def capital(self) -> float:
         """The strategies' capital together, rupees."""
         return sum(spec.capital for spec in self.strategies)
