@@ -225,10 +225,10 @@ def _record_units(recorder: SessionRecorder, monkeypatch: Any) -> None:
         with recorder.unit():
             catch_up(part)
 
-    def stopped(trader: Trader) -> Any:
+    def stopped(trader: Trader, carry: Any = None) -> Any:
         recorder.line("stop", trader.name)
         with recorder.unit():
-            output, figures = stop(trader)
+            output, figures = stop(trader, carry)
         recorder.line("finished", trader.name, output=run_output(output))
         return output, figures
 

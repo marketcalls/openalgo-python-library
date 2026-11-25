@@ -231,6 +231,7 @@ class _Trader:
     """A strategy holding 10 SBIN with its stop o2 working."""
 
     name, symbol, exchange, finished = "ema_cross", "SBIN", "NSE", False
+    product, gtts = "MIS", None
 
     def __init__(self):
         self.engine, self.venue = _Engine(), _Venue()

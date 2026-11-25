@@ -66,7 +66,8 @@ does around each), `_venue_children` and `_order_children` (a fired GTT's child 
 as an order, in the venue map and on the order path) and `_stops_gtt` (a CNC or NRML
 leg's stop GTT as the stops supervisor sees it); the end of the day is
 `_session_day_end`, the legs carried past the close and their day-close records
-`_session_carry`, and the worker's GTT requests `_worker_gtts`. OpenAlgo's product names are `.._products`'.
+`_session_carry`, and the worker's GTT requests `_worker_gtts`. OpenAlgo's product names
+are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

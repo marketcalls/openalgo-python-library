@@ -52,7 +52,7 @@ class TraderOrders:
     part: Any
     venue: VenueMap
     #: The strategy's GTT map (None for a trader built with none: it takes no GTT command).
-    gtts: GttMap | None
+    gtts: GttMap | None = None
     finished: bool
     reasons: dict[int, str]
     units_at_place: dict[int, int]
