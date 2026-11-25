@@ -33,8 +33,8 @@ A failure up to step 11 closes what was opened, in reverse, and is raised. Then
 position resumed, the loop turns until its stop is confirmed, at most
 `RESTART_PROTECT_WAIT_S`, before anything else; 13. the banner, a SESSION alert with its
 first lines, and the countdown, during which the loop keeps turning; 14. the feed
-connects and the session watches it; 15. entries are unlocked. A stop requested during
-13 or 14 raises `SessionStopped`.
+connects and the session watches it; 15. entries are unlocked, daily strategies decide
+(`_session_pre_open`). A stop requested during 13 or 14 raises `SessionStopped`.
 
 Times are UTC nanoseconds, amounts rupees.
 """
@@ -60,6 +60,7 @@ from ._session_banner import BANNER_ALERT_LINES, banner_lines
 from ._session_figures import DayFigures
 from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
+from ._session_pre_open import decide_before_open, warn_missed_bars
 from ._session_rearm import warn_at_start
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
 from ._session_trader import ist_instant
@@ -357,6 +358,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
     if any(trader.open_units() for trader in session.traders):
         protect_restored(session, RESTART_PROTECT_WAIT_S)
     warn_at_start(session)
+    warn_missed_bars(session)
     lines = banner_lines(session)
     for line in lines:
         session.emit(line)
@@ -381,6 +383,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
     session.watch(link)
     for trader in session.traders:
         trader.unlock(STARTING_LOCK)
+    decide_before_open(session)
     session.trading = True
     session.event("trading")
 

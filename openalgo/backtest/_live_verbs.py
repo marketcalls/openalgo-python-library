@@ -61,7 +61,12 @@ def live(
     class runs here as in `bt.backtest`, deciding in `on_bar` on 1-minute bars built from
     the feed's ticks, in the strategy's product: a stop given with `stop=` is held by the
     broker, as an order for MIS and as a GTT for a CNC or NRML position, which the session
-    carries to the next day; targets are held by the session on ticks.
+    carries to the next day; targets are held by the session on ticks. A daily or longer
+    strategy (CNC or NRML) decides once, when the session starts, on the broker's candle
+    of its interval that closed last, and its orders go at the open (at once, flagged
+    "late_decision", when the session starts after the open); the journal keeps the bar it
+    decided, so no start decides it twice, and bars of days no session ran feed its
+    series only.
 
     strategy: a `bt.Strategy` subclass, or a list of them; two may trade one symbol, one
         side at a time and with market orders only.
@@ -128,9 +133,9 @@ def live(
     Raises ConfigError for an unusable argument (one that chooses the mode among them);
     NotImplementedError, before any call to OpenAlgo, for what live trading does not run
     yet (condition strategies, signal and array strategies, several symbols or a
-    universe, futures series, daily or longer intervals, two strategies with one name,
-    two CNC or NRML strategies on one symbol and product, bars from broker candles),
-    saying what to do instead;
+    universe, futures series, a daily or longer interval in MIS, two strategies with one
+    name, two CNC or NRML strategies on one symbol and product, bars from broker
+    candles), saying what to do instead;
     PreflightError, listing every check that failed (another session holding the
     account or the server among them); LiveError when OpenAlgo does not report its mode,
     the call is not on the main thread (Ctrl+C reaches only the main thread), the feed

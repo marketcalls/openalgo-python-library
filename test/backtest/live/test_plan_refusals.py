@@ -100,10 +100,13 @@ def test_bars_from_the_feeds_ticks_are_the_bars_a_session_runs_on():
             {"symbol": None, "underlying": "NIFTY", "expiry": "current_month", "exchange": "NFO"},
             "futures series .* name the contract as the strategy's symbol",
         ),
-        ({"interval": "D"}, "a D strategy interval .* trade an intraday interval"),
         (
-            {"interval": "D", "product": "CNC"},
-            "a D strategy interval .* trade an intraday interval",
+            {"interval": "D", "product": "MIS"},
+            "a D strategy in MIS in a live session .* trade it in CNC or NRML",
+        ),
+        (
+            {"interval": "W", "product": "MIS"},
+            "a W strategy in MIS in a live session .* trade it in CNC or NRML",
         ),
     ],
 )

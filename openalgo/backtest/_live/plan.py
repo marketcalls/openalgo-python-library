@@ -67,6 +67,7 @@ from ..strategy import Strategy
 from ._bars_candle import candle_bar
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
+from ._plan_daily import DAILY, DailySeries, decides_before_open, joined
 from ._plan_engine import bind_strategy, check_grid, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
@@ -93,8 +94,15 @@ class SessionSpec:
 
     @property
     def intervals(self) -> tuple[str, ...]:
-        """Every strategy's bar interval, each once, in call order."""
-        return tuple(dict.fromkeys(spec.interval for spec in self.strategies))
+        """The interval of the candles each strategy reads from the broker, each once, in
+        call order, as the preflight checks them: its bar interval, or "D" for a daily or
+        longer strategy, whose bars are built from the broker's daily candles
+        (`_plan_daily`)."""
+        read = (
+            DAILY if decides_before_open(spec.interval) else spec.interval
+            for spec in self.strategies
+        )
+        return tuple(dict.fromkeys(read))
 
     @property
     def product(self) -> str:
@@ -241,11 +249,21 @@ def _strategy_plan(
     engine = session_engine(setup, calendar)
     kept = setup.history.symbols.get(spec.symbol)
     history = None if kept is None else kept.base
+    # A daily or longer strategy's bars are the broker's daily candles (`_plan_daily`);
+    # the 1-minute series is then the kernel session's slices only.
+    daily = setup.recent is not None
     series = LiveSeries(
-        spec.symbol, spec.exchange, spec.plan.start, history=history, calendar=calendar
+        spec.symbol,
+        spec.exchange,
+        spec.plan.start,
+        history=None if daily else history,
+        calendar=calendar,
     )
     check_grid(setup.config, spec.exchange, spec.plan.start, calendar, series)
-    strategy, context = bind_strategy(spec, setup, engine, series, calendar, saved)
+    bars: Any = series
+    if setup.recent is not None:
+        bars = DailySeries(spec.symbol, spec.exchange, joined(history, setup.recent), calendar)
+    strategy, context = bind_strategy(spec, setup, engine, bars, calendar, saved)
     return StrategyPlan(spec, setup, engine, series, strategy, context, calendar)
 
 

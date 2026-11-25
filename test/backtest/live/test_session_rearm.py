@@ -162,6 +162,39 @@ def test_the_close_warns_of_each_carried_leg_without_a_stop_until_the_next_start
     assert [o.status for o in world.orders()] == ["complete", "cancelled"]
 
 
+def test_a_kept_gtt_refusal_does_not_refuse_a_strategy_that_chose_rearm_daily(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # 20-positional-live 3.5: a stop GTT refusal kept from an earlier day refuses its
+    # strategy at every start until the user passes rearm_daily, which places no GTT.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    earlier = dt.date(2026, 11, 13)
+    with journal_of(world) as kept:
+        kept.start_session(earlier, Mode.LIVE, BROKER)
+        kept.keep_refusal("CncHold", "SBIN", "NSE", "CNC", "no GTT on this segment", day=earlier)
+    world.stop_at(ist(14, 46))
+
+    world.run(CncHold, **REARM)
+
+    assert live_orders(world) == [
+        ("BUY", "MARKET", 10, "CNC", 0.0),
+        ("SELL", "SL-M", 10, "CNC", 497.0),
+    ]
+
+
+def journal_of(world):
+    """The rig's live journal, opened as the session opens it."""
+    folder = world.folder / "live" / BROKER
+    folder.mkdir(parents=True, exist_ok=True)
+    return Journal.open(
+        folder / JOURNAL_FILE_NAME,
+        account=BROKER,
+        broker=BROKER,
+        mode=Mode.LIVE,
+        now=world.fake.clock.now,
+    )
+
+
 def test_the_start_names_the_trading_days_no_session_ran_since_the_last_close(
     make_fake_openalgo, monkeypatch, tmp_path
 ):

@@ -8,7 +8,9 @@ HTTP 500, in the reference broker's words: broker/zerodha/api/data.py); an instr
 not in the master contract is refused with HTTP 400 before the broker is asked. `symbol` and
 `intervals` read OpenAlgo's own tables. A schema refusal of these routes carries the
 field errors as an object (restx_api/symbol.py, quotes.py, history.py). History is
-modelled for 1-minute candles from the broker (`source` "api") only.
+modelled for the broker's 1-minute candles (`source` "api"), and its daily candles made
+from them: each IST date's first open, highest high, lowest low, last close and summed
+volume, stamped at that date's IST midnight, as the reference broker dates its daily rows.
 """
 
 from __future__ import annotations
@@ -42,8 +44,11 @@ BROKER_INTERVALS = {
     "weeks": [],
     "months": [],
 }
-#: The one interval the fake builds candles for.
+#: The intervals the fake builds candles for: 1-minute, and daily made from them.
 CANDLE_INTERVAL = "1m"
+DAILY_INTERVAL = "D"
+_SECONDS_PER_DAY = 24 * 3600
+_IST_OFFSET_S = 19_800
 _MISSING = ["Missing data for required field."]
 _EXCHANGES_WORDS = [f"Must be one of: {', '.join(VALID_EXCHANGES)}."]
 # The broker's exceptions, wrapped by its data handler (broker/zerodha/api/data.py).
@@ -108,10 +113,11 @@ def history(venue: Venue, payload: dict[str, Any]) -> Answer:
     errors = _history_errors(payload)
     if errors:
         return {"status": "error", "message": errors}, 400
-    if payload.get("source", "api") != "api" or payload["interval"] != CANDLE_INTERVAL:
+    interval = payload["interval"]
+    if payload.get("source", "api") != "api" or interval not in (CANDLE_INTERVAL, DAILY_INTERVAL):
         raise Unmodelled(
-            f"history is modelled for interval {CANDLE_INTERVAL!r} from source 'api', not "
-            f"{payload['interval']!r} from {payload.get('source')!r}"
+            f"history is modelled for intervals {CANDLE_INTERVAL!r} and {DAILY_INTERVAL!r} "
+            f"from source 'api', not {interval!r} from {payload.get('source')!r}"
         )
     refused = _unknown_symbol(venue, payload)
     if refused:
@@ -131,7 +137,26 @@ def history(venue: Venue, payload: dict[str, Any]) -> Answer:
         }
         for candle in market.candles(payload["start_date"], payload["end_date"])
     ]
+    if interval == DAILY_INTERVAL:
+        rows = _daily(rows)
     return {"status": "success", "data": rows}, 200
+
+
+def _daily(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The daily candles of 1-minute `rows` (module docstring), oldest first."""
+    days: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        midnight = (row["timestamp"] + _IST_OFFSET_S) // _SECONDS_PER_DAY * _SECONDS_PER_DAY
+        stamp = midnight - _IST_OFFSET_S
+        day = days.get(stamp)
+        if day is None:
+            days[stamp] = {**row, "timestamp": stamp}
+            continue
+        day["high"] = max(day["high"], row["high"])
+        day["low"] = min(day["low"], row["low"])
+        day["close"] = row["close"]
+        day["volume"] += row["volume"]
+    return [days[stamp] for stamp in sorted(days)]
 
 
 def holidays(venue: Venue, payload: dict[str, Any]) -> Answer:

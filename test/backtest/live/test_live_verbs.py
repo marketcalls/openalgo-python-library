@@ -152,7 +152,11 @@ REFUSED = {
         {},
         "futures series",
     ),
-    "daily interval": (variant(interval="D"), {}, "a D strategy interval"),
+    "daily interval in MIS": (
+        variant(interval="D", product="MIS"),
+        {},
+        "a D strategy in MIS in a live session",
+    ),
     "two CNC on one symbol": (
         [variant("HoldA", product="CNC"), variant("HoldB", product="CNC")],
         {},

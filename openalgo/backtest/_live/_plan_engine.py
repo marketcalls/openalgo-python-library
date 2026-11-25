@@ -35,6 +35,7 @@ from .._warm_up_history import empty_base
 from ..calendar import NO_BAR, Calendar
 from ..errors import ConfigError, LiveError
 from ..strategy import Strategy
+from ._plan_daily import history_plan
 from ._plan_setup import StrategySetup
 from ._plan_strategies import StrategySpec, refuse_conditions
 from .bars import TickBarBuilder
@@ -111,9 +112,8 @@ def bind_strategy(
     checks = IndicatorChecks(
         strategy_source_hash(strategy) or strategy.__qualname__, measured=spec.measured
     )
-    run = RunData(
-        plan.exchange, plan.interval, plan.base, {}, calendar, checks.for_run(), setup.history
-    )
+    base = history_plan(plan).base
+    run = RunData(plan.exchange, plan.interval, base, {}, calendar, checks.for_run(), setup.history)
     context = LiveRunContext(
         engine, list(setup.instruments), plan.product, strategy.size, run, {spec.symbol: series}
     )

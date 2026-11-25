@@ -4,8 +4,9 @@
 
 `strategy_spec` refuses, with NotImplementedError saying what to do, what a live session
 does not run: `bt.from_signals` and `bt.from_arrays` strategies, strategies on several
-symbols or a universe, futures series (an `underlying` with an `expiry`), daily or longer
-intervals (unit N5 of 2.5.0 runs them), and condition strategies
+symbols or a universe, futures series (an `underlying` with an `expiry`), a daily or longer
+interval in MIS (`refuse_daily_mis`; in CNC and NRML such a strategy decides before the
+open, `_plan_daily`), and condition strategies
 (`entry_when`, `exit_when`, `short_when`, `cover_when`), whose arrays are computed ahead
 over the whole series (decision 5): their rules go in `on_bar`. CNC and NRML run, their
 positions carried overnight with a GTT stop (20-positional-live 1); two of them on one
@@ -35,12 +36,11 @@ from .._arrays import made_by
 from .._causality_checks import IndicatorChecks
 from .._conditions import has_conditions
 from .._instruments import resolve_instruments
-from .._layout import parse_interval
 from .._manifest import strategy_source_hash
 from .._margin_check import check_margin
 from .._messages import not_supported
 from .._positional_exit import MCX, PHYSICAL, positional_exits
-from .._products import OVERNIGHT_PRODUCTS
+from .._products import MIS, OVERNIGHT_PRODUCTS
 from .._risk_settings import GTT_STOPS, rupees_amount
 from .._series import ist_time
 from .._settings import RunPlan, resolve
@@ -53,6 +53,7 @@ from ..errors import ConfigError
 from ..reference import Instrument
 from ..report._format import indian_digits
 from ..strategy import Strategy
+from ._plan_daily import decides_before_open
 from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
@@ -140,13 +141,22 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
             "name the contract as the strategy's symbol in OpenAlgo's form "
             "[underlying][DDMMMYY]FUT, for example NIFTY29DEC26FUT on NFO",
         )
-    if strategy.interval and parse_interval(strategy.interval)[0] != "intraday":
-        raise not_supported(
-            f"a {strategy.interval} strategy interval in a live session",
-            "trade an intraday interval, such as '5m'",
-        )
     if strategy.interval:
         _check_interval(strategy.interval, DEFAULT_BASE)
+
+
+def refuse_daily_mis(name: str, plan: RunPlan) -> None:
+    """Raise NotImplementedError for a daily or longer strategy in MIS (the lead's ruling
+    N5b-1): it decides before the open on the session that closed and its orders go at the
+    next open, while an MIS position must be squared off the day it is entered, so it could
+    never be held from one decision to the next, as its backtest on daily bars holds it."""
+    if plan.product == MIS and decides_before_open(plan.interval):
+        raise not_supported(
+            f"{name}: a {plan.interval} strategy in MIS in a live session (it decides before "
+            "the open, and an MIS position is squared off the same day)",
+            "trade it in CNC or NRML to hold its positions from one decision to the next, or "
+            "give it an intraday interval, such as '5m'",
+        )
 
 
 def refuse_shared_positional(specs: Sequence[StrategySpec]) -> None:
@@ -249,6 +259,7 @@ def strategy_spec(
     refuse_unsupported(strategy)
     plan = resolve(strategy, dict(arguments))
     limit = _live_daily_loss_limit(name, plan.risk["max_daily_loss"], arguments)
+    refuse_daily_mis(name, plan)
     instruments, _, _ = resolve_instruments(plan, None, calendar)
     refuse_no_tender(name, plan.product, instruments, calendar)
     check_margin(instruments, plan.product, (plan.start, plan.end))
@@ -308,6 +319,7 @@ __all__ = [
     "ist_day",
     "probe",
     "refuse_conditions",
+    "refuse_daily_mis",
     "refuse_no_tender",
     "refuse_shared_positional",
     "refuse_unsupported",
