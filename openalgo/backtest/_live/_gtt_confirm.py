@@ -25,18 +25,20 @@ the GTT cannot be read (`Seen.UNREADABLE`) is no miss: it says nothing of the GT
   and fired (UNRESOLVED: a second GTT could exit the leg twice). Three signs say it may
   have, since four of seven brokers list active GTTs only and a GTT that fired is simply
   gone from their books (3.1): a row of its shape no GTT of the journal holds has fired;
-  the leg's units moved by its units on its side since the first read, net of the
-  session's own fills (`_gtt_child.move_of`); or the order book holds an order of its
-  child's shape placed since its send (FIRED_CHECK: the sender reads the order book,
-  `again_verdict`). The first read that read the leg's units is the reference, whether or
-  not the session's own fills on the leg had settled then (`_own_fills`; a later read may
-  come after the GTT fired), kept with those own fills; a fall is judged only on a read
-  made with the leg settled. When misses decide on a read made while it had not settled,
-  the units are waited for (a read every `READ_AGAIN_AFTER_S`), and still not settled by
-  `_gtt_reads.UNITS_WAIT_S` (`BookRead.waited_out`) it is UNRESOLVED. A row on its
-  symbol and exchange (or naming none) that no GTT of the journal holds and that cannot
-  be read may be this place too: it is never placed again beside one (UNRESOLVED once
-  misses decide); a row of another instrument says nothing of it.
+  the leg's units moved by its units on its side (`_gtt_units.judge`) against the leg's
+  latest reference made before the place was sent (the lead's ruling M3 on N3a's review
+  round 5: `GttFollower.placing`); or the order book holds an order of its child's shape
+  placed since its send (FIRED_CHECK: the sender reads the order book,
+  `_gtt_checks.again_verdict`).
+  A fall is judged only on a settled read: once misses decide, a read made while the
+  session's own fills on the leg had not settled (`_own_fills`) judges nothing, the leg
+  is read again every `READ_AGAIN_AFTER_S`, and still not settled by
+  `_gtt_reads.UNITS_WAIT_S` (`BookRead.waited_out`) it is UNRESOLVED. With no reference
+  from before the place was sent, whether it landed and fired cannot be told: UNRESOLVED
+  once misses decide, never placed again. A row on its symbol and exchange (or naming
+  none) that no GTT of the journal holds and that cannot be read may be this place too:
+  it is never placed again beside one (UNRESOLVED once misses decide); a row of another
+  instrument says nothing of it.
 - **A modify** is confirmed by the read showing its trigger and units, compared by value
   (MODIFIED). A book that leaves its row out is read again until misses decide, as for a
   place: a broker's book can drop a row from one read. The old terms once misses decide:
@@ -47,16 +49,11 @@ the GTT cannot be read (`Seen.UNREADABLE`) is no miss: it says nothing of the GT
   decide) is UNRESOLVED: the follower judges it.
 - **A cancel** is confirmed by the GTT absent or ended without firing, with no child order
   found for it (CHILD_CHECK: the sender reads the order book, `child_verdict`); fired, it
-  is CANCEL_REFUSED; still resting once misses decide, CANCEL_REFUSED. A GTT gone from the
-  book (not shown cancelled) may have fired just before the cancel: the leg's units moved
-  by its units from its baseline (moved by the session's own fills since, `_gtt_followed`)
-  say it fired. Units that show that move, read while those fills had not settled
-  (`_own_fills`: the position book may show an exit the order path has not heard of yet),
-  are waited for: read again every `READ_AGAIN_AFTER_S` until a child shows, or the leg
-  settles and its units say whether it fired; still not settled by
-  `_gtt_reads.UNITS_WAIT_S` (`BookRead.waited_out`), it is CANCEL_REFUSED. With no such
-  sign the order book is read `CHILD_READS_OF_A_GONE_GTT` times, `READ_AGAIN_AFTER_S`
-  apart, before the cancel is confirmed.
+  is CANCEL_REFUSED; still resting once misses decide, CANCEL_REFUSED. A GTT a book with
+  history rows shows cancelled is CANCELLED once an order-book read finds no child; one
+  gone from the book (absent) may have fired just before the cancel, and its leg's units
+  decide with the order book (`_gtt_checks.child_verdict`, which states the rule and the
+  one case it leaves).
 
 Times are UTC nanoseconds, prices rupees, quantities whole units.
 """
@@ -68,9 +65,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from ._gtt_book import GttRow, Seen, seen_of
-from ._gtt_child import Candidates, Move, UnitsSign, move_of
 from ._gtt_reads import UNITS_WAIT_S, BookRead
 from ._gtt_types import GttAnswerKind, GttRequest
+from ._gtt_units import UnitsSign
 from ._journal_gtt_rows import GttTerms
 from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS
 
@@ -80,9 +77,6 @@ READ_AGAIN_AFTER_S = 2.0
 #: Reads that miss a GTT, or show a modify's old terms or a cancelled GTT resting, once
 #: misses count, before the confirmation decides (3.1).
 MISSES_BEFORE_DECIDING = 2
-#: Order-book reads that must miss the child of a cancelled GTT gone from the book before
-#: its cancel is confirmed (3.1, 3.2): a broker's order book can list a new order late.
-CHILD_READS_OF_A_GONE_GTT = 2
 
 
 class Stage(enum.Enum):
@@ -104,10 +98,9 @@ class Pending:
     answered (False: unanswered) and whether the server has finished with it, a modify's
     terms before it, whether it is a place sent again (3.1), when it was sent, from when a
     read that misses counts (`misses_from_ns`), the reads that missed it, the order-book
-    reads that found no child of a cancelled GTT, and when to read again; the leg's units
-    with the session's own filled units on it at the first read that read them, settled or
-    not (what an unanswered place's GTT firing would have moved); and when a wait for the
-    leg's units to settle began (None: none has)."""
+    reads that found no child of a cancelled GTT, and when to read again; and when the
+    first read that found the leg's units not settled was made (None: none has), from
+    which the wait for them is bounded (`units_waited_out`)."""
 
     stage: Stage
     request: GttRequest
@@ -122,8 +115,16 @@ class Pending:
     misses: int = 0
     child_reads: int = 0
     next_ns: int = 0
-    first_units: tuple[int, int] | None = None
     units_wait_ns: int | None = None
+
+    def units_waited_out(self, read: BookRead) -> bool:
+        """Whether the wait for the leg's units to settle, which begins at `read` unless it
+        began before, is over at `read` (`BookRead.waited_out`)."""
+        request = self.request
+        if self.units_wait_ns is None:
+            self.units_wait_ns = read.read_ns
+        leg = (request.symbol, request.exchange, request.product)
+        return read.waited_out(leg, self.units_wait_ns)
 
 
 class Step(enum.Enum):
@@ -154,7 +155,8 @@ class Verdict:
     message: str = ""
 
 
-_WAIT = Verdict(Step.WAIT)
+#: The verdict that reads again.
+WAIT = Verdict(Step.WAIT)
 
 
 def misses_from_ns(stage: Stage, *, finished: bool, sent_ns: int, answered_ns: int) -> int:
@@ -168,68 +170,23 @@ def misses_from_ns(stage: Stage, *, finished: bool, sent_ns: int, answered_ns: i
     return sent_ns + BROKER_WINDOW_NS
 
 
-def judge(pending: Pending, read: BookRead, bound: Callable[[str], bool]) -> Verdict:
+def judge(
+    pending: Pending, read: BookRead, bound: Callable[[str], bool], fall: UnitsSign
+) -> Verdict:
     """What `read`, a read of the GTT book (its rows None when it failed), says of
     `pending` (module docstring); `bound(trigger_id)` is True for a broker GTT the journal
-    holds already. A read that misses what confirms the call is counted in
-    `pending.misses` once misses count."""
+    holds already, and `fall` is what the leg's units in `read` say of the place's GTT
+    against its reference (`GttFollower.units_of`), which only an unanswered place reads.
+    A read that misses what confirms the call is counted in `pending.misses` once misses
+    count."""
     rows = read.rows
     if rows is None:
-        return _WAIT
+        return WAIT
     if pending.stage in (Stage.PLACE, Stage.REPLACE_PLACE):
-        return _place(pending, read, rows, bound)
+        return _place(pending, read, rows, bound, fall)
     if pending.stage is Stage.MODIFY:
         return _modify(pending, rows, read.read_ns)
     return _cancel(pending, rows, read.read_ns)
-
-
-def child_verdict(
-    pending: Pending, seen: Seen | None, found: Candidates, sign: UnitsSign, read: BookRead
-) -> Verdict:
-    """What the order book says of a cancelled GTT `read` showed `seen` (GONE or ENDED):
-    `found`, the orders that may be its child; `sign`, what the leg's units in `read` say
-    of it firing since the last read that showed it resting (`GttFollower.units_sign`;
-    module docstring)."""
-    if found.every:
-        words = f"it fired: orders {', '.join(found.every)} may be its child"
-        return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, seen=seen, message=words)
-    if seen is Seen.GONE and sign is UnitsSign.FIRED:
-        words = "it fired: the position moved by its units, its child not in the order book yet"
-        return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, seen=seen, message=words)
-    if seen is Seen.GONE and sign is UnitsSign.UNSETTLED:
-        if not _units_waited_out(pending, read):
-            return _WAIT
-        words = (
-            "the position moved by its units while the session's own orders on its leg had "
-            f"not settled, and they had not settled {UNITS_WAIT_S:g} s on: it may have fired"
-        )
-        return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, seen=seen, message=words)
-    pending.child_reads += 1
-    if seen is Seen.GONE and pending.child_reads < CHILD_READS_OF_A_GONE_GTT:
-        return _WAIT
-    return Verdict(Step.ANSWER, GttAnswerKind.CANCELLED)
-
-
-def again_verdict(pending: Pending, found: Candidates) -> Verdict:
-    """What the order book says of an unanswered place before it is placed again: `found`,
-    its orders of the child's shape placed since the place was sent (module docstring)."""
-    if found.every:
-        words = (
-            f"its place was unanswered and orders {', '.join(found.every)} of its child's "
-            "shape were placed since: it may have landed and fired, so it is not placed again"
-        )
-        return Verdict(Step.ANSWER, GttAnswerKind.UNRESOLVED, message=words)
-    return Verdict(Step.PLACE_AGAIN)
-
-
-def _units_waited_out(pending: Pending, read: BookRead) -> bool:
-    """Whether the wait for the leg's units to settle, which begins at `read` unless it
-    began before, is over (`BookRead.waited_out`)."""
-    request = pending.request
-    if pending.units_wait_ns is None:
-        pending.units_wait_ns = read.read_ns
-    leg = (request.symbol, request.exchange, request.product)
-    return read.waited_out(leg, pending.units_wait_ns)
 
 
 def _missed(pending: Pending, read_ns: int) -> bool:
@@ -241,24 +198,31 @@ def _missed(pending: Pending, read_ns: int) -> bool:
 
 
 def _place(
-    pending: Pending, read: BookRead, rows: Mapping[str, GttRow], bound: Callable[[str], bool]
+    pending: Pending,
+    read: BookRead,
+    rows: Mapping[str, GttRow],
+    bound: Callable[[str], bool],
+    fall: UnitsSign,
 ) -> Verdict:
     if not pending.trigger_id:
-        return _unanswered_place(pending, read, rows, bound)
+        return _unanswered_place(pending, read, rows, bound, fall)
     seen = seen_of(rows, pending.trigger_id)
     if seen.rests:
         return Verdict(Step.ANSWER, GttAnswerKind.PLACED)
     if seen is Seen.UNREADABLE or (seen is Seen.GONE and _missed(pending, read.read_ns)):
-        return _WAIT
+        return WAIT
     return Verdict(Step.ANSWER, GttAnswerKind.PLACED, seen=seen)
 
 
 def _unanswered_place(
-    pending: Pending, read: BookRead, rows: Mapping[str, GttRow], bound: Callable[[str], bool]
+    pending: Pending,
+    read: BookRead,
+    rows: Mapping[str, GttRow],
+    bound: Callable[[str], bool],
+    fall: UnitsSign,
 ) -> Verdict:
     request = pending.request
     where = (request.symbol, request.exchange, request.product)
-    fall = _fall_sign(pending, read)
     shaped = [
         row
         for row in rows.values()
@@ -271,14 +235,20 @@ def _unanswered_place(
         words = f"GTTs {', '.join(found)} each have its shape, so it is not bound to one"
         return Verdict(Step.ANSWER, GttAnswerKind.UNRESOLVED, message=words)
     if _missed(pending, read.read_ns):
-        return _WAIT
+        return WAIT
     fired = [row.trigger_id for row in shaped if row.seen is Seen.TRIGGERED]
     unread = [row.trigger_id for row in rows.values() if _may_be(request, row, bound)]
     if fired or unread or fall is UnitsSign.FIRED:
         return Verdict(Step.ANSWER, GttAnswerKind.UNRESOLVED, message=_may_have(fired, unread))
+    if fall is UnitsSign.NO_REFERENCE:
+        words = (
+            "its place was unanswered and no settled read of its leg's units was made before "
+            "it was sent: whether it landed and fired cannot be told, so it is not placed again"
+        )
+        return Verdict(Step.ANSWER, GttAnswerKind.UNRESOLVED, message=words)
     if fall is UnitsSign.UNSETTLED:
-        if not _units_waited_out(pending, read):
-            return _WAIT
+        if not pending.units_waited_out(read):
+            return WAIT
         words = (
             "its place was unanswered and the session's own orders on its leg had not "
             f"settled {UNITS_WAIT_S:g} s on: whether it landed and fired cannot be told, so "
@@ -289,28 +259,6 @@ def _unanswered_place(
         words = "its place was unanswered twice and the GTT book shows neither"
         return Verdict(Step.NOT_FOUND, GttAnswerKind.UNRESOLVED, message=words)
     return Verdict(Step.FIRED_CHECK)
-
-
-def _fall_sign(pending: Pending, read: BookRead) -> UnitsSign:
-    """What the leg's units in `read` say of an unanswered place having landed and fired
-    (module docstring): FIRED when they moved by the place's units on its side since the
-    first read that read them, net of the session's own fills since, and the session's
-    own fills on the leg had settled at `read` (`_own_fills`); UNSETTLED when they had
-    not (a fall is judged only on settled units); NONE otherwise, or when the units were
-    not read. That first read, settled or not, is kept on `pending` as the reference."""
-    request = pending.request
-    leg = (request.symbol, request.exchange, request.product)
-    units, own = read.units.get(leg), read.own.get(leg)
-    if units is None or own is None:
-        return UnitsSign.NONE
-    if pending.first_units is None:
-        pending.first_units = (units, own)
-    if leg not in read.settled:
-        return UnitsSign.UNSETTLED
-    first, own_first = pending.first_units
-    if move_of(request.terms, first + own - own_first, units) is Move.FIRED:
-        return UnitsSign.FIRED
-    return UnitsSign.NONE
 
 
 def _may_be(request: GttRequest, row: GttRow, bound: Callable[[str], bool]) -> bool:
@@ -344,7 +292,7 @@ def _modify(pending: Pending, rows: Mapping[str, GttRow], read_ns: int) -> Verdi
     row = rows.get(pending.trigger_id)
     seen = Seen.GONE if row is None else row.seen
     if seen is Seen.UNREADABLE or (row is None and _missed(pending, read_ns)):
-        return _WAIT
+        return WAIT
     if row is None or not seen.rests:
         words = f"the GTT is {seen.value} before its modify was confirmed"
         return Verdict(Step.ANSWER, GttAnswerKind.UNRESOLVED, seen=seen, message=words)
@@ -354,7 +302,7 @@ def _modify(pending: Pending, rows: Mapping[str, GttRow], read_ns: int) -> Verdi
     if old is None or not row.shows(old):
         return Verdict(Step.REPLACE, message="the GTT book shows other terms than either")
     if _missed(pending, read_ns):
-        return _WAIT
+        return WAIT
     if pending.answered:
         return Verdict(Step.REPLACE, message="the GTT book still shows its old terms")
     if not pending.finished:
@@ -367,7 +315,7 @@ def _modify(pending: Pending, rows: Mapping[str, GttRow], read_ns: int) -> Verdi
 def _cancel(pending: Pending, rows: Mapping[str, GttRow], read_ns: int) -> Verdict:
     seen = seen_of(rows, pending.trigger_id)
     if seen is Seen.UNREADABLE:
-        return _WAIT
+        return WAIT
     if seen in (Seen.GONE, Seen.ENDED):
         return Verdict(Step.CHILD_CHECK, seen=seen)
     if seen in (Seen.EXPIRED, Seen.REJECTED):
@@ -375,21 +323,19 @@ def _cancel(pending: Pending, rows: Mapping[str, GttRow], read_ns: int) -> Verdi
     if seen is Seen.TRIGGERED:
         return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, seen=seen, message="it fired")
     if _missed(pending, read_ns):
-        return _WAIT
+        return WAIT
     words = "the GTT book still shows it resting"
     return Verdict(Step.ANSWER, GttAnswerKind.CANCEL_REFUSED, message=words)
 
 
 __all__ = [
-    "CHILD_READS_OF_A_GONE_GTT",
     "MISSES_BEFORE_DECIDING",
     "READ_AGAIN_AFTER_S",
+    "WAIT",
     "Pending",
     "Stage",
     "Step",
     "Verdict",
-    "again_verdict",
-    "child_verdict",
     "judge",
     "misses_from_ns",
 ]

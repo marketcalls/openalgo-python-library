@@ -34,18 +34,9 @@ from collections.abc import Callable
 
 from .._layout import NANOS_PER_SECOND
 from ._gtt_calls import CallKind, CallResult, GttCalls
+from ._gtt_checks import again_verdict, child_verdict
 from ._gtt_child import child_candidates
-from ._gtt_confirm import (
-    READ_AGAIN_AFTER_S,
-    Pending,
-    Stage,
-    Step,
-    Verdict,
-    again_verdict,
-    child_verdict,
-    judge,
-    misses_from_ns,
-)
+from ._gtt_confirm import READ_AGAIN_AFTER_S, Pending, Stage, Step, Verdict, judge, misses_from_ns
 from ._gtt_follow import GttFollower
 from ._gtt_reads import BookRead, GttReader
 from ._gtt_types import GttAction, GttAnswer, GttAnswerKind, GttRequest, gtt_key
@@ -145,13 +136,17 @@ class GttSender:
             request.terms,
             purpose=request.purpose,
         )
+        self._follower.placing(seq, (request.symbol, request.exchange, request.product))
         result = self._calls.place(request)
         if result.kind is CallKind.ACCEPTED:
             self._journal.bind_gtt(seq, result.trigger_id)
             self._start(Pending(stage, request, seq, result.trigger_id), result)
-        elif result.kind is CallKind.UNANSWERED:
+            return
+        if result.kind is CallKind.UNANSWERED:
             self._start(Pending(stage, request, seq, answered=False, again=again), result)
-        elif result.kind is CallKind.REFUSED:
+            return
+        self._follower.forget(seq)
+        if result.kind is CallKind.REFUSED:
             self._journal.set_gtt_state(seq, GttState.NOT_PLACED, note=refusal_note(result.message))
             kept = self._keep(request, result.message)
             self._answer(request, GttAnswerKind.REFUSED, message=result.message, kept=kept)
@@ -253,7 +248,14 @@ class GttSender:
         legs = self._follower.legs() | {(request.symbol, request.exchange, request.product)}
         read = self._reader.gtt_book(legs)
         self._follower.observe(read)
-        self._act(pending, judge(pending, read, self._bound), read)
+        self._act(pending, self._judge(pending, read), read)
+
+    def _judge(self, pending: Pending, read: BookRead) -> Verdict:
+        """`_gtt_confirm.judge`, given what the leg's units say of the place's GTT."""
+        request = pending.request
+        leg = (request.symbol, request.exchange, request.product)
+        fall = self._follower.units_of(pending.seq, leg, request.terms, read).sign
+        return judge(pending, read, self._bound, fall)
 
     def _act(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         step = verdict.step
@@ -262,7 +264,7 @@ class GttSender:
         elif step is Step.BIND:
             self._journal.bind_gtt(pending.seq, verdict.trigger_id)
             pending.trigger_id, pending.misses = verdict.trigger_id, 0
-            self._act(pending, judge(pending, read, self._bound), read)
+            self._act(pending, self._judge(pending, read), read)
         elif step is Step.PLACE_AGAIN:
             self._drop(pending)
             self._journal.set_gtt_state(pending.seq, GttState.NOT_PLACED, note=NOT_FOUND_NOTE)
@@ -288,10 +290,10 @@ class GttSender:
     def _book_check(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         """Read the order book before deciding (an order book not read is read again): a
         cancelled GTT absent or ended (CHILD_CHECK) is confirmed only when no child of it is
-        in the book (3.1), nor its leg's units moved by its units, units read while the
-        session's own fills on the leg had not settled waited for (`child_verdict`); an
-        unanswered place (FIRED_CHECK) is placed again only when no order of its child's
-        shape was placed since it was sent (`again_verdict`)."""
+        in the book (3.1) and, gone from the book, a settled read of its leg's units shows
+        it did not fire (`_gtt_checks.child_verdict`); an unanswered place (FIRED_CHECK) is
+        placed again only when no order of its child's shape was placed since it was sent
+        (`again_verdict`)."""
         rows = self._reader.order_rows()
         gtt = self._journal.gtt(pending.seq)
         if rows is None or gtt is None:
@@ -304,7 +306,8 @@ class GttSender:
             return
         since = self._follower.last_active(pending.seq)
         found = child_candidates(gtt, rows, since_ns=since, taken=taken)
-        sign = self._follower.units_sign(gtt, read)
+        leg = (gtt.symbol, gtt.exchange, gtt.product)
+        sign = self._follower.units_of(gtt.seq, leg, gtt.terms, read).sign
         self._act(pending, child_verdict(pending, verdict.seen, found, sign, read), read)
 
     def _finish(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
@@ -318,8 +321,8 @@ class GttSender:
             self._place(request, Stage.REPLACE_PLACE)
             return
         if kind is None or not pending.trigger_id:
-            # Several GTTs of an unanswered place's shape: the journal keeps it requested,
-            # bound to none, for the user to settle (never a guess).
+            # An unanswered place found several times, or that may have landed and fired:
+            # the journal keeps it requested, bound to none, for the user to settle.
             self._answer(request, GttAnswerKind.UNRESOLVED, message=verdict.message)
             return
         if pending.stage is Stage.REPLACE_CANCEL:
@@ -345,9 +348,9 @@ class GttSender:
         return resting
 
     def _hand_over(self, seq: int, kind: GttAnswerKind, read: BookRead, *, resting: bool) -> None:
-        """Tell the follower: a cancelled GTT is forgotten; one still resting is followed
-        with this read as its baseline; one no longer resting is the follower's to judge
-        from this read."""
+        """Tell the follower: a cancelled GTT is forgotten; one still resting is followed,
+        this read the latest that showed it resting; one no longer resting is the
+        follower's to judge from this read."""
         if kind is GttAnswerKind.CANCELLED:
             self._follower.forget(seq)
             return
@@ -363,6 +366,9 @@ class GttSender:
         if self._pending.get(pending.seq) is pending:
             del self._pending[pending.seq]
         self._queue.release(gtt_key(pending.request))
+        if not pending.trigger_id:
+            # An unanswered place bound to no GTT: nothing of it is followed.
+            self._follower.forget(pending.seq)
 
     def _answer(
         self,

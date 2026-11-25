@@ -432,10 +432,10 @@ def test_a_gtt_gone_with_the_position_moved_by_other_units_is_a_mismatch(
     rig.worker.close()
 
 
-def test_a_gtt_first_seen_gone_with_no_baseline_cannot_be_told(make_fake_openalgo, tmp_path):
+def test_a_gtt_first_seen_gone_with_no_reference_cannot_be_told(make_fake_openalgo, tmp_path):
     fake = broker_with_sbin(make_fake_openalgo())
     bought(fake)
-    # The position book cannot be read when the place is confirmed: no baseline is kept.
+    # The position book cannot be read when the place is confirmed: no reference is kept.
     fake.faults.gateway_error("positionbook", status=503)
     rig = GttRig(fake, tmp_path)
     rig.messages()
@@ -448,7 +448,7 @@ def test_a_gtt_first_seen_gone_with_no_baseline_cannot_be_told(make_fake_openalg
     news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
 
     assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
-    assert "no read showed it resting with its position" in outcomes(news)[-1].message
+    assert "no settled read of its leg's units" in outcomes(news)[-1].message
     restarted.worker.close()
 
 

@@ -7,7 +7,9 @@ journal in the test's folder), here on any trading day and in the mode the fake 
 reading holdings with its books (a session with a CNC strategy). Requests are built as
 unit N3b will build them from the kernel's GTT commands: by default a long CNC leg's stop
 on SBIN, sell 10 when SBIN trades at 790.00 or below, the child's limit 780.00, while SBIN
-trades at 800.00. Nothing here contacts a server.
+trades at 800.00. A test that needs a reference of the leg from before its first GTT
+gives it as the session's start read (`GttRig.start_read`). Nothing here contacts a
+server.
 """
 
 from __future__ import annotations
@@ -154,6 +156,13 @@ class GttRig(WorkerRig):
             priority=priority,
             seq=seq,
         )
+
+    def start_read(self, units: int, product: str = "CNC") -> None:
+        """The session's start read of SBIN's leg in `product`: `units` at the broker and
+        none filled by the session's own orders yet, given to the GTT follower as a
+        reference of the leg, as unit N3b's session gives it (`GttFollower.reference`)."""
+        follower = self.worker._started.gtts.follower
+        follower.reference(("SBIN", "NSE", product), units, 0, self.clock.now())
 
     def own_entry(self, units: int = UNITS, product: str = "CNC") -> PlaceRequest:
         """The session's own entry of the leg, as the venue map sends a strategy's entry:

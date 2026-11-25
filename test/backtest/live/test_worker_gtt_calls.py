@@ -5,8 +5,11 @@ resolved against the book by shape, refusals answered with the broker's words an
 across starts when they repeat on a later day, and each call counted under the order rate.
 
 The worker runs on the fake OpenAlgo (`gtt_samples`): SBIN at 800.00, a long CNC leg's
-stop sells 10 at a trigger of 790.00 with a child limit of 780.00. Expected payloads are
-the SDK's (openalgo/gtt.py), IDs the fake broker's (`fake_openalgo.gtts`).
+stop sells 10 at a trigger of 790.00 with a child limit of 780.00. An unanswered place is
+placed again only against a reference of its leg from before it was sent (the lead's
+ruling M3 on N3a's review round 5): a test of one gives the session's start read
+(`GttRig.start_read`). Expected payloads are the SDK's (openalgo/gtt.py), IDs the fake
+broker's (`fake_openalgo.gtts`).
 """
 
 from __future__ import annotations
@@ -243,6 +246,7 @@ UNANSWERED_PLACES = pytest.mark.parametrize(
 def test_an_unanswered_place_not_found_once_misses_count_is_placed_again(
     rig, broker, fault, decided_after_s
 ):
+    rig.start_read(0)
     fault(broker.faults)
 
     first = answers(rig.send(rig.gtt()))
@@ -256,6 +260,20 @@ def test_an_unanswered_place_not_found_once_misses_count_is_placed_again(
     with rig.journal() as journal:
         assert journal.gtt(1).state is GttState.NOT_PLACED
         assert journal.gtt_states(1)[-1][1] == NOT_FOUND_NOTE
+
+
+@SHAPES
+def test_an_unanswered_place_not_found_with_no_reference_from_before_it_is_unresolved(rig, broker):
+    broker.faults.refuse_connection("placegttorder")
+
+    news = answers(rig.send(rig.gtt())) + answers(rig.step_for(DECIDED_AFTER_FINISHED_S, 2.0))
+
+    # No settled read of the leg was made before the place: had it landed and fired, nothing
+    # could tell, so it is never placed again.
+    (answer,) = news
+    assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
+    assert "no settled read of its leg's units" in answer.message
+    assert len(broker.log.calls("placegttorder")) == 1
 
 
 @SHAPES
@@ -274,6 +292,7 @@ def test_an_unanswered_place_the_server_finishes_late_is_bound_and_never_placed_
 
 @SHAPES
 def test_a_place_unanswered_twice_and_not_found_is_unresolved(rig, broker):
+    rig.start_read(0)
     broker.faults.timeout("placegttorder")
     broker.faults.timeout("placegttorder")
 
@@ -303,6 +322,7 @@ def a_gtt_by_hand(broker, status):
 @pytest.mark.parametrize("status", ["cancelled", "expired", "rejected"])
 @SHAPES
 def test_an_unanswered_place_is_not_bound_to_a_gtt_of_its_shape_that_ended(rig, broker, status):
+    rig.start_read(0)
     a_gtt_by_hand(broker, status)
     broker.faults.timeout("placegttorder")
 
@@ -328,14 +348,15 @@ def test_an_unanswered_place_is_not_placed_again_when_a_history_row_of_its_shape
     assert [gtt.trigger_id for gtt in broker.gtts()] == [fired]
 
 
-def fallen_once_placed(rig, broker, monkeypatch):
-    """SBIN trades at 789.00 just after each place call ends: a GTT the broker holds by
-    then fires at once, and its child sells at 789.00 (above its 780.00 limit)."""
+def fallen_once_placed(rig, broker, monkeypatch, price=789.0):
+    """SBIN trades at `price` just after each place call ends: a GTT the broker holds by
+    then fires at once, and its child sells at 789.00 (above its 780.00 limit), or rests
+    unfilled at a price below the limit."""
     original = rig.orders._client.placegttorder
 
     def placed_then_fallen(**fields):
         answer = original(**fields)
-        broker.trade("SBIN", "NSE", 789.0)
+        broker.trade("SBIN", "NSE", price)
         return answer
 
     monkeypatch.setattr(rig.orders._client, "placegttorder", placed_then_fallen)
@@ -346,6 +367,7 @@ def test_an_unanswered_place_whose_gtt_fired_before_its_first_read_is_not_placed
     rig, broker, monkeypatch, history
 ):
     bought(broker, product="NRML")
+    rig.start_read(UNITS, "NRML")
     broker.faults.timeout("placegttorder", reached_broker=True)
     fallen_once_placed(rig, broker, monkeypatch)
 
@@ -353,25 +375,47 @@ def test_an_unanswered_place_whose_gtt_fired_before_its_first_read_is_not_placed
     news += rig.step_for(DECIDED_AFTER_TIMEOUT_S, every_s=2.0)
 
     # It reached the broker and fired before the first read. A book with history rows shows
-    # it fired; an active-only book shows nothing, and the position read at once had already
-    # fallen, but its child is in the order book: placed again, a second stop would sell 10
-    # more.
+    # it fired; an active-only book shows nothing, but the position fell by its 10 from the
+    # start read: placed again, a second stop would sell 10 more.
     (answer,) = answers(news)
     assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
-    sign = "of its shape has fired" if history else "of its child's shape were placed since"
+    sign = "of its shape has fired" if history else "the position fell by its units since"
     assert sign in answer.message
     assert len(broker.log.calls("placegttorder")) == 1
     assert broker.position("SBIN", "NSE") == 0
 
 
 @SHAPES
+def test_an_unanswered_place_whose_child_rests_in_the_order_book_is_not_placed_again(
+    rig, broker, monkeypatch, history
+):
+    bought(broker, product="NRML")
+    rig.start_read(UNITS, "NRML")
+    broker.faults.timeout("placegttorder", reached_broker=True)
+    # SBIN gaps to 775.00: the GTT fires, and its child rests unfilled at its 780.00 limit.
+    fallen_once_placed(rig, broker, monkeypatch, price=775.0)
+
+    news = rig.send(rig.gtt(product="NRML"))
+    news += rig.step_for(DECIDED_AFTER_TIMEOUT_S, every_s=2.0)
+
+    # The position has not moved, but the order book holds an order of its child's shape
+    # placed since its send: it may have landed and fired.
+    (answer,) = answers(news)
+    assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
+    sign = "of its shape has fired" if history else "of its child's shape were placed since"
+    assert sign in answer.message
+    assert len(broker.log.calls("placegttorder")) == 1
+
+
+@SHAPES
 def test_an_unanswered_place_that_landed_late_and_fired_is_not_placed_again(rig, broker, history):
     bought(broker, product="NRML")
+    rig.start_read(UNITS, "NRML")
     broker.faults.late_landing("placegttorder", seconds=1.0)
     news = rig.send(rig.gtt(product="NRML"))
     # The server places it a second after the client gave up (the next call it answers
     # lands it), it fires at once, and the order book never lists its child: on a book
-    # without history rows only the position's fall by its units since the first read
+    # without history rows only the position's fall by its units from the start read
     # tells it fired.
     broker.clock.advance(1.0)
     broker.client().ping()
@@ -387,8 +431,9 @@ def test_an_unanswered_place_that_landed_late_and_fired_is_not_placed_again(rig,
     assert len(broker.log.calls("placegttorder")) == 1
 
 
-def test_an_unanswered_place_after_an_exit_its_first_read_did_not_show_is_unresolved(rig, broker):
+def test_an_unanswered_place_after_an_own_exit_a_lagging_book_hid_is_placed_again(rig, broker):
     bought(broker)
+    rig.start_read(UNITS)
     # The session's partial exit sells 5 while the position book lags it (16-session-design
     # F78); the stop for the 5 left is placed, and its connection is refused.
     broker.lag_positionbook()
@@ -399,23 +444,22 @@ def test_an_unanswered_place_after_an_exit_its_first_read_did_not_show_is_unreso
 
     news = answers(rig.step_for(POSITION_BOOK_LAG_S + DECIDED_AFTER_FINISHED_S, 2.0))
 
-    # The leg fell by the place's 5 units since its first read, the reference, which was
-    # read while the exit had not settled: a fall from such a reference may be the GTT
-    # landed and fired, so it is never placed again (20-positional-live 3.1).
+    # The reads made while the exit had not settled judge nothing. Once it settles, the 5
+    # the book shows are the start read's 10 moved by the exit's 5: nothing fired, and the
+    # place, refused before it reached the server, is placed again.
     (answer,) = news
-    assert (first, answer.kind, answer.seq) == ([], GttAnswerKind.UNRESOLVED, None)
-    assert "the position fell by its units since" in answer.message
-    assert len(broker.log.calls("placegttorder")) == 1
+    assert (first, answer.kind, answer.seq) == ([], GttAnswerKind.PLACED, 2)
+    assert len(broker.log.calls("placegttorder")) == 2
 
 
 @SHAPES
 def test_an_unanswered_place_just_after_an_own_entry_that_landed_late_and_fired_is_not_placed_again(
     rig, broker, history
 ):
-    # The session's own entry buys 10 SBIN NRML; its stop is placed a second later with a
-    # client timeout of 10 s. The server places it a second after the client gave up, it
-    # fires at once, and the order book never lists its child: every read but the first
-    # is made after it fired, and the entry's fill had not settled at the first.
+    # The session's start read holds no SBIN; its own entry buys 10 SBIN NRML, and its stop
+    # is placed a second later with a client timeout of 10 s. The server places it a second
+    # after the client gave up, it fires at once, and the order book never lists its child.
+    rig.start_read(0, "NRML")
     rig.run(rig.own_entry(UNITS, product="NRML"))
     rig.step_for(1.0)
     rig.orders._client.timeout = 10.0
@@ -440,6 +484,7 @@ def test_an_unanswered_place_while_an_own_order_works_on_its_leg_is_unresolved_a
     rig, broker
 ):
     bought(broker)
+    rig.start_read(UNITS)
     # The session's exit of 5 rests at a limit of 900.00, far above SBIN's 800.00: a fill
     # of it could show in the position book before its word, so the leg never settles.
     rig.run(rig.own_exit(5, price_type="LIMIT", price=900.0))
@@ -460,6 +505,7 @@ def test_an_unanswered_place_while_an_own_order_works_on_its_leg_is_unresolved_a
 def test_an_unanswered_place_is_placed_again_beside_a_row_of_another_symbol_it_cannot_read(
     rig, broker, monkeypatch
 ):
+    rig.start_read(0)
     with_rows(rig, monkeypatch, lambda rows: [*rows, UNREADABLE_ROW])
     broker.faults.refuse_connection("placegttorder")
 

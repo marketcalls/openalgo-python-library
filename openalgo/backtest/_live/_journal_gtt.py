@@ -5,8 +5,8 @@ state it took and when, and the child order it placed when it fired.
 A GTT is written before its place call (`record_gtt`), as an intent is, so a restart that
 meets an unanswered place finds what to look for in the GTT book; the place's answer binds
 it to the broker's trigger ID (`bind_gtt`), and the session notes each later state
-(`set_gtt_state`), each modify the broker confirmed (`set_gtt_terms`) and the leg's units
-when a read showed it resting (`set_gtt_baseline`). A GTT lives
+(`set_gtt_state`), each modify the broker confirmed (`set_gtt_terms`) and the units its
+leg would hold had it not fired (`set_gtt_baseline`). A GTT lives
 across days: it is recorded on the session's day and read back on any later one, by its
 number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`).
 A trigger ID is the broker's GTT's, so it is unique in a ledger. A fired GTT's child is
@@ -183,9 +183,10 @@ class JournalGtts(JournalHandle):
             )
 
     def set_gtt_baseline(self, seq: int, units: int) -> None:
-        """Note `units`, the signed units of GTT `seq`'s leg at the broker read just before
-        a read that showed it resting: what the GTT is judged by if it is gone later, on
-        this day or a later one (20-positional-live 3.3, 4.3). Raises JournalError for
+        """Note `units`, the signed units GTT `seq`'s leg would hold at the broker had it
+        not fired (its reference moved by the session's own fills since, `_gtt_units`):
+        what the GTT is judged by if it is gone later, on this day or a later one
+        (20-positional-live 3.3, 4.3). Raises JournalError for
         units that are not a whole number, and a GTT not in the ledger, not bound to a
         trigger yet or ended."""
         baseline = whole_number("baseline_units", units)

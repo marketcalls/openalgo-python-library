@@ -5,16 +5,17 @@ missed child's price is read from.
 
 **Positions first.** A GTT book read is preceded by a position-book read (and the
 holdings, when a leg trades CNC: `_broker_units`): a GTT the book shows resting had not
-fired when the positions were read, so those units are what its leg held before it
-could fire, the baseline a GTT that is later gone is judged against (3.3). With them goes
-what the session's own orders had filled on each leg by then, as the order path knows it,
-whether those fills had settled and when the newest of them was heard (`_own_fills`,
-`OrderPath.own_fills`): a later move of the leg's units is the GTT's only net of the
+fired when the positions were read, so those units, read while the session's own fills on
+the leg had settled, are a reference for it (`_gtt_units`, 3.3). With them goes what the
+session's own orders had filled on each leg by then, as the order path knows it, whether
+those fills had settled and when the newest of them was heard (`_own_fills`,
+`OrderPath.own_fills`): a later move of the leg's units is a GTT's only net of the
 session's own fills since (an exit sold part of the leg while its stop rested), and units
-read while they had not settled decide nothing yet (the position book and the order path's
-words may not agree in time). They are waited for, until `UNITS_WAIT_S` after the later
-of when the wait began and that newest fill (`BookRead.waited_out`); still not settled
-then, the GTT parts give the answer that can send no second exit and no second GTT.
+read while they had not settled judge nothing (the position book and the order path's
+words may not agree in time). The GTT parts read again until they settle, until
+`UNITS_WAIT_S` after the later of when the wait began and that newest fill
+(`BookRead.waited_out`); still not settled then, they give the answer that can send no
+second exit and no second GTT.
 
 Every answer goes through the mode guard (the analyzer switch routes the books too) and
 is told to the order path's server watch (`note`: OpenAlgo's own answer lifts the hold of

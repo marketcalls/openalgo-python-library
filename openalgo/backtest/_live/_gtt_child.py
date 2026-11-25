@@ -1,7 +1,7 @@
-"""The child order of a GTT that fired, and what a GTT that is gone with no child found
-says (20-positional-live 3.2, 3.3; the lead's ruling N3a-2). Pure: the GTT follower
-(`_gtt_follow`) and the order worker's GTT confirmations (`_gtt_send`) read the books and
-act on what these give.
+"""The child order of a GTT that fired, and a missed child's price (20-positional-live
+3.2, 3.3; the lead's ruling N3a-2). Pure: the GTT follower (`_gtt_follow`) and the order
+worker's GTT confirmations (`_gtt_send`) read the books and act on what these give; what a
+GTT's leg's units say of it is `_gtt_units`'.
 
 - **The child** (`child_candidates`, 3.2 rule 2): an order of the order book on the GTT's
   symbol, exchange, product and side, for its units, placed at or after the last read that
@@ -10,12 +10,6 @@ act on what these give.
   session (no intent of the journal is bound to it, nor is it another GTT's child). A row
   whose units or time cannot be read is a possible child the engine cannot tell apart
   (`unsure`): with any, or with more than one sure, the engine never guesses (rule 5).
-- **A GTT gone with no child** (`move_of`, 3.3): the broker's units of the leg against
-  its baseline, those read just before the last read that showed it resting, moved by
-  what the session's own orders filled on the leg since (`_gtt_reads`). Moved by exactly
-  the GTT's units on its side (a SELL lowers them, a BUY raises them: a long's stop, a
-  short's stop and a strategy's GTT entry alike, review M4): it fired and its child was
-  missed. Unchanged: it ended outside the session. Anything else: the engine cannot tell.
 - **A missed child's price** (`missed_price`): the trade book's trades of the leg on the
   GTT's side by orders the session did not send, newest first, for the GTT's units,
   averaged; None when the trade book holds none (the GTT's limit stands in, flagged).
@@ -25,14 +19,13 @@ Times are UTC nanoseconds, prices rupees, quantities signed whole units.
 
 from __future__ import annotations
 
-import enum
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._journal_gtt_rows import GttBinding, GttTerms
+from ._journal_gtt_rows import GttBinding
 from ._order_book import CLOCK_SKEW_LIMIT_NS, book_time_ns
 from ._order_updates import units
 from ._reconcile_rules import adoption_price, leg_books
@@ -60,31 +53,6 @@ class Candidates:
     def every(self) -> tuple[str, ...]:
         """Every order that may be the child, sure ones first."""
         return self.sure + self.unsure
-
-
-class Move(enum.Enum):
-    """How the broker's units of a leg moved while its GTT went from the book."""
-
-    #: By exactly the GTT's units on its side: it fired.
-    FIRED = "fired"
-    #: Not at all: it ended outside the session.
-    UNCHANGED = "unchanged"
-    #: Otherwise: the engine cannot tell.
-    OTHER = "other"
-
-
-class UnitsSign(enum.Enum):
-    """What a leg's units in a read of the GTT book say of a GTT having fired, as the GTT
-    parts take them: units read while the session's own fills on the leg had not settled
-    (`_own_fills`) are never ignored, but waited for."""
-
-    #: Units read with the leg settled moved by the GTT's units on its side: it fired.
-    FIRED = "fired"
-    #: Units read while the leg had not settled, and the fire cannot be ruled out from
-    #: them: they are waited for.
-    UNSETTLED = "unsettled"
-    #: No sign of a fire, or the units or what they are judged against are not known.
-    NONE = "none"
 
 
 def child_candidates(
@@ -120,15 +88,6 @@ def child_candidates(
     return Candidates(tuple(sure), tuple(unsure))
 
 
-def move_of(terms: GttTerms, before: int, now: int) -> Move:
-    """How the broker's units of the leg of a GTT of `terms` moved from `before`, its
-    baseline, to `now` (module docstring)."""
-    signed = terms.quantity if terms.side == "BUY" else -terms.quantity
-    if now - before == signed:
-        return Move.FIRED
-    return Move.UNCHANGED if now == before else Move.OTHER
-
-
 def missed_price(
     gtt: GttBinding, tradebook: Mapping[str, Any] | None, taken: Callable[[str], bool]
 ) -> float | None:
@@ -160,9 +119,6 @@ __all__ = [
     "CHILD_READ_EVERY_S",
     "CHILD_SEARCH_S",
     "Candidates",
-    "Move",
-    "UnitsSign",
     "child_candidates",
     "missed_price",
-    "move_of",
 ]

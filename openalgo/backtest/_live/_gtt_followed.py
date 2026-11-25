@@ -3,14 +3,10 @@ journal binding with what the follower knows of it since (`Followed`), the endin
 row shows and the outcome each is (`ENDINGS`), and the outcome posted to the loop for it
 (`outcome_of`). Pure: the follower reads the books and the journal.
 
-**The baseline** (3.3) is the leg's broker units read just before the last read that
-showed the GTT resting with the session's own fills on the leg settled (`_own_fills`),
-with what those own orders had filled on the leg then (`_gtt_reads.BookRead.own`). Each
-fill of the session's own since moves it (`shift`): a partial exit that sold 5 of 10 while
-the stop rested leaves a baseline of 5, so the exit is never taken for the GTT firing. A
-read made before the exit's fill had settled is not taken (`rebase` is not called): its
-position book may not show the fill yet, or show it before the order path's word, and the
-exit would be counted twice or not at all.
+**The baseline** (3.3, 4.3) a GTT keeps in the journal is the units its leg would hold had
+it not fired: its reference moved by the session's own fills since (`_gtt_units`). A
+partial exit that sold 5 of 10 while the stop rested leaves a baseline of 5, so the exit
+is never taken for the GTT firing; a later day judges the GTT by it (`Followed.kept`).
 
 Times are UTC nanoseconds, prices rupees, quantities signed whole units.
 """
@@ -34,48 +30,26 @@ ENDINGS = {
 
 @dataclass
 class Followed:
-    """A GTT followed: its journal binding, its baseline (module docstring: the leg's
-    units, kept in the journal across days, and the session's own filled units on the
-    leg it was last moved by, None until known in this process) and when the last read
-    that showed it resting began, and once it fired or is gone, since when and when its
-    child is looked for next (the sandbox's child, when its row names one); whether its
-    unknown status was alerted, and the broker's trigger prices and units a resting row
-    showed against the journal's terms that were reported (`other_terms`)."""
+    """A GTT followed: its journal binding, the baseline the journal keeps for it (module
+    docstring; None before any) and when the last read that showed it resting began, and
+    once it fired or is gone, since when and when its child is looked for next (the
+    sandbox's child, when its row names one); whether its unknown status was alerted, and
+    the broker's trigger prices and units a resting row showed against the journal's terms
+    that were reported (`other_terms`)."""
 
     gtt: GttBinding
-    units_before: int | None = None
+    kept: int | None = None
     active_ns: int | None = None
     since_ns: int | None = None
     next_ns: int = 0
     child: str | None = None
     warned: bool = False
-    own_before: int | None = None
     reported_terms: tuple[tuple[float, ...], int] | None = None
 
     @property
     def leg(self) -> LegKey:
         """The leg the GTT holds: (symbol, exchange, product)."""
         return self.gtt.symbol, self.gtt.exchange, self.gtt.product
-
-    def rebase(self, units: int, own: int) -> bool:
-        """Take `units`, the leg's broker units read with a read that showed the GTT
-        resting while the session's own fills on the leg had settled, and `own`, what those
-        own orders had filled on the leg then, as its baseline; True when the units
-        changed."""
-        changed = units != self.units_before
-        self.units_before, self.own_before = units, own
-        return changed
-
-    def shift(self, own: int) -> bool:
-        """Move the baseline by what the session's own orders filled on the leg since it
-        was last taken or moved, `own` being what they have filled by now; True when it
-        moved. A baseline restored from the journal is moved from its first shift on."""
-        if self.units_before is None or self.own_before is None:
-            self.own_before = own
-            return False
-        moved, self.own_before = own - self.own_before, own
-        self.units_before += moved
-        return moved != 0
 
 
 def other_terms(followed: Followed, row: GttRow) -> str:

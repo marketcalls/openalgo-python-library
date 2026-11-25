@@ -19,7 +19,7 @@ nanoseconds.
   the session placed, written before its place call (its `seq` is that request's number
   in the journal, `request_id` the order worker's), bound to the broker's `trigger_id`,
   with what it is for (`purpose`, a leg's stop or a strategy's entry, a `Purpose` value),
-  its terms, its state and its leg's units when a read last showed it resting
+  its terms, its state and the units its leg would hold had it not fired
   (`baseline_units`, NULL before: what a GTT gone later is judged by); `gtt_states`,
   each state a GTT took and when; `gtt_children`, the child order a fired GTT placed, by
   its broker and kernel order IDs; `day_closes`,

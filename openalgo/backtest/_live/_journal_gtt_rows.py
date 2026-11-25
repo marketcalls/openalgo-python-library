@@ -106,9 +106,10 @@ class GttBinding:
     order worker's `request_id` of the place request; the broker's `trigger_id` (None until
     the place answered with one); its instrument and product; what it is for (`purpose`,
     one of `GTT_PURPOSES`); its `terms` as the broker holds them; its `state`; when it was
-    recorded and last changed; and its leg's signed units at the broker when a read last
-    showed it resting (`baseline_units`, None before any: 20-positional-live 3.3, what a
-    GTT gone later is judged by, across days too)."""
+    recorded and last changed; and the signed units its leg would hold at the broker had
+    it not fired, as the GTT follower last noted them (`baseline_units`, None before any:
+    its reference moved by the session's own fills since, `_gtt_units`; 20-positional-live
+    3.3, what a GTT gone later is judged by, across days too)."""
 
     seq: int
     day: date

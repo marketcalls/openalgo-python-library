@@ -12,38 +12,43 @@ the close's, `inbox`'s `ReadGtts`: `ask`); and once more before a GTT gone with 
 is decided. Nothing is read while OpenAlgo is silent (`busy`): a read could hold the
 worker for the client's whole timeout. A read that fails changes nothing.
 
-**What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT's leg's units
-read just before it become its baseline (`_gtt_reads`), moved by each fill of the session's
-own orders on the leg since (`_gtt_followed`), kept in the journal whenever it changes so a
-later day judges it too; units read while the session's own fills on the leg had not
-settled (`_own_fills`) are not taken, and the baseline is moved by those fills only (a
-position book that lags an own fill, or shows one the order path has not heard of, would
-count it twice or not at all); a resting row that shows another trigger or other units
-than the journal's is posted once as OTHER_TERMS and stays followed; an unknown status is
-taken as resting, with an ERROR alert once per GTT (3.1 asks for a WARN; the alerts have no
-such kind); ended without firing (cancelled, deleted, disabled), expired or rejected after
-placement, the GTT ends
-in the journal and its outcome is posted (the session places it again, 3.4); fired or
-gone, its leg is in flight (IN_FLIGHT posted) while its child is looked for. A GTT taken
-as gone that a later read shows resting (a book that left it out of a read) rests again:
-RESTING is posted and nothing fired. A GTT whose row cannot be read is not judged by that
-read. A GTT with a call of the order worker pending is the call's to judge (`hold`).
+**The references** (`_gtt_units`, the lead's ruling M1 on N3a's review round 5) are kept
+here, in one place: each leg's latest settled read, from every read of the GTT book the
+GTT parts make (the legs' units are read just before it, `_gtt_reads`) and from the
+session's own reads (`reference`); a GTT's, the leg's latest when its place is sent
+(`placing`) and again at each read that shows it resting. A read made while the session's
+own fills on the leg had not settled (`_own_fills`) is never a reference.
+
+**What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT takes its
+leg's latest reference, and the baseline the journal keeps for it (its reference moved by
+the session's own fills since, `_gtt_followed`) is noted whenever it changes, so a later
+day judges it too; a resting row that shows another trigger or other units than the
+journal's is posted once as OTHER_TERMS and stays followed; an unknown status is taken as
+resting, with an ERROR alert once per GTT (3.1 asks for a WARN; the alerts have no such
+kind); ended without firing (cancelled, deleted, disabled), expired or rejected after
+placement, the GTT ends in the journal and its outcome is posted (the session places it
+again, 3.4); fired or gone, its leg is in flight (IN_FLIGHT posted) while its child is
+looked for. A GTT taken as gone that a later read shows resting (a book that left it out
+of a read) rests again: RESTING is posted and nothing fired. A GTT whose row cannot be read
+is not judged by that read. A GTT with a call of the order worker pending is the call's to
+judge (`hold`), and still takes its leg's reference when a read shows it resting.
 
 **The child** (3.2, 3.3; `_gtt_child`): the sandbox's book names it; otherwise the order
 book is read every `CHILD_READ_EVERY_S` for `CHILD_SEARCH_S`: one candidate is the child
 (TRIGGERED), several a MISMATCH naming them, never a guess. None by then: the GTT book is
-read once more (still resting: RESTING), then the leg's units read with it against its
-baseline say whether it fired with the child missed (CHILD_MISSED, priced from the trade
-book or at the GTT's limit, flagged), ended outside the session (ENDED_OUTSIDE), or cannot
-be told (MISMATCH). Units read while the session's own fills on the leg had not settled
-decide nothing yet: the search goes on until they settle (the newest own fill on the leg
-is `_own_fills.POSITION_BOOK_LAG_S` old and no own order works on it), for at most
+read once more (still resting: RESTING), then the leg's units read with it against the
+GTT's reference say (`_gtt_units.judge`) whether it fired with the child missed
+(CHILD_MISSED, priced from the trade book or at the GTT's limit, flagged), ended outside
+the session (ENDED_OUTSIDE), or cannot be told (MISMATCH). A GTT with no reference (no
+settled read of its leg made when it could not have fired, on any day) is a MISMATCH. A
+read made while the session's own fills on the leg had not settled judges nothing: the
+book is read again every `CHILD_READ_EVERY_S` until they settle (the newest own fill on the
+leg is `_own_fills.POSITION_BOOK_LAG_S` old and no own order works on it), for at most
 `_gtt_reads.UNITS_WAIT_S` after the later of when the GTT went and that newest fill (a
 fill that comes during the wait moves the bound with it); still not settled then (an own
 order still working on the leg, or own fills coming one after another), it is a MISMATCH.
-A GTT with no baseline (no read showed it resting with its position settled, on any day)
-cannot be told either. The journal keeps a fired GTT TRIGGERED until the session binds
-its child (`bind_child`), so a restart before that looks for the child again.
+The journal keeps a fired GTT TRIGGERED until the session binds its child (`bind_child`),
+so a restart before that looks for the child again.
 
 Times are UTC nanoseconds, prices rupees, quantities signed whole units. Used by the
 worker's thread only.
@@ -58,19 +63,13 @@ from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ._gtt_book import GttRow, Seen
-from ._gtt_child import (
-    CHILD_READ_EVERY_S,
-    CHILD_SEARCH_S,
-    Move,
-    UnitsSign,
-    child_candidates,
-    move_of,
-)
+from ._gtt_child import CHILD_READ_EVERY_S, CHILD_SEARCH_S, child_candidates
 from ._gtt_followed import ENDINGS, Followed, other_terms, unknown_status
 from ._gtt_outcomes import GttOutcomes
-from ._gtt_reads import UNITS_WAIT_S, BookRead, GttReader, LegKey
+from ._gtt_reads import BookRead, GttReader, LegKey
 from ._gtt_types import GttEvent
-from ._journal_gtt_rows import GttBinding, GttState
+from ._gtt_units import LegUnits, References, judge
+from ._journal_gtt_rows import GttBinding, GttState, GttTerms
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, Now, OrderUpdate
 from .inbox import Message
 from .journal import Journal
@@ -109,7 +108,8 @@ class GttFollower:
         self._market_open = market_open
         self._busy = busy
         self._followed: dict[int, Followed] = {}
-        self._outcomes = GttOutcomes(journal, post, self._followed)
+        self._references = References()
+        self._outcomes = GttOutcomes(journal, post, self._followed, self._references)
         self._held: set[int] = set()
         self._asked = False
         self._next_read_ns = 0
@@ -120,12 +120,14 @@ class GttFollower:
         """Follow every GTT of the journal the broker holds that has not ended, and read
         the book at the first step when there is any (20-positional-live 4.2 step 5). Its
         child is looked for from its last change in the journal (it was placed or modified
-        then), and its baseline is the one the journal kept, then each read that shows it
-        resting."""
+        then), and its reference is the baseline the journal kept (`_gtt_units`), until a
+        read shows it resting."""
         for gtt in self._journal.open_gtts():
             if gtt.trigger_id is not None:
                 active_ns = self._last_change(gtt)
                 self._followed[gtt.seq] = Followed(gtt, gtt.baseline_units, active_ns)
+                if gtt.baseline_units is not None:
+                    self._references.restore(gtt.seq, gtt.baseline_units)
         self._asked = bool(self._followed)
 
     def _last_change(self, gtt: GttBinding) -> int:
@@ -138,16 +140,36 @@ class GttFollower:
         ]
         return max(changes, default=gtt.recorded_ns)
 
+    def reference(self, leg: LegKey, units: int, own_units: int, read_ns: int) -> None:
+        """A settled read of `leg` the session made at `read_ns` (UTC ns): `units` at the
+        broker, `own_units` filled by the session's own orders on the leg then, as the
+        order path counts them (`_own_fills.OwnFills.units`). It is the leg's latest
+        reference unless one read later is held (module docstring).
+
+        For unit N3b: the session gives its start read of the position book and holdings
+        (before any order of its own, `own_units` 0) for each leg it may hold a GTT on,
+        and its later reads made while the leg had settled (`OwnFills.settled`), on the
+        worker's thread (through the worker's queue, as `ReadGtts`). Without one, a GTT
+        placed before any settled read of its leg has no reference: its cancel once gone
+        from the book is CANCEL_REFUSED, its unanswered place UNRESOLVED, and the GTT gone
+        a MISMATCH."""
+        self._references.take(leg, units, own_units, read_ns)
+
+    def placing(self, seq: int, leg: LegKey) -> None:
+        """GTT `seq`'s place on `leg` is about to be sent: the leg's latest reference is
+        the GTT's (module docstring)."""
+        self._references.pin(seq, leg)
+
     def follow(self, gtt: GttBinding, read: BookRead) -> None:
         """Follow `gtt`, which `read` showed resting (a place or modify confirmed): its
-        leg's units in `read` are its baseline."""
+        leg's latest reference is its."""
         known = self._followed.get(gtt.seq)
-        followed = Followed(gtt, gtt.baseline_units, active_ns=read.read_ns)
-        if known is not None:
-            followed.units_before, followed.own_before = known.units_before, known.own_before
+        kept = gtt.baseline_units if known is None else known.kept
+        followed = Followed(gtt, kept, active_ns=read.read_ns)
         self._followed[gtt.seq] = followed
         self._held.discard(gtt.seq)
-        self._keep_baseline(followed, read)
+        self._references.pin(gtt.seq, followed.leg)
+        self._keep(followed, read.own.get(followed.leg))
         self._next_read_ns = max(self._next_read_ns, read.read_ns + round(GTT_BOOK_EVERY_S * _NS))
 
     def take_over(self, gtt: GttBinding, read: BookRead) -> None:
@@ -159,9 +181,11 @@ class GttFollower:
         self.observe(read)
 
     def forget(self, seq: int) -> None:
-        """Stop following GTT `seq` (its cancel was confirmed)."""
+        """Stop following GTT `seq` (its cancel was confirmed, or its place was not
+        made), its reference with it."""
         self._followed.pop(seq, None)
         self._held.discard(seq)
+        self._references.drop(seq)
 
     def hold(self, seq: int) -> None:
         """A call of GTT `seq` is pending: its confirmation judges it, not the follower."""
@@ -176,20 +200,10 @@ class GttFollower:
         followed = self._followed.get(seq)
         return None if followed is None else followed.active_ns
 
-    def units_sign(self, gtt: GttBinding, read: BookRead) -> UnitsSign:
-        """What the units of `gtt`'s leg in `read` say of it firing (3.3), against its
-        baseline moved by the session's own fills: FIRED when they moved by the GTT's
-        units on its side and the leg had settled when they were read (`_own_fills`);
-        UNSETTLED when they show that move but the leg had not settled (they are waited
-        for, never ignored); NONE when they show no such move, or either is not known."""
-        followed = self._followed.get(gtt.seq)
-        if followed is None:
-            return UnitsSign.NONE
-        self._shift(followed, read.own.get(followed.leg))
-        units, before = read.units.get(followed.leg), followed.units_before
-        if before is None or units is None or move_of(gtt.terms, before, units) is not Move.FIRED:
-            return UnitsSign.NONE
-        return UnitsSign.FIRED if followed.leg in read.settled else UnitsSign.UNSETTLED
+    def units_of(self, seq: int, leg: LegKey, terms: GttTerms, read: BookRead) -> LegUnits:
+        """What `leg`'s units in `read` say of GTT `seq` of `terms`, against its reference
+        (`_gtt_units.judge`; 3.3)."""
+        return judge(terms, self._references.of(seq, read.own.get(leg)), read, leg)
 
     def legs(self) -> set[LegKey]:
         """The legs of the GTTs followed, whose units a GTT book read reads first."""
@@ -222,10 +236,10 @@ class GttFollower:
     # ----- the reads --------------------------------------------------------------------
 
     def due(self) -> None:
-        """Move each baseline by the session's own fills since, then read what is due
-        (module docstring) and judge it."""
+        """Note each baseline the session's own fills moved, then read what is due (module
+        docstring) and judge it."""
         for followed in self._followed.values():
-            self._shift(followed, self._reader.own.units(followed.leg))
+            self._keep(followed, self._reader.own.units(followed.leg))
         if self._busy() or not self._followed:
             return
         now = self._now()
@@ -247,16 +261,20 @@ class GttFollower:
                     self._search(followed, rows, now)
 
     def observe(self, read: BookRead) -> None:
-        """Judge every GTT followed and not held by `read` (module docstring); a read that
-        failed changes nothing."""
+        """Take `read`'s settled legs as references, then judge every GTT followed and not
+        held by it (module docstring); a read of the GTT book that failed changes nothing
+        more."""
+        self._references.take_read(read)
         if read.rows is None:
             return
         for followed in list(self._followed.values()):
-            if followed.gtt.seq in self._held or followed.gtt.trigger_id is None:
+            if followed.gtt.trigger_id is None:
                 continue
             row = read.rows.get(followed.gtt.trigger_id)
             seen = Seen.GONE if row is None else row.seen
-            if seen is Seen.UNREADABLE:
+            if seen.rests:
+                self._references.pin(followed.gtt.seq, followed.leg)
+            if followed.gtt.seq in self._held or seen is Seen.UNREADABLE:
                 continue
             if followed.since_ns is not None:
                 if followed.child is None and seen.rests:
@@ -271,7 +289,7 @@ class GttFollower:
 
     def _resting(self, followed: Followed, row: GttRow | None, read: BookRead) -> None:
         followed.active_ns = read.read_ns
-        self._keep_baseline(followed, read)
+        self._keep(followed, read.own.get(followed.leg))
         if followed.gtt.state is GttState.PLACED:
             self._journal.set_gtt_state(followed.gtt.seq, GttState.ACTIVE)
             followed.gtt = dataclasses.replace(followed.gtt, state=GttState.ACTIVE)
@@ -285,22 +303,17 @@ class GttFollower:
             logger.error(text)
             self._alerts.send(AlertKind.ERROR, text)
 
-    def _keep_baseline(self, followed: Followed, read: BookRead) -> None:
-        """The leg's units in `read`, which showed the GTT resting, are its baseline (or,
-        not read, or read while the session's own fills on the leg had not settled, the
-        baseline is moved by those fills only); the journal keeps it whenever it changes
-        (a later day judges the GTT by it)."""
-        units, own = read.units.get(followed.leg), read.own.get(followed.leg)
-        if units is None or own is None or followed.leg not in read.settled:
-            self._shift(followed, own)
-        elif followed.rebase(units, own):
-            self._journal.set_gtt_baseline(followed.gtt.seq, units)
-
-    def _shift(self, followed: Followed, own: int | None) -> None:
-        """Move `followed`'s baseline by the session's own fills on its leg up to `own`,
-        what they have filled by now (None: not known), kept in the journal when it moved."""
-        if own is not None and followed.shift(own) and followed.units_before is not None:
-            self._journal.set_gtt_baseline(followed.gtt.seq, followed.units_before)
+    def _keep(self, followed: Followed, own: int | None) -> None:
+        """Note in the journal the baseline of `followed`'s GTT (`_gtt_followed`: its
+        reference moved by the session's own fills on its leg up to `own`, what they have
+        filled by now; None: not known) when it changed."""
+        reference = self._references.of(followed.gtt.seq, own)
+        if reference is None or own is None:
+            return
+        baseline = reference.expected(own)
+        if baseline != followed.kept:
+            self._journal.set_gtt_baseline(followed.gtt.seq, baseline)
+            followed.kept = baseline
 
     def _rests_again(self, followed: Followed, row: GttRow | None, read: BookRead) -> None:
         """A GTT taken as gone that `read` shows resting: nothing fired (module docstring)."""
@@ -340,43 +353,23 @@ class GttFollower:
 
     def _settle_gone(self, followed: Followed, since_ns: int) -> None:
         """No child was found since the GTT fired or went at `since_ns`: the GTT book read
-        once more, and the leg's units read with it, decide once they are settled; until
-        then they are waited for, and still not settled `UNITS_WAIT_S` after the later of
-        `since_ns` and the newest own fill on the leg, it is a MISMATCH (module
-        docstring)."""
+        once more, and the leg's units read with it against the GTT's reference, decide
+        (`_gtt_outcomes.GttOutcomes.gone`; module docstring)."""
         read = self._reader.gtt_book({followed.leg})
+        self._references.take_read(read)
         if read.rows is None:
             return
         row = read.rows.get(followed.gtt.trigger_id or "")
         if row is not None and row.seen.rests:
+            self._references.pin(followed.gtt.seq, followed.leg)
             self._rests_again(followed, row, read)
             return
-        self._shift(followed, read.own.get(followed.leg))
-        units = read.units.get(followed.leg)
-        if units is None or (row is not None and row.seen is Seen.UNREADABLE):
+        if row is not None and row.seen is Seen.UNREADABLE:
             return
-        if followed.leg not in read.settled:
-            if read.waited_out(followed.leg, since_ns):
-                words = (
-                    f"the session's own orders on its leg had not settled {UNITS_WAIT_S:g} s"
-                    " after it went and after their newest fill, so whether it fired cannot"
-                    " be told"
-                )
-                self._outcomes.unresolved(followed, words)
-            return
-        before = followed.units_before
-        if before is None:
-            words = "no read showed it resting with its position, so whether it fired is unknown"
-            self._outcomes.unresolved(followed, words)
-            return
-        move = move_of(followed.gtt.terms, before, units)
-        if move is Move.FIRED:
-            self._outcomes.missed(followed, self._reader.trade_book())
-        elif move is Move.UNCHANGED:
-            note = "gone with no child found and the position unchanged: ended outside the session"
-            self._outcomes.end(followed, GttEvent.ENDED_OUTSIDE, note)
-        else:
-            self._outcomes.unresolved(followed, f"the position went from {before} to {units} units")
+        self._keep(followed, read.own.get(followed.leg))
+        found = self.units_of(followed.gtt.seq, followed.leg, followed.gtt.terms, read)
+        waited_out = read.waited_out(followed.leg, since_ns)
+        self._outcomes.gone(followed, found, waited_out=waited_out, trades=self._reader.trade_book)
 
     def taken(self, order_id: str) -> bool:
         """Whether an order is the session's own or another GTT's child (3.2 rule 2)."""

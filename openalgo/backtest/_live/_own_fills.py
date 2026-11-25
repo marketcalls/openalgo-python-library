@@ -18,10 +18,12 @@ path heard the newest word with fills of an order of the leg) is at least
 `POSITION_BOOK_LAG_S` old (a broker's position book can lag a fill the order path has
 heard, 16-session-design F78). Until then a read of the leg's units may count an own fill
 the order path has not heard of, or miss one it has: 16-session-design 5.3 takes a position
-difference while an own order works as a lag of the broker's books. The GTT parts never
-ignore such units: they wait for them, for at most `_gtt_reads.UNITS_WAIT_S`, and then
-give the answer that can send no second exit or second GTT (the baseline meanwhile is
-moved by the session's own fills only).
+difference while an own order works as a lag of the broker's books. Such a read is never a
+reference of the leg and judges no GTT (`_gtt_units`). Where a GTT's answer rests on its
+leg's units (the cancel of a GTT gone from the book, an unanswered place, a GTT gone with
+no child found), the GTT parts read the leg again until it settles, for at most
+`_gtt_reads.UNITS_WAIT_S`, and then give the answer that can send no second exit or second
+GTT.
 
 Times are UTC nanoseconds, quantities signed whole units. Used by the thread that owns the
 order path.
@@ -37,10 +39,12 @@ from ._types import JournalLike, Now, OrderIntent, OrderUpdate
 #: Seconds after the order path heard an own fill on a leg during which a read of the
 #: broker's position book may not show it yet (16-session-design F78). Not a broker's
 #: figure: no broker publishes how far its position book lags a fill. 30 s spans three of
-#: the GTT follower's reads on the clock (every 10 s, 20-positional-live 3.1), so a book
-#: that lags by less never sets a GTT's baseline or decides what a GTT did; a book that
-#: lags longer still can. To be measured in the sandbox's overnight holds (20-positional-
-#: live V3) and on the maintainer's broker (V1), and set from what they show.
+#: the GTT follower's reads on the clock (every 10 s, 20-positional-live 3.1). A read made
+#: within it judges no GTT, so a book that lags an own fill by less cannot make that fill
+#: count wrongly; one that lags it longer still can, and so can a book that lags a fill
+#: that is not the session's own, a fired GTT's child's (`_gtt_checks` states that case).
+#: To be measured in the sandbox's overnight holds (20-positional-live V3) and on the
+#: maintainer's broker (V1), and set from what they show.
 POSITION_BOOK_LAG_S = 30.0
 
 #: A leg as the GTT parts key it: (symbol, exchange, product).

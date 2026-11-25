@@ -8,6 +8,14 @@ of the GTT; the follower posts the others (in flight, resting again, other terms
 follows on. The orders already taken (the session's own, or another GTT's child) are never
 a GTT's child (3.2 rule 2: `taken`).
 
+**A GTT gone with no child found** (`gone`, 3.3; the lead's ruling M4 on N3a's review
+round 5) is decided by what its leg's units say against its reference (`_gtt_units`):
+fallen (or, for a strategy's GTT entry, risen) by its units, it fired with its child
+missed; unchanged, it ended outside the session; moved by anything else, or with no
+reference, a MISMATCH. A read made while the session's own fills on the leg had not settled
+decides nothing, until the wait for them is over (`_gtt_reads.BookRead.waited_out`): then
+it is a MISMATCH too.
+
 Prices are rupees, quantities whole units. Used by the worker's thread only.
 """
 
@@ -19,7 +27,9 @@ from typing import Any
 
 from ._gtt_child import missed_price
 from ._gtt_followed import Followed, outcome_of
+from ._gtt_reads import UNITS_WAIT_S
 from ._gtt_types import PRICE_UNVERIFIED, GttEvent
+from ._gtt_units import LegUnits, References, UnitsSign
 from ._journal_gtt_rows import GttState
 from ._types import LOGGER_NAME
 from .inbox import GttNews, Message
@@ -27,21 +37,33 @@ from .journal import Journal
 
 logger = logging.getLogger(LOGGER_NAME)
 
+#: A gone GTT's MISMATCH for want of a reference, and for a leg that did not settle.
+NO_REFERENCE_WORDS = (
+    "no settled read of its leg's units was made when it could not have fired, so whether "
+    "it fired cannot be told"
+)
+UNSETTLED_WORDS = (
+    f"the session's own orders on its leg had not settled {UNITS_WAIT_S:g} s after it went "
+    "and after their newest fill, so whether it fired cannot be told"
+)
+
 
 class GttOutcomes:
     """The outcomes (module docstring) of the follower's GTTs, `followed` by journal
-    number (an outcome that ends the following removes its GTT); `journal` is handle W and
-    `post` puts a message on the loop's inbox."""
+    number with their `references` (an outcome that ends the following removes its GTT and
+    its reference); `journal` is handle W and `post` puts a message on the loop's inbox."""
 
     def __init__(
         self,
         journal: Journal,
         post: Callable[[Message], None],
         followed: dict[int, Followed],
+        references: References,
     ) -> None:
         self._journal = journal
         self._post = post
         self._followed = followed
+        self._references = references
         self._children: set[str] = set()
 
     def post(self, followed: Followed, event: GttEvent, **fields: Any) -> None:
@@ -53,7 +75,7 @@ class GttOutcomes:
     def triggered(self, followed: Followed, child: str) -> None:
         """`followed`'s GTT fired and placed order `child`, which the session binds."""
         self._children.add(child)
-        self._followed.pop(followed.gtt.seq, None)
+        self._stop(followed.gtt.seq)
         self.post(followed, GttEvent.TRIGGERED, order_id=child)
 
     def missed(self, followed: Followed, tradebook: Mapping[str, Any] | None) -> None:
@@ -66,21 +88,49 @@ class GttOutcomes:
         price = gtt.terms.limit_price if price is None else price
         note = f"fired, its child missed: {gtt.terms.quantity} units at {price:.2f}"
         self._journal.set_gtt_state(gtt.seq, GttState.FIRED, note=note)
-        self._followed.pop(gtt.seq, None)
+        self._stop(gtt.seq)
         units = gtt.terms.quantity
         self.post(followed, GttEvent.CHILD_MISSED, units=units, price=price, flags=flags)
 
     def unresolved(self, followed: Followed, words: str, candidates: tuple[str, ...] = ()) -> None:
         """A GTT whose fate the engine cannot tell: a MISMATCH posted, never a guess; the
         journal keeps it TRIGGERED for the user to settle."""
-        self._followed.pop(followed.gtt.seq, None)
+        self._stop(followed.gtt.seq)
         self.post(followed, GttEvent.MISMATCH, candidates=candidates, message=words)
 
     def end(self, followed: Followed, event: GttEvent, note: str) -> None:
         """`followed`'s GTT ended without firing (`event`): ENDED in the journal."""
         self._journal.set_gtt_state(followed.gtt.seq, GttState.ENDED, note=note)
-        self._followed.pop(followed.gtt.seq, None)
+        self._stop(followed.gtt.seq)
         self.post(followed, event, message=note)
+
+    def gone(
+        self,
+        followed: Followed,
+        found: LegUnits,
+        *,
+        waited_out: bool,
+        trades: Callable[[], Mapping[str, Any] | None],
+    ) -> None:
+        """`followed`'s GTT is gone with no child found: `found` is what its leg's units
+        say against its reference, `waited_out` whether the wait for the leg to settle is
+        over, and `trades()` reads the trade book (module docstring)."""
+        if found.sign is UnitsSign.FIRED:
+            self.missed(followed, trades())
+        elif found.sign is UnitsSign.UNCHANGED:
+            note = "gone with no child found and the position unchanged: ended outside the session"
+            self.end(followed, GttEvent.ENDED_OUTSIDE, note)
+        elif found.sign is UnitsSign.NO_REFERENCE:
+            self.unresolved(followed, NO_REFERENCE_WORDS)
+        elif found.sign is UnitsSign.OTHER:
+            words = f"the position went from {found.expected} to {found.units} units"
+            self.unresolved(followed, words)
+        elif waited_out:
+            self.unresolved(followed, UNSETTLED_WORDS)
+
+    def _stop(self, seq: int) -> None:
+        self._followed.pop(seq, None)
+        self._references.drop(seq)
 
     def taken(self, order_id: str) -> bool:
         """Whether an order is the session's own or another GTT's child (3.2 rule 2)."""
@@ -89,4 +139,4 @@ class GttOutcomes:
         return self._journal.gtt_of_child(order_id) is not None
 
 
-__all__ = ["GttOutcomes"]
+__all__ = ["NO_REFERENCE_WORDS", "UNSETTLED_WORDS", "GttOutcomes"]
