@@ -16,7 +16,7 @@
 //! | `desk` | the cancellations and modifications waiting for the venue's answer (a modification with its terms), the exits of the positions (an engine exit's fill flags with them), the legs' broker-held stops, the targets fired, the reprices waiting, what the session follows of its GTTs (a modification or cancellation waiting, the legs' stop GTTs, the children of fired GTTs), the entry locks and the sizing cap |
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open, the day's entries the trade caps count |
-//! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back and their last slice's ticks), the day's CNC buys |
+//! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back, their last slice's ticks and the flags of their fills so far), the day's CNC buys |
 //!
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and
@@ -118,7 +118,9 @@ use value::{list, map, Read};
 /// modifications replaced, which judge the bar of the slice they were confirmed in;
 /// layout 5 the day's entries the trade caps count (`risk`, 18-multi-strategy 2.5a);
 /// layout 6 the GTTs and what the session follows of them, and an engine exit's fill flags
-/// (design 20-positional-live 4.1).
+/// (design 20-positional-live 4.1), and then, before layout 6 was released, the flags of
+/// each open trade's fills (`book`), read as absent (no flag) from a layout 6 state
+/// written without them.
 pub const LIVE_STATE_LAYOUT: i64 = 6;
 
 /// A saved state read whole, before any of it is applied.

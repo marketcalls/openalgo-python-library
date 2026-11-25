@@ -44,10 +44,20 @@
 //! an engine exit flagged `gtt_child_unfilled` or `stop_crossed` carry the flag
 //! (`venue_gtt_child`, `venue_gtt_protect`).
 //!
+//! The venue may report a fill with flags of its own (`apply_fill_flagged`; design
+//! 20-positional-live 3.3 and 4.3): `price_unverified` for a fill whose price is not known
+//! (a fired GTT's child the session never saw, recorded at the child's limit) and
+//! `missed_day` for one made on a trading day no session ran. Only these two
+//! (`FillFlags::FROM_VENUE`): a flag the kernel sets itself is refused, `InvalidFill`, and
+//! nothing is recorded. They join the flags the kernel gives the order's fills, on the fill
+//! and on its trade (`output::TradeBook`), as the kernel's own do.
+//!
 //! The contract for the live layer: every fill of an order is delivered before its
 //! terminal result (`apply_cancel`, `apply_reject`); after it the order takes no more.
 
-use crate::exec::{FillAt, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType};
+use crate::exec::{
+    FillAt, FillFlags, FillPricing, Order, OrderAction, OrderId, OrderStatus, OrderType,
+};
 use crate::model::{Side, TsNanos};
 use crate::portfolio::{FillKind, PositionKey};
 use crate::rms::{ExitReason, LegRules};
@@ -82,6 +92,23 @@ pub(super) fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError
         });
     }
     Ok(())
+}
+
+/// Refuse the flags of a fill that a venue does not report: any but `FillFlags::FROM_VENUE`'s
+/// (module docs).
+fn check_venue_flags(flags: FillFlags) -> Result<(), VenueError> {
+    let kernels_own = FillFlags(flags.0 & !FillFlags::FROM_VENUE.0);
+    if kernels_own == FillFlags::NONE {
+        return Ok(());
+    }
+    Err(VenueError::InvalidFill {
+        reason: format!(
+            "flag {} is set by the engine itself: a venue reports a fill with {} only, \
+             or with none",
+            kernels_own.names().join(" and "),
+            FillFlags::FROM_VENUE.names().join(" or ")
+        ),
+    })
 }
 
 /// The units of a fill with `(closing, opening)` parts that may not be recorded: the
@@ -120,8 +147,26 @@ impl Engine {
         price_rupees: f64,
         at: TsNanos,
     ) -> Result<EventStamp, KernelError> {
+        self.apply_fill_flagged(order, units, price_rupees, at, FillFlags::NONE)
+    }
+
+    /// `apply_fill` of a fill the venue reports with `flags` (module docs): only
+    /// `price_unverified` and `missed_day` (`FillFlags::FROM_VENUE`), which the fill and
+    /// its trade carry beside the flags the kernel gives the order's fills.
+    ///
+    /// Errors: those of `apply_fill`; `Venue(InvalidFill)` for a flag the kernel sets
+    /// itself, before anything is recorded.
+    pub fn apply_fill_flagged(
+        &mut self,
+        order: OrderId,
+        units: f64,
+        price_rupees: f64,
+        at: TsNanos,
+        flags: FillFlags,
+    ) -> Result<EventStamp, KernelError> {
         let slice = self.result_slice()?;
         check_fill(units, price_rupees)?;
+        check_venue_flags(flags)?;
         let placed = self.live_order(order)?.clone();
         let left_units = placed.quantity_units - placed.filled_units;
         if units > left_units {
@@ -156,6 +201,7 @@ impl Engine {
                 parts,
                 price_rupees,
                 at: fill_at,
+                flags,
             };
             self.record_venue_fill(&placed, fill)?;
         }
@@ -285,7 +331,7 @@ impl Engine {
             at: fill.at,
             order: Some(order.id),
             exit_reason: request.exit_reason.unwrap_or(ExitReason::Signal),
-            flags: self.exit_flags_of(order.id),
+            flags: self.exit_flags_of(order.id).with(fill.flags),
             margin_rupees: 0.0,
             leg_rules: LegRules::default(),
             target_index: self.target_of(order.id),
@@ -322,6 +368,8 @@ struct VenueFill {
     parts: (f64, f64),
     price_rupees: f64,
     at: FillAt,
+    /// The flags the venue reported with it.
+    flags: FillFlags,
 }
 
 #[cfg(test)]

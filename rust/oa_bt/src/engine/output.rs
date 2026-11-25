@@ -6,7 +6,7 @@
 //! | `fills` | fill | slice, step, side, units, price, where in the bar, reason, order, flags, costs, slippage |
 //! | `levels` | slice in which a position or its levels changed | the position history: quantity, average price, stop, targets, remainder, trail, breakeven (as of the end of the slice; in force from the next) |
 //! | `equity` | slice | the equity series the metrics are computed from |
-//! | `trades` | closed round trip (flat to flat) | positions still open at the end are not trades; they are in `final_positions`; each has its MAE, MFE and slippage (`excursion`) |
+//! | `trades` | closed round trip (flat to flat) | positions still open at the end are not trades; they are in `final_positions`; each has its MAE, MFE and slippage (`excursion`) and the flags of its fills |
 //! | `orders` | order | every order with its final state |
 //! | `events` | event | the stream of `event` |
 //! | `stale_marks` | open position marked at a last close for want of a bar | SPEC-07 |
@@ -16,7 +16,7 @@
 //! slice, after its session-close step.
 
 use crate::charges::ChargesOutput;
-use crate::exec::{Fill, FillReason, InstrumentId, InstrumentSpec, Order};
+use crate::exec::{Fill, FillFlags, FillReason, InstrumentId, InstrumentSpec, Order};
 use crate::model::{Day, Product, Side, TsNanos};
 use crate::portfolio::{round_to_paise, FillEffect, FillKind, PositionChange, PositionKey};
 use crate::rms::leg::{BreakevenState, LevelInForce, TargetLevel, TrailState};
@@ -142,6 +142,10 @@ pub struct TradeRecord {
     /// What slippage cost the trade's fills, rupees: the sum of theirs, `None` when a
     /// fill has none modelled. Already in the gross P&L.
     pub slippage_rupees: Option<f64>,
+    /// Every flag any of the trade's fills carries, entry, adds and exits together
+    /// (`FillFlags`): a trade closed at a last close shows `filled_at_last_close`, one with
+    /// a price the session could not verify `price_unverified`.
+    pub flags: FillFlags,
 }
 
 /// A position at the end of the run.
@@ -207,6 +211,8 @@ pub(super) struct OpenTrade {
     pub(super) initial_risk: Option<f64>,
     pub(super) excursion: Excursion,
     pub(super) slippage: Option<f64>,
+    /// The flags of its fills so far.
+    pub(super) flags: FillFlags,
 }
 
 /// Builds the trades table from fills.
@@ -241,6 +247,7 @@ impl TradeBook {
                 initial_risk: None,
                 excursion: Excursion::default(),
                 slippage: Some(0.0),
+                flags: FillFlags::NONE,
             });
         }
         let Some(index) = self.open.iter().position(|trade| trade.key == key) else {
@@ -260,6 +267,7 @@ impl TradeBook {
         }
         trade.max_units = trade.max_units.max(effect.quantity_after.abs());
         trade.slippage = add_slippage(trade.slippage, record.slippage_rupees);
+        trade.flags = trade.flags.with(fill.flags);
         let opened = effect.kind == FillKind::Entry;
         let realized = (realized_before, trade.gross);
         let when = (record.stamp.slice, fill.at);
@@ -301,6 +309,7 @@ impl TradeBook {
             mae_rupees: mae,
             mfe_rupees: mfe,
             slippage_rupees: trade.slippage.map(paise),
+            flags: trade.flags,
         });
     }
 

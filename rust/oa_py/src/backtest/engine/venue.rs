@@ -8,9 +8,16 @@
 //! the pause kind "waiting" before a slice not released. Its venue is external (`venue()`
 //! says "external"; a backtest's is "simulated"): every order is handed over as a command
 //! (`take_commands()`), and the broker's results come back with `apply_fill(order_id,
-//! units, price, at)` (the units newly filled, the venue's price in rupees, the fill time
-//! in UTC nanoseconds), `apply_reject(order_id, reason)` (a reject code: "venue", or a
-//! kernel code such as "margin") and `apply_cancel(order_id)`, and the broker's answers to
+//! units, price, at, flags=())` (the units newly filled, the venue's price in rupees, the
+//! fill time in UTC nanoseconds, and the names of the flags the venue reports with the
+//! fill: "price_unverified" for a price not known, recorded at a fired GTT's child limit,
+//! "missed_day" for a fill made on a trading day no session ran, the names of
+//! `VENUE_FILL_FLAGS`; a name that is no flag's raises `NativeEngineInputError`, one of
+//! the engine's own flags `VenueRefusalError` of kind "invalid_fill", and nothing is
+//! recorded; every flag's name is in `FILL_FLAGS`; the fill and its trade carry them in
+//! the "flags" columns of the result's fills and trades), `apply_reject(order_id, reason)`
+//! (a reject code: "venue", or a kernel code such as "margin") and
+//! `apply_cancel(order_id)`, and the broker's answers to
 //! what it was sent with `apply_cancel_refused(order_id)`, `apply_modify(order_id)` and
 //! `apply_modify_refused(order_id)`. A closing order (a leg's stop, an exit, the engine's
 //! exit) whose rejection says the broker may not hold its units goes to
@@ -79,6 +86,29 @@ pub(super) fn add_bar(engine: &mut Engine, instrument: u32, bar: BarTuple) -> Py
     added.map_err(engine_error)
 }
 
+/// `apply_fill`: the venue's fill of `units` of `order_id` at `price` rupees at `at` (UTC
+/// nanoseconds), with the flags `flags` names (module docs); the stamp.
+///
+/// Errors: `NativeEngineInputError` for a name that is no fill flag's, before anything
+/// is recorded; `VenueRefusalError` for a refusal of the kernel.
+pub(super) fn fill(
+    py: Python<'_>,
+    engine: &mut Engine,
+    (order_id, units, price, at): (u64, f64, f64, i64),
+    flags: &[String],
+) -> PyResult<StampTuple> {
+    let mut parsed = FillFlags::NONE;
+    for name in flags {
+        let flag = FillFlags::from_name(name).ok_or_else(|| {
+            let venue = FillFlags::FROM_VENUE.names().join(" or ");
+            unknown("fill flag", name, &venue)
+        })?;
+        parsed = parsed.with(flag);
+    }
+    let filled = engine.apply_fill_flagged(OrderId(order_id), units, price, at, parsed);
+    recorded(py, filled)
+}
+
 /// `apply_reject`: the venue rejected an order with the reject code `reason`; the stamp.
 pub(super) fn reject(
     py: Python<'_>,
@@ -105,13 +135,19 @@ pub(super) fn answered(py: Python<'_>, result: Result<(), KernelError>) -> PyRes
     result.map_err(|error| venue_result_error(py, error))
 }
 
-/// Add every kind of `VenueRefusalError` to the module as `VENUE_REFUSAL_KINDS`, from the
-/// kernel's one list of them.
+/// Add every kind of `VenueRefusalError` to the module as `VENUE_REFUSAL_KINDS`, every
+/// fill flag's name as `FILL_FLAGS` and those a venue reports with a fill as
+/// `VENUE_FILL_FLAGS`, from the kernel's own lists.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
     m.add(
         "VENUE_REFUSAL_KINDS",
-        PyTuple::new_bound(m.py(), VENUE_REFUSAL_KINDS),
-    )
+        PyTuple::new_bound(py, VENUE_REFUSAL_KINDS),
+    )?;
+    let names = FillFlags::NAMED.map(|(_, name)| name);
+    m.add("FILL_FLAGS", PyTuple::new_bound(py, names))?;
+    let venue = FillFlags::FROM_VENUE.names();
+    m.add("VENUE_FILL_FLAGS", PyTuple::new_bound(py, venue))
 }
 
 /// The commands as a list of dicts (module docs); `flags` gives an order's fill flags.

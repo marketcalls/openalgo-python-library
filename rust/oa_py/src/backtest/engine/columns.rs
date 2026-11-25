@@ -122,9 +122,10 @@ pub(super) const LEVEL_COLUMNS: [Column<LevelRow>; 16] = [
 ];
 
 /// The closed round trips: their number, direction, entry and exit, P&L and charges
-/// (rupees), the initial risk in rupees (None with no stop at the open), the MAE and MFE
-/// and what slippage cost the trade's fills (rupees).
-pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 21] = [
+/// (rupees), the initial risk in rupees (None with no stop at the open), the MAE and MFE,
+/// what slippage cost the trade's fills (rupees) and the names of every flag its fills
+/// carry.
+pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 22] = [
     ("trade_id", |py, t| t.number.into_py(py)),
     ("instrument", |py, t| t.instrument.0.into_py(py)),
     ("product", |py, t| t.product.code().into_py(py)),
@@ -153,6 +154,7 @@ pub(super) const TRADE_COLUMNS: [Column<TradeRecord>; 21] = [
     ("mae_rupees", |py, t| t.mae_rupees.into_py(py)),
     ("mfe_rupees", |py, t| t.mfe_rupees.into_py(py)),
     ("slippage_rupees", |py, t| slippage(py, t.slippage_rupees)),
+    ("flags", |py, t| t.flags.names().into_py(py)),
 ];
 
 /// The orders: the request (type, prices in rupees, validity, product), the state and
