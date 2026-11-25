@@ -7,8 +7,11 @@ The market is `positional_samples`': SBIN trades every 10 s at 500.00 until 15:3
 unless a test moves it. `FlatTarget` and `FlatTrail` buy 10 SBIN CNC whenever they hold
 none, have no order working and SBIN is below 501.00, with a stop GTT 3 points below the
 fill (497.00 for a fill at 500.00) and a target 2 points above it (502.00) or a trail.
-`CncTarget` buys 10 at its first decision of each start. Expected values come from the
-fake's books and the scenario.
+`CncTarget` buys 10 at its first decision of each start. `CncKept` and `OptionKept` (one
+lot of the NIFTY call NRML, its stop GTT at 110.00) buy once, the entry kept in
+`self.state`. A restart past the MIS square-off (NSE 15:00, NFO 15:10) squares off no
+CNC or NRML leg: it is carried at the close (the lead's ruling N3b-4, review round 2
+finding 1). Expected values come from the fake's books and the scenario.
 """
 
 from __future__ import annotations
@@ -18,10 +21,27 @@ import logging
 import pytest
 from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import GTT_TRIGGER, MODES, CncTarget, calls, gtt_world, gtts, sells
+from positional_samples import (
+    GTT_TRIGGER,
+    MODES,
+    CncHold,
+    CncTarget,
+    calls,
+    gtt_world,
+    gtts,
+    sells,
+)
 from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import NS, alerts, ist
-from stops_samples import STOP_POINTS, at_price
+from stops_samples import (
+    OPTION,
+    OPTION_LOT,
+    STOP_POINTS,
+    OptionHold,
+    at_price,
+    events,
+    option_world,
+)
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -31,6 +51,10 @@ from openalgo.backtest._live.journal import JOURNAL_FILE_NAME, GttState, Journal
 BUY_BELOW = 501.0
 #: The target's price, past the 502.00 target.
 TARGET_PRICE = 503.0
+#: A restart the same day past the MIS square-off of NSE (15:00) and of NFO (15:10).
+PAST_SQUARE_OFF = ist(15, 15)
+#: The option's stop GTT: 10 points below its fill at 120.00.
+OPTION_TRIGGER = 110.0
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +81,26 @@ class FlatTrail(bt.Strategy):
     def on_bar(self, bar):
         if not self.position.qty and not self.orders and bar.close < BUY_BELOW:
             self.buy(10, stop=bt.points(STOP_POINTS), trail=bt.trail_points(STOP_POINTS))
+
+
+class CncKept(CncHold):
+    """CncHold whose entry is kept in `self.state`: a restart buys nothing more."""
+
+    def on_bar(self, bar):
+        if not self.state.get("bought"):
+            self.state["bought"] = True
+            self.buy(self.qty, **type(self).rules)
+
+
+class OptionKept(OptionHold):
+    """OptionHold in NRML whose entry is kept in `self.state`."""
+
+    product = "NRML"
+
+    def on_bar(self, bar):
+        if not self.state.get("bought"):
+            self.state["bought"] = True
+            self.buy(OPTION_LOT, **type(self).rules)
 
 
 def world_to_the_close(make_fake_openalgo, monkeypatch, tmp_path, analyzer):
@@ -211,6 +255,81 @@ def test_a_restart_that_ends_the_day_flat_leaves_no_record_of_the_kept_leg(
     assert outcome.stopped_by == "session_end"
     assert world.fake.position("SBIN", "NSE") == 0
     assert not day_closes(world)["FlatTarget"].carried.get("positions")
+
+
+@MODES
+def test_a_restart_the_same_day_locks_entries_again_after_a_refused_stop_gtt(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # The broker refuses FlatTarget's first stop GTT: the leg is exited at market and its
+    # entries locked for the day (decision 11.7). The restart sets that lock again, so
+    # FlatTarget, flat below 501.00, buys nothing more today.
+    world = world_to_the_close(make_fake_openalgo, monkeypatch, tmp_path, analyzer)
+    world.fake.refuse_next_gtt("Trigger price is too close to the last price")
+    world.stop_at(ist(14, 46))
+    first = world.run(FlatTarget)
+    assert ("FlatTarget", "gtt_refused") in {(lock.strategy, lock.reason) for lock in first.locks}
+    assert world.fake.position("SBIN", "NSE") == 0
+
+    outcome = restart(world, FlatTarget, stop_ns=ist(14, 52))
+
+    locked = [lock for lock in outcome.locks if lock.reason == "gtt_refused"]
+    assert [lock.lifted_ns for lock in locked] == [None]
+    buys = [c for c in calls(world, "placeorder") if c.detail["request"]["action"] == "BUY"]
+    assert len(buys) == 1
+    assert world.fake.position("SBIN", "NSE") == 0
+    assert len(calls(world, "placegttorder")) == 1
+
+
+def kept_until_past_the_square_off(world, strategy):
+    """Run `strategy` until a Ctrl+C at 14:46 keeps its leg, then move the clock on to
+    `PAST_SQUARE_OFF`."""
+    world.stop_at(ist(14, 46))
+    world.run(strategy)
+    world.script.sleep((PAST_SQUARE_OFF - world.fake.clock.now()) / NS)
+
+
+@MODES
+def test_a_restart_past_the_mis_square_off_carries_a_cnc_leg_to_the_close(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    world = world_to_the_close(make_fake_openalgo, monkeypatch, tmp_path, analyzer)
+    kept_until_past_the_square_off(world, CncKept)
+
+    outcome = restart(world, CncKept)
+
+    assert outcome.stopped_by == "session_end"
+    assert events(outcome, "restart_square_off") == []
+    assert [e["settle"] for e in events(outcome, "gtt_restored")] == ["take_back"]
+    assert calls(world, "cancelgttorder") == []
+    assert sells(world) == []
+    assert world.fake.position("SBIN", "NSE") == 10
+    assert gtts(world) == [("active", 10, GTT_TRIGGER, "SELL")]
+    (position,) = outcome.open_positions
+    assert position.stop_confirmed
+    assert len(day_closes(world)["CncKept"].carried["positions"]) == 1
+
+
+@MODES
+def test_a_restart_past_the_mis_square_off_carries_an_nrml_leg_to_the_close(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    world = option_world(
+        make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 45), analyzer=analyzer
+    )
+    world.trace.waive("protected", "a restart: the earlier start's windows are its own")
+    world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
+    kept_until_past_the_square_off(world, OptionKept)
+
+    outcome = restart(world, OptionKept)
+
+    assert outcome.stopped_by == "session_end"
+    assert events(outcome, "restart_square_off") == []
+    assert calls(world, "cancelgttorder") == []
+    assert [o for o in world.orders() if o.action == "SELL"] == []
+    assert world.fake.position(OPTION, "NFO") == OPTION_LOT
+    assert gtts(world) == [("active", OPTION_LOT, OPTION_TRIGGER, "SELL")]
+    assert len(day_closes(world)["OptionKept"].carried["positions"]) == 1
 
 
 def day_closes(world):
