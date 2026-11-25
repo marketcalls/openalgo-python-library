@@ -35,6 +35,22 @@ STOPS_LINE = (
 )
 
 
+#: The banner's line on a CNC or NRML position's stop (20-positional-live 2, P6).
+POSITIONAL_STOPS_LINE = (
+    "CNC and NRML: each position's stop rests at the broker as a SINGLE GTT, kept overnight; "
+    "its targets are held by the session while it runs"
+)
+#: What Ctrl+C does with CNC and NRML positions, by `on_stop` (20-positional-live 10.2).
+ON_STOP_LINES = {
+    None: (
+        "Ctrl+C: exits the MIS positions and keeps the CNC and NRML positions open with "
+        "their GTT stops (on_stop default; on_stop='flatten' exits them all)"
+    ),
+    "flatten": "Ctrl+C: exits every position, CNC and NRML too (on_stop='flatten')",
+    "keep": "Ctrl+C: keeps every position open with its stop at the broker (on_stop='keep')",
+}
+
+
 def banner_lines(session: Any) -> list[str]:
     """The start banner of `session` (a `_session_loop.Session` whose strategies are
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
@@ -45,7 +61,8 @@ def banner_lines(session: Any) -> list[str]:
     the day's earlier start and a source not hashed (12.1, `_session_versions`), each
     instrument several strategies share with its
     members and the rule on trading by hand (4.11), the rule of broker-held stops
-    (`STOPS_LINE`), the account's limits, the order rate, the cost model, the sandbox's
+    (`STOPS_LINE`), with a CNC or NRML strategy how its stop is held and what Ctrl+C does
+    (`positional_lines`), the account's limits, the order rate, the cost model, the sandbox's
     difference, and the warnings, each once with one prefix."""
     parts = session.parts
     spec, report = parts.spec, parts.report
@@ -76,6 +93,7 @@ def banner_lines(session: Any) -> list[str]:
     lines += session.versions.banner_lines()
     lines += shared_lines(session.groups.groups)
     lines.append(STOPS_LINE)
+    lines += positional_lines(spec)
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss
         lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
@@ -92,6 +110,15 @@ def banner_lines(session: Any) -> list[str]:
         )
     lines += [warning_line(note) for note in session.warnings]
     return lines
+
+
+def positional_lines(spec: Any) -> list[str]:
+    """The banner's lines of a session with a CNC or NRML strategy (20-positional-live 2
+    and 10.2): how their stops are held, and what Ctrl+C does with their positions by
+    `on_stop` (`ON_STOP_LINES`); none for an MIS-only session, whose banner is as before."""
+    if not spec.gtt_legs:
+        return []
+    return [POSITIONAL_STOPS_LINE, ON_STOP_LINES[spec.arguments.on_stop]]
 
 
 def daily_limit_words(risk: Mapping[str, Any]) -> str:
@@ -149,9 +176,12 @@ def _clock(ts_ns: int) -> str:
 
 __all__ = [
     "BANNER_ALERT_LINES",
+    "ON_STOP_LINES",
+    "POSITIONAL_STOPS_LINE",
     "STOPS_LINE",
     "account_limit_lines",
     "banner_lines",
     "daily_limit_words",
     "limit_lines",
+    "positional_lines",
 ]

@@ -25,7 +25,7 @@ each of them, not only the first. The checks, by name:
   candles the live bars are checked against (`intervals`, D27);
 - `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
   `account_max_daily_loss` positive when given;
-- `product`: MIS, the only product of this release (Tier 1);
+- `product`: MIS, CNC or NRML, each strategy's (CNC and NRML carried overnight);
 - `trading_day:<EXCHANGE>`: the exchange trades today and its session has not closed
   (the package calendar); a warning after the day's MIS entry cut-off, and when the
   calendar does not confirm the day;

@@ -42,7 +42,7 @@ def live(
     round_levels: bool = True,
     strict_config: bool = True,
     live_dir: str | os.PathLike[str] | None = None,
-    on_stop: str = "flatten",
+    on_stop: str | None = None,
     max_trades_per_day: int | Mapping[str, int | None] | None = None,
     daily_profit_target: float | Distance | Mapping[str, float | Distance | None] | None = None,
     max_order_value: float | Distance | Mapping[str, float | Distance | None] | None = None,
@@ -58,7 +58,9 @@ def live(
     it at the start, shows it first in its start banner and in every alert, and adopts
     it; if the switch changes during the session, nothing more is sent. The same strategy
     class runs here as in `bt.backtest`, deciding in `on_bar` on 1-minute bars built from
-    the feed's ticks, with MIS orders; a stop given with `stop=` is held by the broker.
+    the feed's ticks, in the strategy's product: a stop given with `stop=` is held by the
+    broker, as an order for MIS and as a GTT for a CNC or NRML position, which the session
+    carries to the next day; targets are held by the session on ticks.
 
     strategy: a `bt.Strategy` subclass, or a list of them; two may trade one symbol, one
         side at a time and with market orders only.
@@ -85,8 +87,11 @@ def live(
         without `max_positions`, `drawdown_halt` or `cooldown`.
     live_dir: the absolute folder of the accounts' journals, logs and locks (default: the
         OPENALGO_LIVE_DIR environment variable, else ~/.openalgo/live).
-    on_stop: what Ctrl+C does with open positions: "flatten" (exit them, then stop) or
-        "keep" (leave them with their stops at the broker).
+    on_stop: what Ctrl+C does with open positions: None (the default) exits the MIS
+        positions and keeps the CNC and NRML ones with their GTT stops at the broker (an
+        MIS-only session exits every position); "flatten" exits every position, CNC and
+        NRML too, then stops; "keep" leaves every position with its stop at the broker.
+        The start banner says which applies.
     max_trades_per_day, daily_profit_target, max_order_value: each strategy's daily
         limits, as in `bt.backtest` (one value or a dict naming each by class name; a class
         attribute wins), each off when None: None for a strategy in a dict leaves it
@@ -102,7 +107,8 @@ def live(
         own orders on the same server; give more for a server set higher). A call beyond it
         waits, stops and exits first; an entry or add that waits 5 s is not sent.
 
-    The session ends at the end of the day (flat after the MIS square-off), on Ctrl+C
+    The session ends at the end of the day (the MIS legs flat after their square-off, and
+    the CNC and NRML legs carried with their stop GTTs confirmed after the close), on Ctrl+C
     (a safe stop: a second Ctrl+C stops within seconds, naming each position left open),
     or, once the analyzer switch changed, on Ctrl+C or a few minutes after the exchange's
     close. A `bt.backtest` argument with no meaning live (`data`, `start`, `end`, `now`,
@@ -113,8 +119,9 @@ def live(
     Raises ConfigError for an unusable argument (one that chooses the mode among them);
     NotImplementedError, before any call to OpenAlgo, for what live trading does not run
     yet (condition strategies, signal and array strategies, several symbols or a
-    universe, futures series, daily or longer intervals, CNC and NRML, two strategies
-    with one name, bars from broker candles), saying what to do instead;
+    universe, futures series, daily or longer intervals, two strategies with one name,
+    two CNC or NRML strategies on one symbol and product, bars from broker candles),
+    saying what to do instead;
     PreflightError, listing every check that failed (another session holding the
     account or the server among them); LiveError when OpenAlgo does not report its mode,
     the call is not on the main thread (Ctrl+C reaches only the main thread), the feed

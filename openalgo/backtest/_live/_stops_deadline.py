@@ -10,6 +10,11 @@ sends the ERROR alert: an exit there would cancel the stop protect by state plac
 the stop would be placed and cancelled again at every deadline. Each stop meets its
 deadline once.
 
+A CNC or NRML leg's stop GTT meets the same deadline from the hand-over of its place to
+the order worker until the worker's answer (20-positional-live 2, "Day 1, entry fills"; the
+lead's ruling N3b-2): the worker answers PLACED only once a read of the GTT book shows it
+resting. The exit then waits for the GTT's cancel, which waits for the place's answer.
+
 Times are UTC nanoseconds. Used by the loop only.
 """
 
@@ -40,6 +45,7 @@ class Deadlines:
         self._session = session
         self._stops = stops
         self._met: set[tuple[str, int]] = set()
+        self._gtts_met: set[tuple[str, int]] = set()
 
     def due(self, now_ns: int) -> None:
         """Act on each stop past its deadline (module docstring)."""
@@ -68,6 +74,28 @@ class Deadlines:
             session.event("stop_unconfirmed", strategy=trader.name, outcome=asked)
             what = "the position is exited (the stop cancelled first)"
             self._alert(trader, stop.order_id, HELD_EXIT_WORDS if asked == HELD_FOR_READ else what)
+        self._gtts_due(now_ns)
+
+    def _gtts_due(self, now_ns: int) -> None:
+        """Act on each leg's stop GTT past its deadline (module docstring)."""
+        session = self._session
+        worker = session.parts.worker
+        for trader in session.traders:
+            placing = [] if trader.gtts is None else trader.gtts.placing()
+            for gtt_id, since_ns in placing:
+                key = (trader.name, gtt_id)
+                if key in self._gtts_met or now_ns < since_ns + _DEADLINE_NS:
+                    continue
+                if worker.busy_since_ns is not None or worker.raw_pending or session.inbox_waiting:
+                    continue
+                self._gtts_met.add(key)
+                if self._stops.protection.holds(trader):
+                    self._alert(trader, "GTT", "the session asks for no exit while it protects it")
+                    continue
+                asked = session.margin.request_exit(trader, UNPROTECTED)
+                session.event("stop_unconfirmed", strategy=trader.name, outcome=asked, gtt=gtt_id)
+                what = "the position is exited once the GTT's place is answered and it is cancelled"
+                self._alert(trader, "GTT", what)
 
     def _alert(self, trader: Trader, order_id: str, what: str) -> None:
         self._session.alert(

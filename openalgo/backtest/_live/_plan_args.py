@@ -43,6 +43,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .._messages import not_supported
+from .._products import MIS
 from .._risk_settings import rupees_amount
 from .._strategy_args import (
     MANDATORY,
@@ -62,8 +63,20 @@ from .data_worker import HISTORY_SOURCE
 from .series import DEFAULT_BASE
 
 #: What `on_stop` takes: flatten every leg before stopping, or keep the legs open with
-#: their broker-held stops (16-session-design 3.3, decision 1 of its section 10.0).
-ON_STOP = ("flatten", "keep")
+#: their broker-held stops (16-session-design 3.3, decision 1 of its section 10.0), or
+#: None, the default: flatten the MIS legs and keep the CNC and NRML ones with their GTTs
+#: (20-positional-live 10.2, decision 11.8; an MIS-only session flattens every leg).
+ON_STOP = (None, "flatten", "keep")
+
+
+def kept_on_stop(on_stop: str | None, product: str) -> bool:
+    """Whether a Ctrl+C keeps open a position of `product` ("MIS", "CNC", "NRML") with its
+    broker stop under `on_stop` (`ON_STOP`), rather than exiting it."""
+    if on_stop is None:
+        return product != MIS
+    return on_stop == "keep"
+
+
 #: The bar source of this release: bars built from the feed's ticks (08-live-trading
 #: section 5); bars from broker candles come later.
 BARS_FROM_TICKS = "websocket"
@@ -95,7 +108,8 @@ NOT_LIVE = MappingProxyType(
         "margin": "the broker computes the margin",
         "quantity_mode": "a live session trades whole shares and lots",
         "instrument": "OpenAlgo gives the lot size, tick size and freeze quantity",
-        "product": "a live session trades MIS (set product on the class, or leave it unset)",
+        "product": "set product on each strategy class (MIS by default, CNC or NRML to hold "
+        "positions overnight)",
         "roll": "a live session trades one contract named by its symbol",
         "benchmark": "a live session has no benchmark",
         "calendar": "a live session follows the package calendar",
@@ -163,7 +177,7 @@ class LiveArguments:
     alerts_to: str | None
     account: str | None
     live_dir: str | os.PathLike[str] | None
-    on_stop: str
+    on_stop: str | None
     daily_limits: Mapping[str, Mapping[str, Any]]
     account_max_trades_per_day: int | None
     account_daily_profit_target: float | None
@@ -247,8 +261,9 @@ def _session_options(
         raise ConfigError(f"live_dir takes a folder path or None, not {live_dir!r}")
     if on_stop not in ON_STOP:
         raise ConfigError(
-            f"on_stop takes 'flatten' (exit every position, then stop) or 'keep' (leave "
-            f"the positions with their broker stops), not {on_stop!r}"
+            "on_stop takes None (the default: exit the MIS positions and keep the CNC and "
+            "NRML ones with their GTT stops), 'flatten' (exit every position, then stop) or "
+            f"'keep' (leave the positions with their broker stops), not {on_stop!r}"
         )
 
 
@@ -290,7 +305,7 @@ def live_arguments(
     round_levels: bool = BACKTEST_DEFAULT,
     strict_config: bool = BACKTEST_DEFAULT,
     live_dir: str | os.PathLike[str] | None = None,
-    on_stop: str = "flatten",
+    on_stop: str | None = None,
     max_trades_per_day: Any = None,
     daily_profit_target: Any = None,
     max_order_value: Any = None,
@@ -371,6 +386,7 @@ __all__ = [
     "MODE_ARGUMENTS",
     "NOT_LIVE",
     "ON_STOP",
+    "kept_on_stop",
     "LiveArguments",
     "live_arguments",
 ]

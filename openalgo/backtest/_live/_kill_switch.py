@@ -69,6 +69,7 @@ from ._kill_reads import (
     look,
     seconds_ns,
 )
+from ._plan_args import kept_on_stop
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadPositions
@@ -256,7 +257,7 @@ class KillSwitch:
                 "taking its share as its own"
             )
         exits = f"the square-off at {ist_time(trader.square_off_ns):%H:%M} IST"
-        if self._session.parts.spec.arguments.on_stop == "flatten":
+        if not kept_on_stop(self._session.parts.spec.arguments.on_stop, trader.product):
             exits = f'a Ctrl+C (on_stop="flatten") and {exits}'
         side = "sell" if units > 0 else "buy"
         then = (

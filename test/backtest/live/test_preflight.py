@@ -481,21 +481,21 @@ def test_every_failed_check_is_reported_together_in_the_order_the_checks_ran():
         funds=live_funds("1000.00"), symbols={("SBIN", "NSE"): symbol_missing("SBIN", "NSE")}
     )
 
-    failures = failures_of(client, interval="2m", max_daily_loss=None, product="CNC", alerts=None)
+    failures = failures_of(client, interval="2m", max_daily_loss=None, product="CO", alerts=None)
 
     assert [failure.split(" ")[0:2] for failure in failures] == [
         ["OpenAlgo", "reports"],
         ["NSE:SBIN", "was"],
         ["the", "broker"],
         ["max_daily_loss", "is"],
-        ["product", "'CNC'"],
+        ["product", "'CO'"],
         ["the", "session"],
     ]
 
 
 def test_the_preflight_error_lists_every_failure_in_its_message():
     with pytest.raises(PreflightError) as raised:
-        preflight(product="NRML", capital=0)
+        preflight(product="CO", capital=0)
 
     error = raised.value
     assert isinstance(error, LiveError)

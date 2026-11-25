@@ -59,7 +59,13 @@ broker holds followed, what it takes in `_gtt_follow_intake`, each one's record
 judged against its reference by `_gtt_units` (the session's own fills on a leg, settled or
 not, are the order path's `_own_fills`); their values
 are `_gtt_types` and the book's rows `_gtt_book`; `_gtt_flight` holds a leg in flight for
-the reconciler while its GTT's fate is open. OpenAlgo's product names are `.._products`'.
+the reconciler while its GTT's fate is open. The loop's GTT parts (20-positional-live 2,
+3; unit N3b) are `_venue_gtts` (each strategy's GTT map: the kernel's GTT commands as GTT
+requests, each answer and finding as its kernel call), `_session_gtts` (what the session
+does around each), `_venue_children` and `_order_children` (a fired GTT's child followed
+as an order, in the venue map and on the order path) and `_stops_gtt` (a CNC or NRML
+leg's stop GTT as the stops supervisor sees it); the end of the day is
+`_session_day_end`. OpenAlgo's product names are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

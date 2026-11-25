@@ -32,6 +32,7 @@ from contextlib import AbstractContextManager
 
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._order_answers import Outcome
+from ._order_children import child_intent
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent
 from ._worker_news import NewsHandover
 from .journal import Journal
@@ -72,12 +73,16 @@ class StopBook:
         self._after: dict[str, tuple[Leg, str]] = {}
 
     def intent_of(self, order_id: str) -> OrderIntent:
-        """The intent of an order of the session. Raises LiveError for one it did not
-        send (the order path hands over news of the session's own orders only)."""
+        """The intent of an order of the session, or of a fired GTT's child the journal
+        binds (`_order_children.child_intent`). Raises LiveError for one it did not send
+        (the order path hands over news of the session's own orders only)."""
         intent = self._journal.intent_of(order_id)
-        if intent is None:
+        if intent is not None:
+            return intent
+        gtt = self._journal.gtt_of_child(order_id)
+        if gtt is None:
             raise LiveError(f"order {order_id} has news but no intent in the journal")
-        return intent
+        return child_intent(gtt, order_id, gtt.changed_ns)
 
     def ended(self, intent: OrderIntent, order_id: str) -> bool:
         """A STOP intent's order ended: clear its leg's stop when the journal names it,

@@ -57,6 +57,7 @@ from typing import Any
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
 from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
+from ._stops_gtt import gtt_cancelling, gtt_trigger_id, gtt_words, overnight
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import MARKET, Purpose
@@ -115,13 +116,15 @@ def stop_state(stops: Any, trader: Trader) -> tuple[str, bool]:
     """The stop of `trader`'s leg as the supervisor `stops` knows it: its broker order ID
     ("" for none, or one not bound) and whether it is confirmed working at the broker for
     no more units than the position holds (all of them or part), never while the exit
-    guard holds the leg (module docstring)."""
-    watched = _stop(stops, trader)
-    if watched is None:
+    guard holds the leg (module docstring); a CNC or NRML leg's stop GTT is named by
+    its trigger ID."""
+    watched = None if overnight(trader) else _stop(stops, trader)
+    if watched is None and not overnight(trader):
         return "", False
     covering = _covering(stops, trader)
     guarded = stops.broker_units(trader) is not None
-    return watched.order_id, not guarded and 0 < covering <= round(abs(trader.open_units()))
+    name = gtt_trigger_id(trader) if watched is None else watched.order_id
+    return name, not guarded and 0 < covering <= round(abs(trader.open_units()))
 
 
 def stop_words(stops: Any, trader: Trader) -> str:
@@ -129,7 +132,7 @@ def stop_words(stops: Any, trader: Trader) -> str:
     cancelled or ambiguous (these two with the order book to check), not sent, not
     confirmed, or none."""
     words = _stop_words(stops, trader)
-    watched = _stop(stops, trader)
+    watched = None if overnight(trader) else _stop(stops, trader)
     unsure = watched is not None and (
         watched.state is Sent.AMBIGUOUS or _being_cancelled(stops, trader, watched)
     )
@@ -284,7 +287,10 @@ def _how_far(trader: Trader, watched: Watched) -> str:
 
 
 def _stop_words(stops: Any, trader: Trader) -> str:
-    """The stop of the leg in words, with no advice (module docstring)."""
+    """The stop of the leg in words, with no advice (module docstring); a CNC or NRML
+    leg's is its stop GTT (`_stops_gtt`)."""
+    if overnight(trader):
+        return gtt_words(trader) or NO_STOP
     watched = _stop(stops, trader)
     if watched is None:
         return NO_STOP
@@ -343,7 +349,9 @@ def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
 
 def _covering(stops: Any, trader: Trader) -> int:
     """The units the leg's confirmed stop covers at the broker for a note: none while it
-    is being cancelled (`_being_cancelled`)."""
+    is being cancelled (`_being_cancelled`); a CNC or NRML leg's, its stop GTTs'."""
+    if overnight(trader):
+        return 0 if gtt_cancelling(trader) else int(stops.covered(trader))
     watched = _stop(stops, trader)
     if watched is None or _being_cancelled(stops, trader, watched):
         return 0

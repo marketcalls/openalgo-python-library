@@ -238,7 +238,7 @@ def _problem(request: GttRequest) -> str:
     if not all(isinstance(x, int | float) and math.isfinite(x) for x in numbers):
         return "its trigger and limit are finite prices"
     if request.trigger_price <= 0 or request.limit_price <= 0:
-        # Every child is a LIMIT order (`_gtt_calls.CHILD_PRICE_TYPE`): a limit of 0 would
+        # Every child is a LIMIT order (`_journal_gtt_rows.CHILD_PRICE_TYPE`): a limit of 0 would
         # sell at any price, or be refused by the broker.
         return "its trigger and limit are above 0 rupees"
     if isinstance(request.quantity, bool) or not isinstance(request.quantity, int):

@@ -24,6 +24,8 @@ from ._types import Purpose
 GTT_SIDES = ("BUY", "SELL")
 #: What a GTT is for: a leg's stop, or a strategy's own order resting as a GTT.
 GTT_PURPOSES = frozenset({Purpose.STOP, Purpose.ENTRY})
+#: The price type of a GTT's child order: a LIMIT at the GTT's limit.
+CHILD_PRICE_TYPE = "LIMIT"
 #: How a GTT's state note records the broker's refusal of its placement, before the
 #: broker's words: a refusal of an earlier day is found by it (20-positional-live 3.5,
 #: `JournalGtts.refused_days`).
@@ -182,6 +184,7 @@ def child_from(row: sqlite3.Row) -> GttChild:
 
 
 __all__ = [
+    "CHILD_PRICE_TYPE",
     "GTT_PURPOSES",
     "GTT_SIDES",
     "REFUSED_BY_BROKER",

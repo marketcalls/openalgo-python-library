@@ -11,7 +11,7 @@ import datetime as dt
 from collections.abc import Iterable
 from typing import Any
 
-from .._products import MIS
+from .._products import PRODUCTS
 from .._protocols import COVERAGE_LEVELS
 from .._series import ist_time
 from ..calendar import Calendar, IntradayTimes, SessionInfo
@@ -20,9 +20,9 @@ from ..report._format import indian_digits
 from ._preflight_plan import WARNING, Check, positive_amount
 from ._types import AlertsLike, Mode
 
-#: The one product the preflight passes until positional live trading is built
-#: (20-positional-live, unit N3): intraday MIS. CNC and NRML wait for overnight stops.
-PREFLIGHT_PRODUCT = MIS
+#: The products the preflight passes: intraday MIS, and CNC and NRML, whose positions are
+#: carried overnight with a GTT stop (20-positional-live 1).
+PREFLIGHT_PRODUCTS = PRODUCTS
 # The calendar's coverage levels of a date that need a note: no holiday list (the weekday
 # rule only), and holiday data not confirmed. The last level, "sourced", needs none.
 _TEMPLATE_COVERAGE, _UNVERIFIED_COVERAGE, _ = COVERAGE_LEVELS
@@ -45,14 +45,16 @@ def limit_checks(
 
 
 def product_check(product: Any) -> Check:
-    """Passes for the MIS product only."""
-    if product == PREFLIGHT_PRODUCT:
-        return Check("product", True, "the product is MIS (intraday)")
+    """Passes for the products a live session trades (`PREFLIGHT_PRODUCTS`), one, or
+    several named once each and joined with commas (`plan.SessionSpec.product`)."""
+    named = product.split(", ") if isinstance(product, str) else [product]
+    if all(each in PREFLIGHT_PRODUCTS for each in named):
+        return Check("product", True, f"the product is {product}")
     return Check(
         "product",
         False,
-        f"product {product!r} cannot trade live in this release, which trades intraday MIS "
-        "only (CNC and NRML come later): set the strategy's product to 'MIS'",
+        f"product {product!r} cannot trade live: a strategy trades MIS (intraday), or CNC or "
+        "NRML (held overnight with a GTT stop); set the strategy's product to one of them",
     )
 
 
@@ -192,7 +194,7 @@ def _ist_clock(ts_ns: int) -> str:
 
 
 __all__ = [
-    "PREFLIGHT_PRODUCT",
+    "PREFLIGHT_PRODUCTS",
     "alerts_check",
     "limit_checks",
     "product_check",

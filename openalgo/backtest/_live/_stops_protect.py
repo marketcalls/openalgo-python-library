@@ -39,6 +39,7 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ._margin_reject import HELD_FOR_READ
 from ._session_trader import Trader
+from ._stops_gtt import gtt_cancelling, gtt_cover, gtt_guarded, gtt_waiting, overnight
 from ._stops_kernel import PROTECT_PLACED, order_of, protect
 from ._stops_orders import IN_FLIGHT, LegOrders, Sent
 from ._types import LOGGER_NAME, AlertKind
@@ -145,12 +146,17 @@ class Protection:
         return not any(self.acting(trader) for trader in self._session.traders)
 
     def state(self, trader: Trader) -> str:
-        """What the leg is now (module docstring)."""
+        """What the leg is now (module docstring); a CNC or NRML leg's stop is its stop
+        GTT (`_stops_gtt`)."""
         units = abs(trader.open_units())
         leg = self._stops.leg(trader)
         if units == 0:
             return FLAT
-        if not leg.guarded:
+        if overnight(trader):
+            gtt = _gtt_state(trader, round(units))
+            if gtt is not None:
+                return gtt
+        elif not leg.guarded:
             return NO_STOP_RULE
         stop = leg.orders.get(leg.stop) if leg.stop is not None else None
         if stop is not None and leg.stop in trader.working():
@@ -159,6 +165,9 @@ class Protection:
                 return CANCEL_WAITS
             return PROTECTED if self._stops.covered(trader) == units else STOP_WAITS
         exits = [kernel_order for kernel_order in trader.exit_orders() if kernel_order != leg.stop]
+        # A fired stop GTT's child works at the broker, never handed over by the session.
+        children = [kernel_order for kernel_order in exits if _is_child(trader, kernel_order)]
+        exits = [kernel_order for kernel_order in exits if kernel_order not in children]
         unsent = [kernel_order for kernel_order in exits if kernel_order not in leg.orders]
         if any(_is_stop(trader, kernel_order) for kernel_order in unsent):
             # A stop placed in this loop step (by `protect`, or the kernel's re-placement):
@@ -169,7 +178,7 @@ class Protection:
         watched = [leg.orders[kernel_order] for kernel_order in exits]
         if any(w.state in IN_FLIGHT for w in watched):
             return EXIT_IN_FLIGHT
-        return EXIT_WORKING if watched else NO_COVER
+        return EXIT_WORKING if watched or children else NO_COVER
 
     def _act(self, trader: Trader) -> None:
         state = self.state(trader)
@@ -218,6 +227,23 @@ class Protection:
                 f"{trader.name}: exit order {watched.name()} of {trader.symbol} "
                 f"{trader.exchange} in flight, no stop at the broker: check the order book",
             )
+
+
+def _gtt_state(trader: Trader, units: int) -> str | None:
+    """What a CNC or NRML leg is by its stop GTTs (module docstring), or None when none
+    rests nor waits: its exits decide then (or, with none, `protect`)."""
+    if not gtt_guarded(trader):
+        return NO_STOP_RULE
+    if gtt_cancelling(trader):
+        return CANCEL_WAITS
+    if gtt_cover(trader) == units:
+        return PROTECTED
+    return STOP_WAITS if gtt_waiting(trader) or gtt_cover(trader) else None
+
+
+def _is_child(trader: Trader, kernel_order: int) -> bool:
+    """Whether `kernel_order` is the child of one of the leg's fired GTTs."""
+    return trader.gtts is not None and trader.gtts.gtt_of_child(kernel_order) is not None
 
 
 def _is_stop(trader: Trader, kernel_order: int) -> bool:

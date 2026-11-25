@@ -60,7 +60,7 @@ from typing import Any
 import pandas as pd
 
 from .._calendar_convert import interval_nanos
-from .._products import CNC
+from .._products import CNC, OVERNIGHT_PRODUCTS
 from ..calendar import Calendar, default_calendar
 from ..strategy import Strategy
 from ._bars_candle import candle_bar
@@ -69,7 +69,7 @@ from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_engine import bind_strategy, check_grid, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
-from ._plan_strategies import StrategySpec, ist_day, strategy_spec
+from ._plan_strategies import StrategySpec, ist_day, refuse_shared_positional, strategy_spec
 from ._preflight_plan import InstrumentFacts
 from ._types import LiveBar, Now
 from .series import DEFAULT_BASE, LiveSeries
@@ -109,6 +109,16 @@ class SessionSpec:
         return any(spec.product == CNC for spec in self.strategies)
 
     @property
+    def gtt_legs(self) -> tuple[tuple[str, str, str], ...]:
+        """The (symbol, exchange, product) of the CNC and NRML strategies' legs, in call
+        order: the legs whose stop is a GTT (20-positional-live 2)."""
+        return tuple(
+            (spec.symbol, spec.exchange, spec.product)
+            for spec in self.strategies
+            if spec.product in OVERNIGHT_PRODUCTS
+        )
+
+    @property
     def capital(self) -> float:
         """The strategies' capital together, rupees."""
         return sum(spec.capital for spec in self.strategies)
@@ -141,6 +151,7 @@ def specify(
         strategy_spec(cls, name, checked.backtest_arguments(name, day, present_ns), calendar)
         for cls, name in zip(checked.strategies, checked.names, strict=True)
     )
+    refuse_shared_positional(specs)
     return SessionSpec(checked, day, specs)
 
 

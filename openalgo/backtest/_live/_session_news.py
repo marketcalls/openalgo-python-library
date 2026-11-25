@@ -22,8 +22,8 @@ other clients' fills) go to `_session_feed`.
   locked) stops its reads. Each fill the kernel takes is told to it too, and the news of
   an orphan it cancels is expected.
 - `GttNews`: to the reconciler's record of the legs a GTT holds in flight
-  (`_gtt_flight`), and an event; what each answer and outcome asks of the kernel is
-  applied by unit N3b of 2.5.0, with the kernel's GTT answer calls.
+  (`_gtt_flight`), an event, then to its strategy's kernel and the session's duties
+  around it (`_session_gtts`).
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
@@ -48,6 +48,7 @@ from ._order_state import ENTRY_PURPOSES
 from ._order_throttle import throttled_news
 from ._session_feed import MARKET_DATA_HANDLERS
 from ._session_fills import RECONCILE_LOCK, FillNews
+from ._session_gtts import GttNewsHandler
 from ._session_resolved import order_words
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind
@@ -92,6 +93,7 @@ class News(FillNews):
         self._session = session
         self._ambiguous_seen: set[str] = set()
         self._throttle_alerted = False
+        self._gtts = GttNewsHandler(session)
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
@@ -249,6 +251,7 @@ class News(FillNews):
         else:
             fields = {"strategy": news.request.strategy, "seq": news.seq, "answer": news.kind.value}
         self._session.event("gtt", **fields)
+        self._gtts.take(news)
 
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)

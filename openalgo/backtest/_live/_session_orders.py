@@ -2,7 +2,8 @@
 design 2.5 E, 2.7, 3.3; unit 8), split from `_session_trader` so each module keeps one
 job.
 
-- **Commands** (`commands`): the kernel's commands as the order worker's requests. A
+- **Commands** (`commands`): the kernel's commands as the order worker's requests, its
+  GTT commands through the strategy's GTT map (`_venue_gtts`), in the kernel's order. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
   told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
@@ -30,8 +31,10 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._gtt_types import GttRequest
 from ._plan_catch_up import INSTRUMENT
 from ._session_unsent import to_send
+from ._venue_gtts import GTT_COMMANDS, GttMap
 from ._venue_requests import OrderRequest
 from ._worker_queue import WithdrawPlace
 from .venue_map import VenueMap
@@ -48,28 +51,32 @@ class TraderOrders:
     engine: Any
     part: Any
     venue: VenueMap
+    #: The strategy's GTT map (None for a trader built with none: it takes no GTT command).
+    gtts: GttMap | None
     finished: bool
     reasons: dict[int, str]
     units_at_place: dict[int, int]
     _event: Callable[..., None]
     _warn: Callable[[str], None]
 
-    def commands(self) -> list[OrderRequest | WithdrawPlace]:
+    def commands(self) -> list[OrderRequest | GttRequest | WithdrawPlace]:
         """The kernel's commands since the last call, as the order worker's requests (a
         placement the kernel cancelled before this call withdrawn: module docstring; one
         it cancelled after, or that waits once its entries lock, withdrawn by the worker:
         `WithdrawPlace`); the reason of each risk exit placed is kept (`reasons`), and the
-        position's units at each placement (`units_at_place`)."""
+        position's units at each placement (`units_at_place`). Raises LiveError for a
+        GTT command of a trader built with no GTT map."""
         if self.finished:
             return []
-        requests: list[OrderRequest | WithdrawPlace] = []
+        requests: list[OrderRequest | GttRequest | WithdrawPlace] = []
         commands = call(self.engine.take_commands)
         reversals = self.part.context.resting_reversals
         while commands:
+            orders = [c for c in commands if c.get("command") not in GTT_COMMANDS]
             kept = to_send(
                 self.engine,
                 self.name,
-                commands,
+                orders,
                 event=self._event,
                 reversals=reversals,
                 warn=self._warn,
@@ -81,11 +88,27 @@ class TraderOrders:
                 self.units_at_place[kernel_order] = round(abs(self.open_units()))
                 if command.get("reason"):
                     self.reasons[kernel_order] = str(command["reason"])
-            requests += self.venue.requests(kept)
+            requests += self._in_order(commands, kept)
             # A withdrawal or a refusal ends an order in the kernel, which may free an exit
             # that waited for it: its commands go out in this same call.
-            commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
+            commands = call(self.engine.take_commands) if len(kept) < len(orders) else []
         return requests + self.venue.withdraw_locked()
+
+    def _in_order(
+        self, commands: list[dict[str, Any]], kept: list[dict[str, Any]]
+    ) -> list[OrderRequest | GttRequest | WithdrawPlace]:
+        """The requests of `commands`, in the kernel's order: its GTT commands' through the
+        GTT map, and of its order commands those `to_send` `kept`."""
+        sent = {id(command) for command in kept}
+        made: list[OrderRequest | GttRequest | WithdrawPlace] = []
+        for command in commands:
+            if command.get("command") in GTT_COMMANDS:
+                if self.gtts is None:
+                    raise LiveError(f"{self.name} has no GTT map for the command {command!r}")
+                made += self.gtts.requests(command)
+            elif id(command) in sent:
+                made += self.venue.requests([command])
+        return made
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument and product, signed units (0

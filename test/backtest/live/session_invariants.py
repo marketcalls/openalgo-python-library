@@ -66,6 +66,7 @@ from session_invariants_end import (
     at_the_end,
     books_agree,
     closing_now,
+    gtt_stops,
     no_orphan,
     working_at_the_end,
 )
@@ -154,6 +155,7 @@ def _check(session: SessionTrace, fake: FakeOpenAlgo) -> None:
         rooms,
         kept_named=kept_named,
         oversold_used=oversold_used,
+        gtt_stops=gtt_stops(fake, last.mode),
     )
     if BOOKS_AGREE not in waived and last.outcome is not None:
         books_agree(last, closing, held)

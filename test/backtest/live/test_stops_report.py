@@ -290,6 +290,7 @@ class _Trader:
     """A strategy holding 10 SBIN whose stop o2 the kernel placed."""
 
     name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
+    product = "MIS"
 
     def __init__(self):
         self.engine, self.venue = _Engine(), _Venue()
@@ -375,6 +376,7 @@ class _Leg:
     orders are `working`."""
 
     name, symbol, exchange, finished = "StopHold", "SBIN", "NSE", False
+    product = "MIS"
 
     def __init__(self, book: _Book, working: list):
         self.engine, self.venue, self._working = book, _Venue(), working

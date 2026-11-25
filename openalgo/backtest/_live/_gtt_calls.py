@@ -29,6 +29,7 @@ from typing import Any
 
 from ._answers import server_answer
 from ._gtt_types import Direction, GttRequest
+from ._journal_gtt_rows import CHILD_PRICE_TYPE
 from ._order_answers import Outcome, outcome_of, server_has_finished
 from ._order_rate import RateBudget
 from ._types import GuardLike, Now, Sleep
@@ -36,8 +37,6 @@ from .orders import OrderPath
 
 #: OpenAlgo's trigger type of a GTT with one trigger and one child order (P6).
 SINGLE = "SINGLE"
-#: The price type of a GTT's child order: a LIMIT at the GTT's limit.
-CHILD_PRICE_TYPE = "LIMIT"
 
 
 class CallKind(enum.Enum):

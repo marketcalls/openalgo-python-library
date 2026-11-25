@@ -164,6 +164,7 @@ def _open(
         threads=settings.threads,
         orders_per_second=spec.arguments.max_orders_per_second,
         read_holdings=spec.reads_holdings,
+        gtt_legs=spec.gtt_legs,
         stack=stack,
     )
     journal = started.journal

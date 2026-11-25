@@ -5,25 +5,26 @@ time that end it (`Control`). The common close is `_session_close`.
 
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
   ("operator_stop") and cancels its working entries and adds (one decided in the same
-  loop step is withdrawn before it is sent: `Trader.commands`). With `on_stop="flatten"`
-  every open position is then exited (`request_exit`, "operator_stop", after a fresh book
-  read; the kernel answers "already_exiting" while an exit works, and a position whose
-  exit failed every retry is asked once more). At each later step a position whose
-  exit is not on the retry schedule (`_session_exits`) is asked again, so an entry that
-  fills after the stop began is exited too. The session waits until every strategy is
-  flat with nothing working, at most `SAFE_STOP_FLATTEN_S`; then each leg not flat is
-  protected by state (`_stops_protect`: its broker-held stop placed again where it can
-  be, and its exit asked for no more), and the session keeps running, with an ERROR
-  alert and a console line naming each leg without a confirmed stop and what works
-  toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every leg is flat or
-  protected, a second Ctrl+C, or the exchange's close plus `SESSION_END_GRACE_S`. For a
-  leg whose exit failed every attempt the reminder names its stop and the orders working
-  toward it, and says to end the session before any close by hand
-  (`_stops_report.open_while_running`), since the engine may still send its exit or its
-  stop. With `"keep"` every leg is protected by state at once, and the session waits at
-  most `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to
-  finish a step of protect by state's own, `Protection.may_end`), then leaves the
-  positions open with their broker-held stops.
+  loop step is withdrawn before it is sent: `Trader.commands`). Each leg is then flattened
+  or kept by `on_stop` (`Control.keeps`: by default an MIS leg is flattened and a CNC or
+  NRML leg kept with its GTT stop). A flattened position is exited (`request_exit`,
+  "operator_stop", after a fresh book read; the kernel answers "already_exiting" while an
+  exit works, and a position whose exit failed every retry is asked once more). At each
+  later step a position whose exit is not on the retry schedule (`_session_exits`) is
+  asked again, so an entry that fills after the stop began is exited too. The session
+  waits until every strategy is flat with nothing working, at most `SAFE_STOP_FLATTEN_S`;
+  then each leg not flat is protected by state (`_stops_protect`: its broker-held stop
+  placed again where it can be, and its exit asked for no more), and the session keeps
+  running, with an ERROR alert and a console line naming each leg without a confirmed
+  stop and what works toward its exit every `UNPROTECTED_REMINDER_EVERY_S`, until every
+  leg is flat or protected, a second Ctrl+C, or the exchange's close plus
+  `SESSION_END_GRACE_S`. For a leg whose exit failed every attempt the reminder names its
+  stop and the orders working toward it, and says to end the session before any close by
+  hand (`_stops_report.open_while_running`), since the engine may still send its exit or
+  its stop. A kept leg is protected by state at once, and the session waits at most
+  `SAFE_STOP_STATE_WAIT_S` for the cancels and the stops' words (longer only to finish a
+  step of protect by state's own, `Protection.may_end`), then leaves the positions open
+  with their broker-held stops.
 - **The second Ctrl+C** (3.3 step 4) asks for nothing more (no exit, no retry: the
   schedule is halted) and protects every leg by state. It waits at most
   `SAFE_STOP_STATE_WAIT_S` (bounded as with "keep") for each leg to be protected, and for
@@ -40,13 +41,8 @@ time that end it (`Control`). The common close is `_session_close`.
   whose cancel waits for that read (the exit guard): the leg is left open with its stop
   and no exit, as 16-session-design 3.3 step 4 "As built" accepts. After a guard lock
   nothing can be sent: a first Ctrl+C stops at once.
-- **The end of the day.** Once every strategy is past its MIS square-off, flat and with
-  nothing working, the session ends ("session_end"). From the square-off plus
-  `SQUARE_OFF_VERIFY_AFTER_S` a strategy not flat gets the ERROR alert "still not flat
-  after square-off", each minute while it lasts. A leg still open at the exchange's
-  close plus `SESSION_END_GRACE_S` ends the session too, with an ERROR alert for every
-  such leg, its stop or not. After a guard lock the session ends at that same time
-  ("mode_breach").
+- **The end of the day** is `_session_day_end`'s, on this module's instants (the
+  square-off plus `SQUARE_OFF_VERIFY_AFTER_S`, the close plus `SESSION_END_GRACE_S`).
 - **A strategy's exception** (3.5): an ERROR alert, then the safe stop by `on_stop`. The
   operator's first Ctrl+C, before or after it, asks for the stop already under way: only
   a second one is the second Ctrl+C.
@@ -66,6 +62,8 @@ import logging
 from collections.abc import Sequence
 
 from .._layout import NANOS_PER_SECOND
+from ._plan_args import kept_on_stop
+from ._session_day_end import MODE_BREACH, SESSION_END, DayEnd
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
 from ._stops_protect import PROTECTED
@@ -89,8 +87,9 @@ NOT_FLAT_REPEAT_S = 60.0
 OPERATOR_STOP = "operator_stop"
 #: The stop requests that make the second Ctrl+C (3.3 step 4).
 SECOND_CTRL_C = 2
-#: How a session ended (1.4 `stopped_by`).
-SESSION_END, CTRL_C, MODE_BREACH, ERROR = "session_end", "ctrl_c", "mode_breach", "error"
+#: How a session ended (1.4 `stopped_by`; `SESSION_END` and `MODE_BREACH` are the end of
+#: the day's, `_session_day_end`).
+CTRL_C, ERROR = "ctrl_c", "error"
 #: What `request_exit` answers when it made or readied an exit (its EXIT_REQUESTS).
 _EXIT_MADE = frozenset({"sent", "waits_for_cancels"})
 #: What it answers while an exit of the position waits to be sent: it goes once the
@@ -102,9 +101,10 @@ _NS = NANOS_PER_SECOND
 
 class Control:
     """The duties by time that stop `session` (module docstring), by its `on_stop`
-    ("flatten" or "keep"). `verdict` is set when the session should end."""
+    ("flatten", "keep", or None: flatten the MIS legs and keep the others, `keeps`).
+    `verdict` is set when the session should end."""
 
-    def __init__(self, session: Session, on_stop: str) -> None:
+    def __init__(self, session: Session, on_stop: str | None) -> None:
         self._session = session
         self._on_stop = on_stop
         self.verdict: str | None = None
@@ -119,15 +119,26 @@ class Control:
         self._left_open_due: bool | None = None
         # The kernel's last answer to the safe stop's exit request, by strategy.
         self._asked: dict[str, str | None] = {}
-        self._not_flat_ns = {
-            t.name: t.square_off_ns + _s(SQUARE_OFF_VERIFY_AFTER_S) for t in session.traders
-        }
-        self._end_ns = max(t.close_ns for t in session.traders) + _s(SESSION_END_GRACE_S)
+        self._day = DayEnd(
+            session,
+            not_flat_ns={
+                t.name: t.square_off_ns + _s(SQUARE_OFF_VERIFY_AFTER_S) for t in session.traders
+            },
+            end_ns=max(t.close_ns for t in session.traders) + _s(SESSION_END_GRACE_S),
+            repeat_ns=_s(NOT_FLAT_REPEAT_S),
+        )
 
     @property
     def stopping(self) -> bool:
         """True once a safe stop has begun."""
         return self._stopping_ns is not None
+
+    def keeps(self, trader: Trader) -> bool:
+        """Whether the safe stop keeps `trader`'s position open with its broker stop rather
+        than exiting it: with `on_stop="keep"`, and by default (None) for a CNC or NRML
+        strategy, whose stop GTT rests at the broker overnight (20-positional-live 10.2,
+        decision 11.8); an MIS strategy is flattened by default."""
+        return kept_on_stop(self._on_stop, trader.product)
 
     def strategy_failed(self, failed: StrategyFailed) -> None:
         """A strategy's code raised (3.5): an ERROR alert, then the safe stop (module
@@ -205,11 +216,12 @@ class Control:
         if session.locked:
             self.verdict = MODE_BREACH
             return
-        if self._on_stop == "flatten":
+        kept = [trader for trader in session.traders if self.keeps(trader)]
+        if len(kept) < len(session.traders):
             session.reconcile.read_before_exits()
             self._ask_exits(retried_too=True)
-        else:
-            self._protect(session.traders, now_ns)
+        if kept:
+            self._protect(kept, now_ns)
 
     def _ask_exits(self, *, retried_too: bool) -> None:
         """Ask the kernel to exit each open position. `retried_too` False skips one whose
@@ -218,6 +230,8 @@ class Control:
         session = self._session
         for trader in session.traders:
             if trader.open_units() == 0 or session.stops.protection.holds(trader):
+                continue
+            if self.keeps(trader):
                 continue
             if not retried_too and session.exits.owns(trader.name):
                 continue
@@ -228,18 +242,20 @@ class Control:
 
     def _stop_due(self, now_ns: int) -> None:
         traders = self._session.traders
-        if self._on_stop == "keep":
-            if self._wait_over(now_ns, self._stopping_ns):
-                self._left_open_due = False
-                self.verdict = self._stopped_by()
-            return
-        if all(trader.flat or self._protected(trader) for trader in traders):
+        kept = [trader for trader in traders if self.keeps(trader)]
+        flattened = [trader for trader in traders if not self.keeps(trader)]
+        # A kept leg is done once protected by state (a bounded wait), a flattened one
+        # once flat or protected (`keeps`).
+        kept_done = not kept or self._wait_over(now_ns, self._stopping_ns, kept)
+        if kept_done and all(trader.flat or self._protected(trader) for trader in flattened):
             self._left_open_due = False
             self.verdict = self._stopped_by()
             return
+        if not flattened:
+            return
         if not self._session.locked:
             self._ask_exits(retried_too=False)
-        if now_ns >= self._end_ns:
+        if now_ns >= self._day.end_ns:
             self._left_open_due = True
             self.verdict = self._stopped_by()
         elif now_ns >= self._remind_ns:
@@ -257,11 +273,15 @@ class Control:
         self._left_open_due = False
         self.verdict = self._stopped_by()
 
-    def _wait_over(self, now_ns: int, since_ns: int) -> bool:
-        """Whether the bounded wait begun at `since_ns` is over: nothing waits any more,
-        or protect by state lets it end (`Protection.may_end`)."""
+    def _wait_over(
+        self, now_ns: int, since_ns: int, traders: Sequence[Trader] | None = None
+    ) -> bool:
+        """Whether the bounded wait begun at `since_ns` is over for `traders` (every
+        strategy by default): nothing waits any more, or protect by state lets it end
+        (`Protection.may_end`)."""
         session = self._session
-        if not any(self._waiting(trader) for trader in session.traders):
+        waited = session.traders if traders is None else traders
+        if not any(self._waiting(trader) for trader in waited):
             return True
         until_ns = since_ns + _s(SAFE_STOP_STATE_WAIT_S)
         return session.stops.protection.may_end(now_ns, until_ns)
@@ -279,7 +299,7 @@ class Control:
         protection = self._session.stops.protection
         if not protection.settled(trader):
             return True
-        if self._on_stop == "keep":
+        if self.keeps(trader):
             return bool(trader.entry_orders())
         return not self._protected(trader) and bool(trader.working())
 
@@ -349,32 +369,11 @@ class Control:
     # ----- the end of the day ---------------------------------------------------------
 
     def _end_of_day(self, now_ns: int) -> None:
-        session = self._session
-        if session.locked:
-            if now_ns >= self._end_ns:
-                self.verdict = MODE_BREACH
-            return
-        traders = session.traders
-        if all(now_ns >= t.square_off_ns and t.flat for t in traders):
-            self.verdict = SESSION_END
-            return
-        if now_ns >= self._end_ns:
+        verdict, every_leg = self._day.due(now_ns)
+        if every_leg:
             self._left_open_due = True
-            self.verdict = SESSION_END
-            return
-        for trader in traders:
-            if now_ns >= self._not_flat_ns[trader.name] and not trader.flat:
-                self._not_flat_ns[trader.name] = now_ns + _s(NOT_FLAT_REPEAT_S)
-                self._not_flat(trader)
-
-    def _not_flat(self, trader: Trader) -> None:
-        exits = [trader.order_name(kernel_order) for kernel_order in trader.working()]
-        self._session.alert(
-            AlertKind.ERROR,
-            f"still not flat after square-off: {trader.name} {trader.symbol} "
-            f"{trader.exchange} {trader.open_units():g} units, working orders "
-            f"{', '.join(exits) or 'none'}",
-        )
+        if verdict is not None:
+            self.verdict = verdict
 
 
 def _s(seconds: float) -> int:
