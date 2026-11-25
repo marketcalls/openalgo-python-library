@@ -71,6 +71,9 @@ class GttNewsHandler:
             return
         if trader.gtts is None or trader.finished:
             logger.warning("%s: GTT news after its kernel session ended: %r", strategy, news)
+            if trader.gtts is not None and isinstance(news, GttOutcome):
+                # Found once the kernel's session closed: the leg's stop is not confirmed.
+                self._session.news.carry.after_close(trader, news)
             return
         if isinstance(news, GttAnswer):
             handled = trader.gtts.answered(news)

@@ -118,8 +118,10 @@ class KernelGtt:
     GTT and the broker's trigger ID once a place was answered, the commands waiting for
     them, the terms last asked for, since when (UTC ns) a stop's place waits for its
     answer (None once answered), the kernel order of its child once it fired, whether
-    a cancel of it was handed to the order worker and not answered (`cancel_sent`), and
-    whether a restart could not tell where it stands (`unsettled`, module docstring)."""
+    a cancel of it was handed to the order worker and not answered (`cancel_sent`),
+    whether a restart could not tell where it stands (`unsettled`, module docstring), and
+    why the close's read of the GTT book did not confirm it, once the kernel's session had
+    closed and could hear of it no more (`unconfirmed`, `_session_carry`; "" for none)."""
 
     purpose: Purpose
     asked: GttTerms
@@ -130,6 +132,7 @@ class KernelGtt:
     child: int | None = None
     cancel_sent: bool = False
     unsettled: bool = False
+    unconfirmed: str = ""
 
 
 class GttMap:

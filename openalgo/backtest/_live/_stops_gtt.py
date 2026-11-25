@@ -8,8 +8,10 @@ its stop is named in an alert or a line are read from the kernel's GTTs of the p
   "Active", and "ModifyPending", whose old terms rest until the modify's answer). One
   whose cancel was handed to the order worker covers nothing (the broker may have
   cancelled it already; `_venue_gtts.KernelGtt.cancel_sent`), nor one not confirmed yet
-  ("Requested"); one whose cancel the kernel decided and the session never handed over
-  (after a guard lock) still rests.
+  ("Requested"), nor one the close's read of the GTT book did not confirm after the
+  kernel's session closed (`KernelGtt.unconfirmed`, `_session_carry`: the kernel still
+  holds it as resting); one whose cancel the kernel decided and the session never handed
+  over (after a guard lock) still rests.
 - **Guarded**: the leg was given a stop GTT, resting, ended or fired.
 - **Waiting**: a stop GTT's place or modify waits for its answer; **cancelling**: a stop
   GTT's cancel does.
@@ -60,9 +62,17 @@ def resting_gtts(trader: Any) -> list[dict[str, Any]]:
 
 
 def _rests(trader: Any, gtt: dict[str, Any]) -> bool:
+    if _unconfirmed(trader, gtt):
+        return False
     if gtt["state"] in RESTING:
         return True
     return gtt["state"] == CANCEL_PENDING and not _cancel_sent(trader, gtt)
+
+
+def _unconfirmed(trader: Any, gtt: dict[str, Any]) -> str:
+    """Why the close's read did not confirm `gtt`, or "" (module docstring)."""
+    known = None if trader.gtts is None else trader.gtts.gtt(int(gtt["gtt_id"]))
+    return "" if known is None else known.unconfirmed
 
 
 def _cancel_sent(trader: Any, gtt: dict[str, Any]) -> bool:
@@ -96,15 +106,23 @@ def gtt_words(trader: Any) -> str:
         )
     if gtt_cancelling(trader):
         return f"{_name(trader, gtts[-1])} being cancelled, with no final word yet"
+    unconfirmed = [gtt for gtt in gtts if _unconfirmed(trader, gtt)]
+    if unconfirmed:
+        gtt = unconfirmed[-1]
+        return (
+            f"{_name(trader, gtt)} not confirmed at the broker after the close: "
+            f"{_unconfirmed(trader, gtt)}"
+        )
     if any(gtt["state"] == REQUESTED for gtt in gtts):
         return f"{_name(trader, gtts[-1])} not confirmed at the broker yet"
     return ""
 
 
 def gtt_trigger_id(trader: Any) -> str:
-    """The broker's trigger ID of the leg's latest stop GTT that rests confirmed, or ""."""
-    resting = resting_gtts(trader)
-    return _trigger_id(trader, resting[-1]) if resting else ""
+    """The broker's trigger ID of the leg's latest stop GTT that rests confirmed, else of
+    its latest one the close's read did not confirm, or ""."""
+    named = resting_gtts(trader) or [g for g in stop_gtts(trader) if _unconfirmed(trader, g)]
+    return _trigger_id(trader, named[-1]) if named else ""
 
 
 def _trigger_id(trader: Any, gtt: dict[str, Any]) -> str:

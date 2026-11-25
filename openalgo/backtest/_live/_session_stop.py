@@ -34,7 +34,8 @@ time that end it (`Control`). The common close is `_session_close`.
   still in flight, and stops. The same lines end a stop with "keep" or a safe stop whose
   legs are all flat or protected; each is an ERROR alert too unless the leg's confirmed
   stop covers it with nothing else working (`_stops_report.protected`), which needs
-  nothing of the operator. Two requests seen at once act as the first followed by the
+  nothing of the operator (`_session_left_open`, which also names each carried CNC or
+  NRML leg at the day's end). Two requests seen at once act as the first followed by the
   second (unit 10: how fast the keys were pressed must not change the outcome): the
   flatten's exits are asked for, then the second's bounded wait. A second seen before
   the flatten's book read is compared (at once or a moment later) keeps a leg's stop,
@@ -64,10 +65,12 @@ from collections.abc import Sequence
 from .._layout import NANOS_PER_SECOND
 from ._plan_args import kept_on_stop
 from ._session_day_end import MODE_BREACH, SESSION_END, DayEnd
+from ._session_left_open import left_open_lines
 from ._session_loop import Session
 from ._session_trader import StrategyFailed, Trader
+from ._stops_gtt import overnight
 from ._stops_protect import PROTECTED
-from ._stops_report import left_open, leg_words, open_while_running, protected
+from ._stops_report import leg_words, open_while_running
 from ._types import LOGGER_NAME, AlertKind
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -179,7 +182,7 @@ class Control:
             self._remind()
         every_leg, self._left_open_due = self._left_open_due, None
         if every_leg is not None:
-            self._left_open_lines(every_leg=every_leg)
+            left_open_lines(self._session, every_leg=every_leg)
 
     # ----- the safe stop --------------------------------------------------------------
 
@@ -343,24 +346,6 @@ class Control:
             return f"its exit waits for the cancel of order {', '.join(cancels)}"
         return f"no exit works (the engine answered {asked})"
 
-    def _left_open_lines(self, *, every_leg: bool) -> None:
-        """One console line per leg left open (3.3 step 4). An ERROR alert goes for each
-        leg the operator must act on: one without a confirmed stop covering it, or with
-        another order working; a leg its stop protects is information only. At the
-        exchange's close (`every_leg`) a position still open is the operator's whatever
-        its stop (3.4)."""
-        session = self._session
-        for trader in session.traders:
-            units = trader.open_units()
-            if units == 0:
-                continue
-            line = f"{leg_words(trader, units)}: {left_open(session.stops, trader)}"
-            session.emit(line)
-            if every_leg or not protected(session.stops, trader):
-                session.alert(AlertKind.ERROR, line, echo=False)
-            else:
-                logger.info(line)
-
     def _stopped_by(self) -> str:
         if self.failure is not None:
             return ERROR
@@ -372,6 +357,11 @@ class Control:
         verdict, every_leg = self._day.due(now_ns)
         if every_leg:
             self._left_open_due = True
+        elif verdict == SESSION_END and any(
+            overnight(t) and t.open_units() for t in self._session.traders
+        ):
+            # The day's end names each carried leg in a line (`left_open_lines`).
+            self._left_open_due = False
         if verdict is not None:
             self.verdict = verdict
 

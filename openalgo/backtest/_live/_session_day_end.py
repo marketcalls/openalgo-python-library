@@ -14,7 +14,8 @@ session ends at that same time ("mode_breach").
 squared off: no "still not flat after square-off" alert names them, and they need not be
 flat. The session ends at the latest close among their exchanges (MCX by the calendar's
 dated rows), once every MIS leg is done and the close's GTT book read has been judged
-(`_session_carry.CarriedLegs.confirmed`); it then names each carried leg in a line. A
+(`_session_carry.CarriedLegs.confirmed`, asked for at that close whether the MIS legs are
+done or not); the safe stop then names each carried leg in a line (`_session_stop`). A
 session with no CNC or NRML strategy ends as before.
 
 Times are UTC nanoseconds, quantities units. Used by the loop only.
@@ -63,9 +64,10 @@ class DayEnd:
             return (MODE_BREACH if now_ns >= self._end_ns else None), False
         intraday = [t for t in session.traders if not overnight(t)]
         done = all(now_ns >= t.square_off_ns and t.flat for t in intraday)
-        if done and self._carry_ns is None:
-            return SESSION_END, False
-        if done and self._carried_done(now_ns):
+        # Asked for from the latest close of the carried legs, whether the MIS legs are
+        # done or not, so it is judged by the time the session ends whatever is open.
+        carried_done = self._carried_done(now_ns)
+        if done and (self._carry_ns is None or carried_done):
             return SESSION_END, False
         if now_ns >= self._end_ns:
             return SESSION_END, True

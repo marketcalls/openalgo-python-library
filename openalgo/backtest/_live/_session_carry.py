@@ -1,14 +1,19 @@
 """The CNC and NRML legs a live session carries past its close (20-positional-live 2,
 "Day 1, the close", 4.1 and 7.3; the lead's rulings N3b-4 and N3b-5).
 
-- **The close's GTT book read** (`confirmed`): once the session's exchanges have closed and
-  every MIS leg is done, the order worker reads the GTT book once more with every GTT
-  leg's units (`ReadGtts` with `at_close`, answered as `GttBookSeen`). Each carried leg's
-  stop GTT must rest in that read with the trigger and the units the session holds it at;
-  one that does not is an ERROR alert naming it. The kernel's session has finished at its
-  close and places nothing more, so `protect` is asked and answers nothing: the alert says
-  to place the stop by hand or start the session again before the open (a GTT that ended
-  during the day was placed again by the kernel as the follower found it, every 10 s).
+- **The close's GTT book read** (`confirmed`): once the latest exchange of a carried leg
+  has closed (whether the MIS legs are done or not), the order worker reads the GTT book
+  once more with every GTT leg's units (`ReadGtts` with `at_close`, answered as
+  `GttBookSeen`). Each carried leg's stop GTT must rest in that read with the trigger and
+  the units the session holds it at; one that does not is an ERROR alert naming it. The
+  kernel's session has finished at its close and places nothing more, so `protect` is
+  asked and answers nothing: the alert says to place the stop by hand or start the session
+  again before the open (a GTT that ended during the day was placed again by the kernel as
+  the follower found it, every 10 s). A finding of the GTT follower that comes once the
+  kernel's session has closed (a GTT cancelled by hand in the last seconds, found gone)
+  is the same (`after_close`). The kernel still holds such a GTT as resting, so the GTT
+  map notes why it is not confirmed (`KernelGtt.unconfirmed`): the stops supervisor, the
+  lines, the result and the day-close record never report it as protecting the leg.
 - **The reference for the next day** (`references`): each GTT leg's units at the broker,
   by product (`_broker_units`), read just before the close's GTT book read, with the
   read's time and whether the session's own fills on the leg had settled then; without
@@ -20,7 +25,9 @@
   GTT order, once its kernel session has stopped, the kernel's `carried_state()` with the
   reference under `REFERENCES_KEY` (the kernel's restore takes the record whole), the
   strategy's `self.state` and its version id, on the session's trading day, in the
-  ledger of the session's mode (journal L). A strategy that ends flat writes none, but
+  ledger of the session's mode (journal L), with each stop GTT the close did not confirm
+  under `UNCONFIRMED_KEY` (its kernel id, trigger ID and why). A strategy that ends flat
+  writes none, but
   one with a record of the same day (an earlier start's Ctrl+C that kept its leg) has it
   replaced by its flat state, so the latest record never names a closed position.
 
@@ -38,10 +45,10 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError
 from ._broker_units import broker_units
-from ._gtt_types import GttBookSeen, ReadGtts
+from ._gtt_types import GttBookSeen, GttEvent, GttOutcome, ReadGtts
 from ._own_fills import POSITION_BOOK_LAG_S
 from ._session_trader import Trader
-from ._stops_gtt import RESTING, overnight, stop_gtts
+from ._stops_gtt import RESTING, overnight, resting_gtts, stop_gtts
 from ._stops_kernel import protect
 from ._types import LOGGER_NAME, AlertKind
 from .inbox import Books
@@ -51,6 +58,9 @@ logger = logging.getLogger(LOGGER_NAME)
 #: The key of the day-close record that holds each carried leg's reference (module
 #: docstring), beside the kernel's carried state.
 REFERENCES_KEY = "gtt_references"
+#: The key of the day-close record that names each stop GTT the close's read did not
+#: confirm (module docstring), beside the kernel's carried state.
+UNCONFIRMED_KEY = "gtts_not_confirmed"
 #: Half a paisa: two trigger prices closer than it are the same price.
 _PAISA = 0.005
 _LAG_NS = round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
@@ -85,6 +95,8 @@ class CarriedLegs:
         self._asked = False
         self._seen: GttBookSeen | None = None
         self.references: dict[str, LegReference] = {}
+        # The strategies whose carried leg an ERROR alert named as not confirmed.
+        self._alerted: set[str] = set()
 
     def carried(self) -> list[Trader]:
         """The CNC and NRML strategies holding a position."""
@@ -111,9 +123,23 @@ class CarriedLegs:
             if units is not None:
                 settled = leg in message.settled
                 self.references[trader.name] = LegReference(units, message.read_ns, settled)
-            why = self._unconfirmed(trader, message)
+            gtt_id, why = self._unconfirmed(trader, message)
             if why:
-                self._alert(trader, why)
+                self._not_confirmed(trader, gtt_id, why)
+
+    def after_close(self, trader: Trader, outcome: GttOutcome) -> None:
+        """A finding of the GTT follower about `trader`'s GTT once its kernel session has
+        closed (module docstring): anything but RESTING leaves the stop not confirmed."""
+        if outcome.event is GttEvent.RESTING:
+            return
+        why = f"the GTT follower found it {outcome.event.value} after the close"
+        if outcome.message:
+            why += f" ({outcome.message})"
+        self._not_confirmed(trader, outcome.gtt_id, why)
+
+    def alerted(self, name: str) -> bool:
+        """Whether an ERROR alert named strategy `name`'s carried leg as not confirmed."""
+        return name in self._alerted
 
     def books(self, message: Books) -> None:
         """Keep each GTT leg's units of a reconciliation read as its reference, unless the
@@ -147,6 +173,7 @@ class CarriedLegs:
             return
         reference = self.references.get(trader.name)
         carried[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]
+        carried[UNCONFIRMED_KEY] = _unconfirmed_gtts(trader)
         version = trader.part.spec.version.version_id
         state = dict(trader.part.strategy.state)
         try:
@@ -169,31 +196,43 @@ class CarriedLegs:
             return False
         return record is not None and record.day == session.parts.spec.day
 
-    def _unconfirmed(self, trader: Trader, message: GttBookSeen) -> str:
-        """Why the read does not confirm `trader`'s stop GTT, or "" when it does."""
+    def _unconfirmed(self, trader: Trader, message: GttBookSeen) -> tuple[int | None, str]:
+        """(the kernel's stop GTT the read does not confirm, None for none; why, "" when
+        the read confirms the leg's stop GTT)."""
         if message.resting is None:
-            return "the GTT book could not be read after the close"
+            gtts = resting_gtts(trader)
+            gtt_id = int(gtts[-1]["gtt_id"]) if gtts else None
+            return gtt_id, "the GTT book could not be read after the close"
         units = round(abs(trader.open_units()))
         for gtt in stop_gtts(trader):
             known = trader.gtts.gtt(int(gtt["gtt_id"])) if trader.gtts is not None else None
             if gtt["state"] not in RESTING or known is None:
                 continue
+            gtt_id = int(gtt["gtt_id"])
             row = message.resting.get(known.trigger_id)
             if row is None:
-                return f"its stop GTT {known.trigger_id} does not rest in the GTT book"
+                return gtt_id, f"its stop GTT {known.trigger_id} does not rest in the GTT book"
             triggers, quantity = row
             if quantity == units == round(gtt["quantity_units"]) and any(
                 abs(trigger - gtt["trigger_price"]) < _PAISA for trigger in triggers
             ):
-                return ""
-            return (
+                return None, ""
+            return gtt_id, (
                 f"its stop GTT {known.trigger_id} rests for {quantity} units at "
                 f"{', '.join(f'{t:.2f}' for t in triggers)}, not for {units} at "
                 f"{gtt['trigger_price']:.2f}"
             )
-        return "no stop GTT of it rests at the broker"
+        return None, "no stop GTT of it rests at the broker"
 
-    def _alert(self, trader: Trader, why: str) -> None:
+    def _not_confirmed(self, trader: Trader, gtt_id: int | None, why: str) -> None:
+        """Note on the GTT map that the close did not confirm `trader`'s stop GTT `gtt_id`
+        (when known) and why, and alert it once per leg (module docstring)."""
+        known = None if trader.gtts is None or gtt_id is None else trader.gtts.gtt(gtt_id)
+        if known is not None and not known.unconfirmed:
+            known.unconfirmed = why
+        if trader.name in self._alerted:
+            return
+        self._alerted.add(trader.name)
         outcome = protect(trader)
         self._session.event("protect", strategy=trader.name, outcome=outcome)
         self._session.alert(
@@ -212,4 +251,19 @@ class CarriedLegs:
         return not fills or max(fills) <= read_ns - _LAG_NS
 
 
-__all__ = ["REFERENCES_KEY", "CarriedLegs", "LegReference"]
+def _unconfirmed_gtts(trader: Trader) -> list[dict[str, Any]]:
+    """Each stop GTT of `trader` the close did not confirm, as the day-close record keeps
+    it (module docstring)."""
+    gtts = trader.gtts
+    if gtts is None:
+        return []
+    named = []
+    for gtt in stop_gtts(trader):
+        known = gtts.gtt(int(gtt["gtt_id"]))
+        if known is not None and known.unconfirmed:
+            gtt_id, trigger_id = int(gtt["gtt_id"]), known.trigger_id
+            named.append({"gtt": gtt_id, "trigger_id": trigger_id, "why": known.unconfirmed})
+    return named
+
+
+__all__ = ["REFERENCES_KEY", "UNCONFIRMED_KEY", "CarriedLegs", "LegReference"]
