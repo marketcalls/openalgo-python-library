@@ -88,9 +88,6 @@ FINAL_READ_WAIT_S = 5.0
 #: How a session ended that takes the final read: not after an error (3.5) or a mode
 #: breach (6.2), when the books are not to be trusted or not to be read.
 _FINAL_READ = frozenset({"session_end", "ctrl_c"})
-#: How a session ended that writes the day-close records of its carried legs (4.1): its
-#: end, or a Ctrl+C that keeps them (20-positional-live 10.2).
-_CARRIES = _FINAL_READ
 #: How the close warns of a strategy's state it could not save, and what a restart does.
 NOT_SAVED = "its state and the day's figures were not saved at the close"
 RESUMES_FROM_LAST_SAVE = "a restart today resumes it from its last save"
@@ -169,7 +166,10 @@ def close_session(
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         compared = {t.name: strategy_rows(session, t) for t in session.traders}
         slipped = {name: slippage_of(rows) for name, rows in compared.items()}
-        carry = session.news.carry.write if journal_works and stopped_by in _CARRIES else None
+        # Every end that leaves CNC or NRML legs kept writes their day-close records while
+        # the journal works (20-positional-live 4.1, 10.2): the session's end, a Ctrl+C or a
+        # strategy's error that keeps them by on_stop, a mode breach that sends nothing.
+        carry = session.news.carry.write if journal_works else None
         stopped = {trader.name: _stop_engine(trader, carry) for trader in session.traders}
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)

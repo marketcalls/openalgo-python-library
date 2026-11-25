@@ -212,3 +212,52 @@ def next_day(carried):
     engine.release(1)
     engine.advance()
     return engine
+
+
+class CncRaises(CncHold):
+    """CncHold whose third decision raises, with its CNC leg open."""
+
+    def on_bar(self, bar):
+        super().on_bar(bar)
+        if self.calls == 3:
+            raise RuntimeError("a bug in the strategy")
+
+
+def test_a_strategy_error_that_keeps_the_cnc_leg_writes_its_record(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The safe stop after an error runs by on_stop: by default the CNC leg is kept with
+    # its stop GTT, so the next day has the record to carry it on from.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match="a bug in the strategy"):
+        world.run(CncRaises)
+
+    assert world.fake.position("SBIN", "NSE") == 10
+    assert [(status, units) for status, units, *_ in gtts(world)] == [("active", 10)]
+    records = day_closes(world)
+    assert sorted(records) == ["CncRaises"]
+    assert len(records["CncRaises"].carried["positions"]) == 1
+
+
+def test_a_strategy_that_ends_flat_replaces_its_record_of_the_day(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # A record written earlier the same day (a Ctrl+C that kept the leg) must not stay the
+    # latest once the strategy ends the day flat.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    path = world.folder / "live" / BROKER / JOURNAL_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with Journal.open(
+        path, account=BROKER, broker=BROKER, mode=world.fake.mode, now=world.fake.clock.now
+    ) as journal:
+        journal.put_day_close("CncHold", {"positions": [{"units": 10}]}, {}, "v1", day=DAY)
+    world.stop_at(STOP_AT)
+
+    world.run(CncHold, on_stop="flatten")
+
+    assert world.fake.position("SBIN", "NSE") == 0
+    record = day_closes(world)["CncHold"]
+    assert record.day == DAY
+    assert not record.carried.get("positions")
+    assert not record.carried.get("orders")

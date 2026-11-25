@@ -20,7 +20,9 @@
   GTT order, once its kernel session has stopped, the kernel's `carried_state()` with the
   reference under `REFERENCES_KEY` (the kernel's restore takes the record whole), the
   strategy's `self.state` and its version id, on the session's trading day, in the
-  ledger of the session's mode (journal L).
+  ledger of the session's mode (journal L). A strategy that ends flat writes none, but
+  one with a record of the same day (an earlier start's Ctrl+C that kept its leg) has it
+  replaced by its flat state, so the latest record never names a closed position.
 
 Times are UTC nanoseconds, quantities signed whole units, prices rupees. Used by the loop
 only.
@@ -140,7 +142,8 @@ class CarriedLegs:
         if not overnight(trader):
             return
         carried = call(trader.engine.carried_state)
-        if not carried.get("positions") and not carried.get("orders"):
+        flat = not carried.get("positions") and not carried.get("orders")
+        if flat and not self._recorded_today(trader):
             return
         reference = self.references.get(trader.name)
         carried[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]
@@ -154,6 +157,17 @@ class CarriedLegs:
             session.warn(f"{trader.name}: the day-close record was not written ({error})")
             return
         session.event("day_close", strategy=trader.name, references=len(carried[REFERENCES_KEY]))
+
+    def _recorded_today(self, trader: Trader) -> bool:
+        """Whether the journal holds a day-close record of `trader` of the session's day.
+        A journal that cannot be read is a warning of the result (and no record)."""
+        session = self._session
+        try:
+            record = session.parts.journal.day_close(trader.name)
+        except JournalError as error:
+            session.warn(f"{trader.name}: the day-close record could not be read ({error})")
+            return False
+        return record is not None and record.day == session.parts.spec.day
 
     def _unconfirmed(self, trader: Trader, message: GttBookSeen) -> str:
         """Why the read does not confirm `trader`'s stop GTT, or "" when it does."""
