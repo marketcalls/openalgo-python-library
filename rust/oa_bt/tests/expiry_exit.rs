@@ -382,6 +382,44 @@ fn a_resting_entry_reached_after_the_square_off_of_the_exit_day_is_refused_at_it
 }
 
 #[test]
+fn a_reversal_held_by_a_delay_to_the_square_off_open_is_refused_whole_at_its_fill() {
+    // Long one lot from the 09:16 open. A reverse=True sale of two lots is decided at the
+    // 15:09 close, before the square-off, so it passes its submission checks; held one bar
+    // by delay_exits=1, it may fill from the 15:10 close of the next bar, at the 15:10 open,
+    // where its opening part would open a short on the contract at its expiry exit. It is
+    // refused whole there, `contract_expiring`, and the long is exited by the engine alone,
+    // at the 15:10 open, 1,000.00 less a tick: 999.95.
+    let mut config = minute_config();
+    config.perturbation.delay_exits = 1;
+    let reversal = OrderRequest {
+        product: Product::Nrml,
+        reverse: true,
+        ..OrderRequest::market(CONTRACT, Side::Sell, QuantitySpec::Units(150.0))
+    };
+    let acts = vec![
+        (
+            ts_from_ist(last_day(), OPEN_MINUTE + 1),
+            Act::Submit(nrml_buy()),
+        ),
+        (
+            ts_from_ist(last_day(), OPEN_MINUTE + SQUARE_OFF - 1),
+            Act::Submit(reversal),
+        ),
+    ];
+    let bars = minute_bars(1000.0, 1000.0);
+    let (output, _) = run_script(config, stock_future(), bars, acts);
+    assert_eq!(output.orders[1].reject_code, Some(REFUSED));
+    assert_eq!(output.fills.len(), 2, "{:?}", output.fills);
+    let exit = &output.fills[1];
+    let fill = &exit.fill;
+    assert_eq!(
+        (exit.stamp.slice, fill.side, fill.quantity_units),
+        (SQUARE_OFF, Side::Sell, 75.0)
+    );
+    assert_eq!((fill.price_rupees, fill.reason), (999.95, EXPIRY_EXIT));
+}
+
+#[test]
 fn an_mcx_delivery_contract_is_not_bought_once_its_exit_day_has_closed() {
     // GOLDM05FEB26FUT on daily bars: its exit day is Mon 2 February 2026, the trading day
     // before its tender period (Tue 3 to Thu 5 February). A buy decided at the close of

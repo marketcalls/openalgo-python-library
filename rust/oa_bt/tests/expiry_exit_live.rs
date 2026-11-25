@@ -20,7 +20,7 @@ use oa_bt::exec::{
     FillAt, FillFlags, FillReason, InstrumentSpec, OrderId, OrderRequest, OrderType, RejectCode,
 };
 use oa_bt::model::{days_from_civil, ts_from_ist, Day, Exchange, InstrumentKind, Product, Side};
-use oa_bt::rms::{Distance, ExitReason, LegRules};
+use oa_bt::rms::{Distance, ExitReason, LegRules, PositionalStops, StrategyRiskConfig};
 
 mod venue_support;
 
@@ -63,9 +63,15 @@ fn index_future() -> InstrumentSpec {
 }
 
 fn session_on(day: Day, instrument: InstrumentSpec) -> Engine {
+    session_with(day, instrument, StrategyRiskConfig::default())
+}
+
+/// `session_on`, with the strategy's risk settings `risk`.
+fn session_with(day: Day, instrument: InstrumentSpec, risk: StrategyRiskConfig) -> Engine {
     let config = RunConfig {
         first_day: day,
         last_day: day,
+        risk,
         ..config()
     };
     session_of(config, instrument)
@@ -127,7 +133,11 @@ fn holding(instrument: InstrumentSpec, rules: LegRules) -> Engine {
 
 /// `holding`, in the session of `day`.
 fn holding_on(day: Day, instrument: InstrumentSpec, rules: LegRules) -> Engine {
-    let mut kernel = session_on(day, instrument);
+    holding_in(session_on(day, instrument), day, rules)
+}
+
+/// `holding_on`, in `kernel`, a session of `day` before its first slice.
+fn holding_in(mut kernel: Engine, day: Day, rules: LegRules) -> Engine {
     let decided = minute_on(day, 1);
     let mut script = Script::new(vec![(decided, Act::Submit(buy(rules)))]);
     run_until(&mut kernel, day, &mut script, 1);
@@ -329,31 +339,85 @@ fn placed(commands: &[VenueCommand]) -> Vec<(Side, f64, OrderType, OrderRole)> {
         .collect()
 }
 
-#[test]
-fn a_carried_position_whose_exit_day_was_missed_is_exited_at_the_next_sessions_first_open() {
-    // A stock future bought on Mon 07-28 with its exit day Tue 07-29, when no session ran.
-    // The Wed 07-30 session, before the contract's last trading day, exits it as it reaches
-    // its first open.
+fn wednesday() -> Day {
+    days_from_civil(2025, 7, 30)
+}
+
+/// A stock future bought on Mon 07-28 with `rules`, in sessions with the risk settings
+/// `risk`, whose exit day is Tue 07-29, when no session ran: the Wed 07-30 session, before
+/// the contract's last trading day, has taken it and stands before its open.
+fn carried_past_missed_exit_day(risk: StrategyRiskConfig, rules: LegRules) -> Engine {
     let monday = days_from_civil(2025, 7, 28);
-    let wednesday = days_from_civil(2025, 7, 30);
     let instrument = contract("SBIN31JUL25FUT", Some(days_from_civil(2025, 7, 29)));
-    let mut kernel = holding_on(monday, instrument.clone(), LegRules::default());
+    let monday_session = session_with(monday, instrument.clone(), risk);
+    let mut kernel = holding_in(monday_session, monday, rules);
+    kernel.take_commands();
     close_day(&mut kernel, monday);
     let carried = kernel.carried_state().expect("Monday has closed");
-    let mut kernel = session_on(wednesday, instrument);
+    let mut kernel = session_with(wednesday(), instrument, risk);
     kernel
         .restore_carried_state(&carried)
         .expect("Wednesday takes it");
+    kernel
+}
+
+const EXPIRY_EXIT: OrderRole = OrderRole::RiskExit(RiskExitReason::ExpiryExit);
+
+#[test]
+fn a_carried_position_whose_exit_day_was_missed_is_exited_at_the_next_sessions_first_open() {
+    // No tick comes: the session reaches its open with its first slice, and exits it there.
+    let risk = StrategyRiskConfig::default();
+    let mut kernel = carried_past_missed_exit_day(risk, LegRules::default());
     assert_eq!(
         kernel.take_commands(),
         Vec::new(),
         "nothing before the open"
     );
-    run_until(&mut kernel, wednesday, &mut Script::new(Vec::new()), 1);
-    let expiry = OrderRole::RiskExit(RiskExitReason::ExpiryExit);
+    run_until(&mut kernel, wednesday(), &mut Script::new(Vec::new()), 1);
     assert_eq!(
         placed(&kernel.take_commands()),
-        vec![(Side::Sell, 75.0, OrderType::Market, expiry)]
+        vec![(Side::Sell, 75.0, OrderType::Market, EXPIRY_EXIT)]
+    );
+}
+
+/// The first tick of Wednesday's session, at 09:15:01, a second past its open.
+fn first_tick_after_the_open(kernel: &mut Engine) {
+    let at = minute_on(wednesday(), 0) + 1_000_000_000;
+    kernel
+        .push_tick(SBIN, 1000.0, at)
+        .expect("the tick is taken");
+}
+
+#[test]
+fn a_tick_at_the_open_exits_a_position_carried_past_its_exit_day_at_once() {
+    // The tick reaches the open before the first slice runs: the exit goes on it, as the
+    // backtest fills it at that open, not a base bar later; the first slice sends no other.
+    let risk = StrategyRiskConfig::default();
+    let mut kernel = carried_past_missed_exit_day(risk, LegRules::default());
+    first_tick_after_the_open(&mut kernel);
+    assert_eq!(
+        placed(&kernel.take_commands()),
+        vec![(Side::Sell, 75.0, OrderType::Market, EXPIRY_EXIT)]
+    );
+    run_until(&mut kernel, wednesday(), &mut Script::new(Vec::new()), 1);
+    assert_eq!(placed(&kernel.take_commands()), Vec::new());
+}
+
+#[test]
+fn a_tick_at_the_open_exits_a_rearm_daily_leg_carried_past_its_exit_day_with_no_days_stop() {
+    // A rearm_daily leg's stop waits for the open too; the expiry exit is made first, so no
+    // day's stop is placed for a leg that is being exited (and then cancelled by its exit).
+    let risk = StrategyRiskConfig {
+        positional_stops: PositionalStops::RearmDaily,
+        ..StrategyRiskConfig::default()
+    };
+    let mut kernel = carried_past_missed_exit_day(risk, stop_50());
+    first_tick_after_the_open(&mut kernel);
+    let commands = kernel.take_commands();
+    assert_eq!(
+        placed(&commands),
+        vec![(Side::Sell, 75.0, OrderType::Market, EXPIRY_EXIT)],
+        "{commands:?}"
     );
 }
 

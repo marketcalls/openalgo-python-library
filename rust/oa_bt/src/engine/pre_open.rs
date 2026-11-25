@@ -72,7 +72,8 @@ pub enum PreOpen {
     NotDecided,
 }
 
-/// A live session's pre-open decision and its orders (module docs).
+/// A live session's pre-open decision and its orders, and whether the session has
+/// reached its open (module docs).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct PreOpenDesk {
     /// The period of a weekly or longer strategy, whose session runs on daily strategy
@@ -85,6 +86,9 @@ pub(super) struct PreOpenDesk {
     /// Orders of the decision waiting for the session's open, in the order they were
     /// decided.
     pub(super) at_open: Vec<OrderId>,
+    /// The session has reached the open of its first slice, and the expiry exits due
+    /// there have been made (`reach_session_open`).
+    pub(super) open_reached: bool,
 }
 
 fn invalid(reason: String) -> KernelError {
@@ -271,11 +275,31 @@ impl Engine {
             .collect()
     }
 
+    /// What waited for the session's open goes once the session has reached it, decided
+    /// as `at` says, whatever reached it first (a tick at or after it, a venue's result, or
+    /// the first slice's open phase): the expiry exit of a position carried past its
+    /// contract's exit day (`venue_exits::expiry_exits_at_session_open`), once, then the
+    /// orders of a pre-open decision. Called first as the exits move on
+    /// (`progress_exits`), so a rearm_daily leg being exited gets no day's stop when its
+    /// leg stops are synced after.
+    ///
+    /// Errors: those of the expiry exits and of `send_order`.
+    pub(super) fn reach_session_open(&mut self, at: SendAt) -> Result<(), KernelError> {
+        if self.before_session_open(&at) {
+            return Ok(());
+        }
+        if at.slice.opens_session && !self.venue.pre_open.open_reached {
+            self.venue.pre_open.open_reached = true;
+            self.expiry_exits_at_session_open(at)?;
+        }
+        self.send_orders_at_open(at)
+    }
+
     /// Send the orders of a pre-open decision that wait for the session's open, once the
     /// session has reached it, decided as `at` says (module docs).
     ///
     /// Errors: those of `send_order`.
-    pub(super) fn send_orders_at_open(&mut self, at: SendAt) -> Result<(), KernelError> {
+    fn send_orders_at_open(&mut self, at: SendAt) -> Result<(), KernelError> {
         if self.venue.pre_open.at_open.is_empty() || self.before_session_open(&at) {
             return Ok(());
         }
@@ -286,16 +310,16 @@ impl Engine {
     }
 
     /// At the open of a session's first slice, in a live session: the session's clock
-    /// reaches that open, so what waited for it goes (a pre-open decision's orders, a
-    /// rearm_daily leg's stop: `rearm`), as the exits move on (`progress_exits`), after the
-    /// expiry exit of a position carried past its contract's exit day
-    /// (`venue_exits::expiry_exits_at_session_open`). A tick at or after the open has moved
-    /// them on already when one came first; when none did, the open of the slice's bar is
-    /// the session's first price, and its open positions are marked there first, so a
-    /// rearm_daily stop the open is already beyond exits the leg rather than being placed
-    /// (`rearm_waits_or_crosses`). A backtest does nothing here.
+    /// reaches that open, so what waited for it goes as the exits move on
+    /// (`progress_exits`): the expiry exit of a position carried past its contract's exit
+    /// day and a pre-open decision's orders (`reach_session_open`), then a rearm_daily
+    /// leg's stop (`rearm`). A tick at or after the open has moved them on already when one
+    /// came first; when none did, the open of the slice's bar is the session's first price,
+    /// and its open positions are marked there first, so a rearm_daily stop the open is
+    /// already beyond exits the leg rather than being placed (`rearm_waits_or_crosses`). A
+    /// backtest does nothing here.
     ///
-    /// Errors: those of the expiry exits and of `progress_exits`.
+    /// Errors: those of `progress_exits`.
     pub(super) fn venue_at_session_open(&mut self, slice: &SliceInfo) -> Result<(), KernelError> {
         if !self.is_external() || !slice.opens_session {
             return Ok(());
@@ -309,7 +333,6 @@ impl Engine {
             step: Step::OpenFills,
             decided_at: slice.open,
         };
-        self.expiry_exits_at_session_open(at)?;
         self.progress_exits(at)
     }
 
