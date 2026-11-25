@@ -19,6 +19,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, STOP_AT, CncHold, CncTarget, calls, gtt_world, sells
 from session_samples import alerts, ist
 from stops_samples import at_price
+from stops_samples import events as outcome_events
 
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.gtt import GTTAPI
@@ -110,3 +111,37 @@ def test_a_mode_switch_locks_the_session_alerts_the_stop_gtt_and_sends_nothing_m
     after = [entry.what for entry in world.fake.log.calls() if entry.ts_ns > flip]
     assert not set(after) & set(GTT_CALLS)
     assert "placeorder" not in after
+
+
+def test_the_kill_switch_beside_the_users_own_holdings_reports_the_leg_flat_at_the_broker(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # The user holds 50 SBIN CNC of their own (decision 11.3): after the kill switch
+    # sells the strategy's 10, OpenAlgo's 50 are the user's, never a difference.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.trace.waive("books agree", "the user's own 50 CNC units are no difference (7.2)")
+    world.fake.set_holding("SBIN", "NSE", 50, average_price=480.0)
+    at_price(world, MOVE_AT, LOSS_PRICE)
+    world.stop_at(ist(14, 52))
+
+    outcome = world.run(CncHold, account_max_daily_loss=LIMIT)
+
+    assert sells(world) == [("MARKET", 10, "complete")]
+    assert [e["kind"] for e in outcome_events(outcome, "kill_disagrees")] == []
+    (report,) = [a for a in alerts(caplog, "error") if "kill switch (account_loss)" in a]
+    assert "CncHold is flat in SBIN NSE, flat at the broker too" in report
+    assert "close them by hand" not in report
+
+
+def test_the_start_banner_names_no_square_off_for_a_cnc_strategy(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(STOP_AT)
+
+    world.run(CncHold)
+
+    (line,) = [line for line in world.lines if line.startswith("CncHold: NSE:SBIN every 1m")]
+    assert "entries until 14:50 IST" in line
+    assert "square-off 15:00" not in line
+    assert line.endswith("no square-off: the position is carried overnight")

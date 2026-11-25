@@ -101,6 +101,10 @@ def test_a_child_not_filled_through_a_base_bar_is_cancelled_and_the_position_exi
     assert world.fake.position("SBIN", "NSE") == 0
     trades = outcome.outputs["CncHold"]["trades"]
     assert list(trades["exit_reason"]) == ["leg_sl"]
+    # The engine's exit of what the child left is flagged as such (20-positional-live 3.2).
+    fills = outcome.outputs["CncHold"]["fills"]
+    sold = [list(flags) for side, flags in zip(fills["side"], fills["flags"]) if side == "SELL"]
+    assert sold == [["gtt_child_unfilled"]]
 
 
 @BOOKS
@@ -259,3 +263,40 @@ def test_a_strategys_gtt_entry_rests_fires_and_fills_then_its_stop_gtt_is_placed
     statuses = [(status, action) for status, _, _, action in gtts(world)]
     assert statuses == [("triggered", "BUY"), ("active", "SELL")]
     assert outcome.stopped_by == "ctrl_c"
+
+
+@MODES
+def test_a_gtt_entry_refused_at_placement_is_rejected_with_no_exit_and_no_lock(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer)
+    world.fake.refuse_next_gtt("Trigger price is too close to the last price")
+
+    outcome = run(world, GttEntry)
+
+    assert world.orders() == []
+    assert not [a for a in alerts(caplog, "error") if "GttEntry" in a and "GTT" in a]
+    (reject,) = [a for a in alerts(caplog, "reject") if "GttEntry" in a]
+    assert "the broker refused the GTT order of SBIN NSE" in reject
+    assert "Trigger price is too close to the last price" in reject
+    assert "exited" not in reject
+    assert "gtt_refused" not in {lock.reason for lock in outcome.locks}
+
+
+@MODES
+def test_a_gtt_entry_cancelled_by_hand_ends_as_an_order_and_is_not_placed_again(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer)
+
+    def cancel_by_hand():
+        world.fake.set_gtt_status(world.fake.gtts()[0].trigger_id, "cancelled")
+
+    world.script.at(MOVE_AT, cancel_by_hand)
+
+    run(world, GttEntry)
+
+    assert len(calls(world, "placegttorder")) == 1
+    (reject,) = [a for a in alerts(caplog, "reject") if "GttEntry" in a]
+    assert "GTT order" in reject and "ended at the broker" in reject
+    assert "stop GTT" not in reject and "places it again" not in reject

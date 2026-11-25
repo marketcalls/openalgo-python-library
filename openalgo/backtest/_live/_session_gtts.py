@@ -5,10 +5,11 @@ GTT map (`_venue_gtts`), then what the session must do around it.
 - **Placed, modified, cancelled** and their refusals: the kernel call alone; the modifies
   and cancels that waited for a place's answer go to the order worker. A trailing modify
   confirmed is a STOP_MOVED alert, as an order's.
-- **Refused at placement** (3.5, decision 11.7): the kernel exits the leg at market and
-  locks the strategy's entries for the day (`GTT_REFUSED_LOCK`, copied to the order
-  worker's record); an ERROR alert quotes the broker's message, and says when the
-  refusal is kept across starts.
+- **Refused at placement** (3.5, decision 11.7): for a leg's stop GTT the kernel exits
+  the leg at market and locks the strategy's entries for the day (`GTT_REFUSED_LOCK`,
+  copied to the order worker's record); an ERROR alert quotes the broker's message, and
+  says when the refusal is kept across starts. A strategy's GTT order ends rejected, with
+  a REJECT alert quoting the message: nothing is exited or locked.
 - **Unresolved, a mismatch, other terms**: no kernel call; the strategy's entries are
   locked (`GTT_UNRESOLVED_LOCK`, for the session: the user resolves it by hand and starts
   again) with an ERROR alert naming the GTT and why, never an exit (16-session-design 5.3).
@@ -21,7 +22,8 @@ GTT map (`_venue_gtts`), then what the session must do around it.
 - **Ended outside the session**, expired or rejected after placement: the kernel places
   the stop again (or exits flagged `stop_crossed`), the session asks `protect` for the leg
   too (it answers that the stop works when the kernel placed it), and a REJECT alert
-  says what ended.
+  says what ended. A strategy's GTT order that ended so ends in the kernel too, with a
+  REJECT alert and no protect.
 
 Quantities are whole units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -85,6 +87,13 @@ class GttNewsHandler:
         what = _named(answer.trigger_id or "", request.purpose)
         if handled.applied is GttApplied.UNRESOLVED:
             self._unresolved(trader, f"{what} {request.action.value}: {answer.message}")
+        elif handled.applied is GttApplied.REFUSED and request.purpose is not Purpose.STOP:
+            # A strategy's GTT order ends rejected: nothing was exited, nothing locked.
+            self._session.alert(
+                AlertKind.REJECT,
+                f"{trader.name}: the broker refused the {what} of {trader.symbol} "
+                f'{trader.exchange}: "{answer.message}". The order is rejected',
+            )
         elif handled.applied is GttApplied.REFUSED:
             trader.kernel_locked(GTT_REFUSED_LOCK)
             kept = (
@@ -108,13 +117,24 @@ class GttNewsHandler:
 
     def _found(self, trader: Trader, outcome: GttOutcome, handled: GttHandled) -> None:
         applied = handled.applied
-        what = _named(outcome.trigger_id, Purpose.STOP)
+        known = trader.gtts.gtt(outcome.gtt_id) if trader.gtts is not None else None
+        purpose = Purpose.STOP if known is None else known.purpose
+        what = _named(outcome.trigger_id, purpose)
         if applied is GttApplied.UNRESOLVED:
             self._unresolved(trader, f"{what} ({outcome.event.value}): {outcome.message}")
         elif applied is GttApplied.TRIGGERED and handled.child is not None:
             trader.venue.bind_child(handled.child, outcome.order_id, *self._child(trader, handled))
         elif applied is GttApplied.CHILD_MISSED and handled.child is not None:
             self._missed(trader, outcome, handled.child)
+        elif (
+            applied in (GttApplied.ENDED_OUTSIDE, GttApplied.ENDED) and purpose is not Purpose.STOP
+        ):
+            self._session.alert(
+                AlertKind.REJECT,
+                f"{trader.name}: {what} of {trader.symbol} {trader.exchange} ended at the "
+                f"broker with no request from the session ({outcome.event.value}): the order "
+                "ends there",
+            )
         elif applied in (GttApplied.ENDED_OUTSIDE, GttApplied.ENDED):
             outcome_of = protect(trader)
             self._session.event("protect", strategy=trader.name, outcome=outcome_of)

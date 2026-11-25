@@ -55,7 +55,7 @@ from typing import Any
 
 from .._series import ist_time
 from ..errors import ConfigError
-from ._broker_units import broker_units
+from ._broker_units import broker_units, strategy_units
 from ._group_rules import and_join
 from ._kill_reads import (
     KILL_READ_BACKOFF_S,
@@ -69,8 +69,10 @@ from ._kill_reads import (
     look,
     seconds_ns,
 )
+from ._kill_reads import held as engine_position
 from ._plan_args import kept_on_stop
 from ._session_trader import Trader
+from ._stops_gtt import overnight
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadPositions
 from .inbox import PositionRows
@@ -138,19 +140,22 @@ class KillSwitch:
     def positions(self, message: PositionRows) -> None:
         """A position-book read, whoever asked for it: it counts for each fired strategy
         whose state began at or before the read did (module docstring), its broker's units
-        those of its leg in its product (`_broker_units`)."""
+        those of its leg in its product (`_broker_units`), a CNC leg's without the user's
+        own units beyond the strategy's (`strategy_units`, 20-positional-live 7.2)."""
         self._reads.came(message.read_ns)
         for name, kill in self._fired.items():
             if message.read_ns < kill.since_ns:
                 continue
             trader = self._session.trader_named(name)
-            kill.broker = broker_units(
+            units = broker_units(
                 message.positionbook,
                 message.holdings,
                 trader.symbol,
                 trader.exchange,
                 trader.product,
             )
+            engine = round(engine_position(trader)[0])
+            kill.broker = strategy_units(trader.product, engine, units)
             kill.read_ns = message.read_ns
 
     def duties(self, now_ns: int) -> None:
@@ -256,22 +261,34 @@ class KillSwitch:
                 f"shared out among {everyone}, the most recently opened position first, each "
                 "taking its share as its own"
             )
-        exits = f"the square-off at {ist_time(trader.square_off_ns):%H:%M} IST"
-        if not kept_on_stop(self._session.parts.spec.arguments.on_stop, trader.product):
-            exits = f'a Ctrl+C (on_stop="flatten") and {exits}'
+        exits = self._other_exits(trader)
         side = "sell" if units > 0 else "buy"
-        then = (
-            f"{exits} would still {side} all {abs(units):g} units"
-            if kill.broker is None
-            else f"no exit of the session ({exits}) is sent for more than the broker holds: "
-            f"trades of other orders that explain the difference are {taken}, else the exits "
-            "wait for the books to agree"
-        )
+        if not exits:
+            then = "no other exit of the session sells it: the leg is carried with its stop GTT"
+        elif kill.broker is None:
+            then = f"{exits} would still {side} all {abs(units):g} units"
+        else:
+            then = (
+                f"no exit of the session ({exits}) is sent for more than the broker holds: "
+                f"trades of other orders that explain the difference are {taken}, else the "
+                "exits wait for the books to agree"
+            )
         return (
             f"kill switch ({kill.reason}): {trader.name} holds {held} and OpenAlgo's position "
             f"book {book}: no exit is sent until they agree, and {then}. Check the position "
             "in OpenAlgo"
         )
+
+    def _other_exits(self, trader: Trader) -> str:
+        """The session's other exits of `trader`'s position in an alert's words: a Ctrl+C
+        that flattens it, and the MIS square-off ("" for a CNC or NRML leg that Ctrl+C
+        keeps: it is carried, never squared off, 20-positional-live 7.3)."""
+        exits = []
+        if not kept_on_stop(self._session.parts.spec.arguments.on_stop, trader.product):
+            exits.append('a Ctrl+C (on_stop="flatten")')
+        if not overnight(trader):
+            exits.append(f"the square-off at {ist_time(trader.square_off_ns):%H:%M} IST")
+        return " and ".join(exits)
 
     def _report(self, trader: Trader, kill: Kill) -> None:
         """The ERROR alert of a flat strategy (module docstring); on a shared instrument

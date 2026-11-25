@@ -23,6 +23,7 @@ from ._preflight_gtt import SANDBOX_GTT_LINE
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
 from ._shared_alerts import warning_line
+from ._stops_gtt import overnight
 from ._types import Mode
 
 #: The banner's lines a SESSION alert carries: the mode, the funds and the first
@@ -36,6 +37,8 @@ STOPS_LINE = (
 )
 
 
+#: A CNC or NRML strategy's square-off in its banner line: none (20-positional-live 7.3).
+CARRIED_WORDS = "no square-off: the position is carried overnight"
 #: The banner's line on a CNC or NRML position's stop (20-positional-live 2, P6).
 POSITIONAL_STOPS_LINE = (
     "CNC and NRML: each position's stop rests at the broker as a SINGLE GTT, kept overnight; "
@@ -77,11 +80,15 @@ def banner_lines(session: Any) -> list[str]:
         until = times.entry_until
         if each.plan.entry_until is not None:
             until = ist_instant(spec.day, each.plan.entry_until)
+        # A CNC or NRML leg is carried, never squared off (20-positional-live 7.3).
+        square_off = (
+            CARRIED_WORDS if overnight(trader) else f"square-off {_clock(trader.square_off_ns)} IST"
+        )
         lines.append(
             f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
             f"Rs {indian_digits(each.capital)}, daily loss limit "
             f"Rs {indian_digits(each.max_daily_loss)}, "
-            f"entries until {_clock(until)} IST, square-off {_clock(trader.square_off_ns)} IST"
+            f"entries until {_clock(until)} IST, {square_off}"
         )
         limits = daily_limit_words(each.plan.risk)
         if limits:
@@ -180,6 +187,7 @@ def _clock(ts_ns: int) -> str:
 
 __all__ = [
     "BANNER_ALERT_LINES",
+    "CARRIED_WORDS",
     "ON_STOP_LINES",
     "POSITIONAL_STOPS_LINE",
     "STOPS_LINE",
