@@ -94,8 +94,8 @@ class GttNewsHandler:
             # A strategy's GTT order ends rejected: nothing was exited, nothing locked.
             self._session.alert(
                 AlertKind.REJECT,
-                f"{trader.name}: the broker refused the {what} of {trader.symbol} "
-                f'{trader.exchange}: "{answer.message}". The order is rejected',
+                f"{trader.name}: the {what} of {trader.symbol} {trader.exchange} was not "
+                f'placed: "{answer.message}". The order is rejected',
             )
         elif handled.applied is GttApplied.REFUSED:
             trader.kernel_locked(GTT_REFUSED_LOCK)

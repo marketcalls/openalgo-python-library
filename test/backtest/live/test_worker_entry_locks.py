@@ -30,11 +30,19 @@ from session_samples import rig as session_rig
 from venue_samples import new_session
 from worker_samples import PRICE, STRATEGY, WorkerRig
 
+from openalgo.backtest._live._gtt_types import (
+    Direction,
+    GttAction,
+    GttAnswer,
+    GttAnswerKind,
+    GttNews,
+    GttRequest,
+)
 from openalgo.backtest._live._locked_entries import LockedEntries
 from openalgo.backtest._live._session_bookkeeping import Bookkeeping
 from openalgo.backtest._live._session_records import StrategyRecords
 from openalgo.backtest._live._types import Purpose
-from openalgo.backtest._live._venue_requests import PlaceRequest
+from openalgo.backtest._live._venue_requests import PlaceRequest, Priority
 from openalgo.backtest._live.inbox import NotSent, NotSentReason, SendResult, WorkerReady
 
 #: Seconds a thread test waits for the worker's thread at most.
@@ -262,3 +270,32 @@ def answer_to(rig: WorkerRig, request: PlaceRequest):
         if isinstance(message, SendResult) and message.request_id == request.request_id:
             return message
     return None
+
+
+def test_a_gtt_order_of_a_locked_strategy_is_answered_refused_and_not_sent(rig):
+    # A strategy's GTT order (validity "gtt") is an entry: review finding 10 of unit N3b.
+    rig.worker.locked_entries.note(STRATEGY, [FEED_DEAD])
+    request = GttRequest(
+        request_id=1,
+        action=GttAction.PLACE,
+        purpose=Purpose.ENTRY,
+        strategy=STRATEGY,
+        gtt_id=1,
+        symbol="SBIN",
+        exchange="NSE",
+        product="CNC",
+        side="BUY",
+        trigger_price=PRICE - 1.0,
+        limit_price=PRICE + 4.0,
+        quantity=10,
+        direction=Direction.BELOW,
+        priority=Priority.ENTER,
+    )
+
+    posted = rig.run(request)
+
+    expected = "the strategy's entries were locked (feed_dead) before it was sent"
+    assert [news.news for news in rig.of(GttNews, posted)] == [
+        GttAnswer(request, GttAnswerKind.REFUSED, message=expected)
+    ]
+    assert rig.fake.log.calls("placegttorder") == []

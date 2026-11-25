@@ -127,7 +127,7 @@ def run_session(
         return _run(session, settings, session.parts.spec.arguments.on_stop)
 
 
-def _run(session: Session, settings: StartSettings, on_stop: str) -> SessionOutcome:
+def _run(session: Session, settings: StartSettings, on_stop: str | None) -> SessionOutcome:
     control = Control(session, on_stop)
     session.control = control
     source = settings.feed if settings.feed is not None else session.parts.clients.feed

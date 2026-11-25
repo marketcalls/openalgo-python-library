@@ -47,6 +47,7 @@ from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
 from ._gtt_reads import LegKey
 from ._gtt_send import GttSender
+from ._gtt_types import GttAction, GttAnswer, GttAnswerKind, GttNews, GttRequest
 from ._locked_entries import LockedEntries, locked_words
 from ._order_answers import Outcome
 from ._order_check import OrderCheck
@@ -185,9 +186,22 @@ class Sender:
         elif isinstance(request, CancelOrphan):
             self._cancel_orphan(request.order_id)
         elif isinstance(request, GTT_REQUESTS):
-            self._gtt_requests.execute(request)
+            if not self._gtt_entry_locked(request):
+                self._gtt_requests.execute(request)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
+
+    def _gtt_entry_locked(self, request: Any) -> bool:
+        """Whether `request` places a strategy's GTT order (an entry) while its entries are
+        locked: then it is answered refused with why, never sent (`_locked_entries`)."""
+        if not isinstance(request, GttRequest) or request.purpose is not Purpose.ENTRY:
+            return False
+        locks = self._locked.reasons(request.strategy)
+        if request.action is not GttAction.PLACE or not locks:
+            return False
+        answer = GttAnswer(request, GttAnswerKind.REFUSED, message=locked_words(locks))
+        self._post(GttNews(answer))
+        return True
 
     def settle_due(self) -> None:
         """Settle what is due (module docstring). Stops at a guard lock, which the worker

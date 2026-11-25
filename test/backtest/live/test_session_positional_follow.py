@@ -278,7 +278,7 @@ def test_a_gtt_entry_refused_at_placement_is_rejected_with_no_exit_and_no_lock(
     assert world.orders() == []
     assert not [a for a in alerts(caplog, "error") if "GttEntry" in a and "GTT" in a]
     (reject,) = [a for a in alerts(caplog, "reject") if "GttEntry" in a]
-    assert "the broker refused the GTT order of SBIN NSE" in reject
+    assert "the GTT order of SBIN NSE was not placed" in reject
     assert "Trigger price is too close to the last price" in reject
     assert "exited" not in reject
     assert "gtt_refused" not in {lock.reason for lock in outcome.locks}
