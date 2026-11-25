@@ -611,28 +611,30 @@ def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(
 # ----- the session's own fills on the leg, not settled yet (16-session-design 5.3, F78) ---------
 
 
-def expected_units(rig, seq):
-    """The units GTT `seq`'s leg would hold had it not fired: its reference moved by the
-    session's own fills on the leg since (`_gtt_units.Reference.expected`)."""
-    follower = rig.worker._started.gtts.follower
-    leg = ("SBIN", "NSE", "CNC")
-    return follower._references.of(seq).expected(follower._reader.own.units(leg))
+def judged_once_gone(fake, rig):
+    """What the follower decides of the stop GTT once it is cancelled by hand and gone from
+    a book that lists the active GTTs only: judged by the leg's units against the units it
+    expects (`_gtt_units.Reference.expected`), the 5 left after the session's exit. Counted
+    once, the 5 the position holds are all there: ENDED_OUTSIDE; not counted, the exit's
+    fall reads as the GTT's child (CHILD_MISSED); counted twice, as a rise (MISMATCH)."""
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    news = rig.send(ReadGtts()) + until_settled(rig)
+    return events(news)[-1]
 
 
 def test_a_read_while_the_exits_word_is_on_its_way_counts_the_exit_once(
     make_fake_openalgo, tmp_path
 ):
-    fake, rig, seq = world(make_fake_openalgo, tmp_path)
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
     rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
     fake.faults.hold_order_updates()
     rig.run(rig.own_exit(5))
     # The position book shows the exit's sale; the order path has not heard of it yet.
     rig.send(ReadGtts())
     fake.faults.release_order_updates()
-
     rig.step_for(2.0)
 
-    assert expected_units(rig, seq) == 5
+    assert judged_once_gone(fake, rig) is GttEvent.ENDED_OUTSIDE
     rig.worker.close()
 
 
@@ -657,16 +659,17 @@ def lagged_through_a_read(fake, rig, seq, *, on_the_clock=False):
 def test_a_read_while_the_position_book_lags_the_exit_keeps_the_units_the_exit_moved(
     make_fake_openalgo, tmp_path, on_the_clock
 ):
-    fake, rig, seq = world(make_fake_openalgo, tmp_path, market_open=lambda now_ns: on_the_clock)
+    fake, rig, seq = world(
+        make_fake_openalgo, tmp_path, history=False, market_open=lambda now_ns: on_the_clock
+    )
     reads = gtt_reads(fake)
 
     lagged_through_a_read(fake, rig, seq, on_the_clock=on_the_clock)
 
     # The modify's read and the read during the lag (asked for, or on the clock).
     assert gtt_reads(fake) - reads == 2
-
     # 10 units less the exit's 5, never the 10 the lagging book still showed.
-    assert expected_units(rig, seq) == 5
+    assert judged_once_gone(fake, rig) is GttEvent.ENDED_OUTSIDE
     rig.worker.close()
 
 

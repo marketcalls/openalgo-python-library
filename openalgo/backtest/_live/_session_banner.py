@@ -61,20 +61,50 @@ def banner_lines(session: Any) -> list[str]:
     zerodha"), at a restart the start's number and each resumed leg with its stop, then
     the funds, each strategy's instrument, interval, capital, daily loss limit, entry
     cut-off and square-off, and its daily limits when set (18-multi-strategy 2.5a), each
-    instrument's freeze cap (once), each strategy's version id, a version changed since
-    the day's earlier start and a source not hashed (12.1, `_session_versions`), each
-    instrument several strategies share with its
-    members and the rule on trading by hand (4.11), the rule of broker-held stops
+    instrument's freeze cap (once; `strategy_lines`), each strategy's version id, a
+    version changed since the day's earlier start and a source not hashed (12.1,
+    `_session_versions`), each instrument several strategies share with its members and
+    the rule on trading by hand (4.11), the rule of broker-held stops
     (`STOPS_LINE`), with a CNC or NRML strategy how its stop is held and what Ctrl+C does
     (`positional_lines`), the account's limits, the order rate, the cost model, the sandbox's
     difference, and the warnings, each once with one prefix."""
     parts = session.parts
-    spec, report = parts.spec, parts.report
+    spec = parts.spec
     lines = [parts.banner, *restart_lines(session)]
-    lines.append(f"Funds available: Rs {indian_digits(report.funds_available)}")
+    lines.append(f"Funds available: Rs {indian_digits(parts.report.funds_available)}")
+    lines += strategy_lines(session)
+    lines += session.versions.banner_lines()
+    lines += shared_lines(session.groups.groups)
+    lines.append(STOPS_LINE)
+    lines += positional_lines(spec, parts.mode)
+    if spec.arguments.account_max_daily_loss is not None:
+        limit = spec.arguments.account_max_daily_loss
+        lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
+    lines += account_limit_lines(spec.arguments)
+    lines.append(
+        f"Order rate: at most {spec.arguments.max_orders_per_second} order calls a second "
+        "(place, modify and cancel together); stops and exits go first"
+    )
+    costs = spec.strategies[0].plan.costs
+    lines.append(f"Charges modelled with: {costs or 'no cost model'}")
+    if parts.mode is Mode.SANDBOX:
+        lines.append(
+            "SANDBOX: OpenAlgo simulates the fills at its own prices; nothing reaches the broker"
+        )
+    lines += [warning_line(note) for note in session.warnings]
+    return lines
+
+
+def strategy_lines(session: Any) -> list[str]:
+    """The banner's lines of each strategy of `session`, in the plan's order: its
+    instrument, interval, capital, daily loss limit, entry cut-off and square-off (none for
+    a CNC or NRML strategy, `CARRIED_WORDS`), its daily limits when set, and its
+    instrument's freeze cap, once per instrument."""
+    spec, report = session.parts.spec, session.parts.report
     facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
     calendar = default_calendar()
     shown: set[tuple[str, str]] = set()
+    lines = []
     for each, trader in zip(spec.strategies, session.traders, strict=True):
         times = calendar.intraday_times(each.exchange, spec.day)
         until = times.entry_until
@@ -98,25 +128,6 @@ def banner_lines(session: Any) -> list[str]:
             fact = facts.get((each.symbol, each.exchange))
             freeze = None if fact is None else fact.freeze_quantity
             lines.append(f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}")
-    lines += session.versions.banner_lines()
-    lines += shared_lines(session.groups.groups)
-    lines.append(STOPS_LINE)
-    lines += positional_lines(spec, parts.mode)
-    if spec.arguments.account_max_daily_loss is not None:
-        limit = spec.arguments.account_max_daily_loss
-        lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
-    lines += account_limit_lines(spec.arguments)
-    lines.append(
-        f"Order rate: at most {spec.arguments.max_orders_per_second} order calls a second "
-        "(place, modify and cancel together); stops and exits go first"
-    )
-    costs = spec.strategies[0].plan.costs
-    lines.append(f"Charges modelled with: {costs or 'no cost model'}")
-    if parts.mode is Mode.SANDBOX:
-        lines.append(
-            "SANDBOX: OpenAlgo simulates the fills at its own prices; nothing reaches the broker"
-        )
-    lines += [warning_line(note) for note in session.warnings]
     return lines
 
 
@@ -196,4 +207,5 @@ __all__ = [
     "daily_limit_words",
     "limit_lines",
     "positional_lines",
+    "strategy_lines",
 ]
