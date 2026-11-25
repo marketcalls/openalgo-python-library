@@ -141,10 +141,12 @@ class CarriedLegs:
     def after_close(self, trader: Trader, outcome: GttOutcome) -> None:
         """A finding of the GTT follower about `trader`'s GTT once its kernel session has
         closed (module docstring): anything but RESTING leaves the stop GTT of a leg with
-        a position not confirmed; any other GTT is named in an alert of its own."""
+        a position not confirmed; any other GTT is named in an alert of its own. A finding
+        is about the leg's GTT only when it names both its kernel id and its journal GTT
+        (`GttMap.gtt_found`)."""
         if outcome.event is GttEvent.RESTING:
             return
-        known = None if trader.gtts is None else trader.gtts.gtt(outcome.gtt_id)
+        known = None if trader.gtts is None else trader.gtts.gtt_found(outcome)
         if known is None or known.purpose is not Purpose.STOP or trader.open_units() == 0:
             self._other_after_close(trader, known, outcome)
             return

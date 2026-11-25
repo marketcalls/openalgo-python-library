@@ -21,7 +21,10 @@ the style of the venue map's orders (`venue_map`).
   child order the session binds (`_session_gtts`); EXPIRED and REJECTED
   `apply_gtt_ended`; ENDED_OUTSIDE `apply_gtt_cancelled` as not asked for, after which
   the kernel places the stop again or exits flagged `stop_crossed`; IN_FLIGHT and
-  RESTING none; MISMATCH and OTHER_TERMS none: the session locks and alerts.
+  RESTING none; MISMATCH and OTHER_TERMS none: the session locks and alerts. A finding
+  is about a kernel GTT only when it names the kernel's GTT id and the journal's GTT bound
+  to it (`gtt_found`): kernel GTT ids start again at 1 with each kernel session, and the
+  follower follows the journal's GTTs of every day.
 
 - **A restart** (`take_back`): each GTT the kernel restores is taken back with the
   journal's GTT and the broker's trigger ID it is bound to (`_session_restore_gtts`); one
@@ -176,6 +179,14 @@ class GttMap:
         elif request.action is GttAction.PLACE:
             known.placing_ns = self._now()
 
+    def gtt_found(self, outcome: GttOutcome) -> KernelGtt | None:
+        """What the session knows of the kernel GTT a follower's finding is about: kernel
+        GTT `outcome.gtt_id` when the journal's GTT bound to it is `outcome.seq`, else None
+        (a GTT of another kernel session, such as an earlier day's, may have the same
+        kernel id: module docstring)."""
+        known = self._gtts.get(outcome.gtt_id)
+        return known if known is not None and known.seq == outcome.seq else None
+
     def gtt_of_child(self, kernel_order: int) -> KernelGtt | None:
         """The GTT whose child the kernel follows as `kernel_order`, or None."""
         return next((known for known in self._gtts.values() if known.child == kernel_order), None)
@@ -293,9 +304,10 @@ class GttMap:
     def found(self, outcome: GttOutcome) -> GttHandled:
         """Apply a finding of the GTT follower about one of this map's GTTs (module
         docstring). A finding about a GTT this session never placed nor took back (one of
-        an earlier day the follower follows from the journal: unit N5 restores those), or
-        one a restart left unsettled, changes nothing in the kernel."""
-        known = self._gtts.get(outcome.gtt_id)
+        an earlier day the follower follows from the journal, though its kernel id may be
+        one of this session's: unit N5 restores those), or one a restart left unsettled,
+        changes nothing in the kernel."""
+        known = self.gtt_found(outcome)
         event, gtt_id = outcome.event, outcome.gtt_id
         if known is None or known.unsettled:
             logger.warning(

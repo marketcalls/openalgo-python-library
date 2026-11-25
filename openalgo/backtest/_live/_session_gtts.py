@@ -120,7 +120,7 @@ class GttNewsHandler:
 
     def _found(self, trader: Trader, outcome: GttOutcome, handled: GttHandled) -> None:
         applied = handled.applied
-        known = trader.gtts.gtt(outcome.gtt_id) if trader.gtts is not None else None
+        known = trader.gtts.gtt_found(outcome) if trader.gtts is not None else None
         purpose = Purpose.STOP if known is None else known.purpose
         what = _named(outcome.trigger_id, purpose)
         if applied is GttApplied.UNRESOLVED:
