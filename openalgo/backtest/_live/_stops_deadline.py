@@ -13,7 +13,9 @@ deadline once.
 A CNC or NRML leg's stop GTT meets the same deadline from the hand-over of its place to
 the order worker until the worker's answer (20-positional-live 2, "Day 1, entry fills"; the
 lead's ruling N3b-2): the worker answers PLACED only once a read of the GTT book shows it
-resting. The exit then waits for the GTT's cancel, which waits for the place's answer.
+resting. The exit then waits for the GTT's cancel, which waits for the place's answer. A
+place the exit guard holds has not been handed over, so its deadline has not begun (the
+guard's own ERROR alert names it, as for a held stop order).
 
 Times are UTC nanoseconds. Used by the loop only.
 """

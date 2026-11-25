@@ -116,12 +116,13 @@ class GttHandled:
 class KernelGtt:
     """What the session knows of one of the kernel's GTTs: what it is for, the journal's
     GTT and the broker's trigger ID once a place was answered, the commands waiting for
-    them, the terms last asked for, since when (UTC ns) a stop's place waits for its
-    answer (None once answered), the kernel order of its child once it fired, whether
-    a cancel of it was handed to the order worker and not answered (`cancel_sent`),
-    whether a restart could not tell where it stands (`unsettled`, module docstring), and
-    why the close's read of the GTT book did not confirm it, once the kernel's session had
-    closed and could hear of it no more (`unconfirmed`, `_session_carry`; "" for none)."""
+    them, the terms last asked for, since when (UTC ns) a place handed to the order worker
+    waits for its answer (None before the hand-over and once answered), the kernel order
+    of its child once it fired, whether a cancel of it was handed to the order worker and
+    not answered (`cancel_sent`), whether a restart could not tell where it stands
+    (`unsettled`, module docstring), and why the close's read of the GTT book did not
+    confirm it, once the kernel's session had closed and could hear of it no more
+    (`unconfirmed`, `_session_carry`; "" for none)."""
 
     purpose: Purpose
     asked: GttTerms
@@ -165,10 +166,15 @@ class GttMap:
 
     def handed(self, request: GttRequest) -> None:
         """`request` was handed to the order worker: a cancel's GTT may be cancelled at the
-        broker from now (`KernelGtt.cancel_sent`)."""
+        broker from now (`KernelGtt.cancel_sent`), and a place waits for its answer from
+        now (`KernelGtt.placing_ns`; one the exit guard holds has not been handed over)."""
         known = self._gtts.get(request.gtt_id)
-        if known is not None and request.action is GttAction.CANCEL:
+        if known is None:
+            return
+        if request.action is GttAction.CANCEL:
             known.cancel_sent = True
+        elif request.action is GttAction.PLACE:
+            known.placing_ns = self._now()
 
     def gtt_of_child(self, kernel_order: int) -> KernelGtt | None:
         """The GTT whose child the kernel follows as `kernel_order`, or None."""
@@ -215,7 +221,7 @@ class GttMap:
             if gtt_id in self._gtts:
                 raise LiveError(f"kernel GTT g{gtt_id} of {self._strategy} is placed twice")
             purpose = Purpose.STOP if command.get("order_id") is None else Purpose.ENTRY
-            self._gtts[gtt_id] = KernelGtt(purpose, _terms(command), placing_ns=self._now())
+            self._gtts[gtt_id] = KernelGtt(purpose, _terms(command))
             return [self._request(command, None)]
         known = self._gtts.get(gtt_id)
         if known is None or kind not in ("modify_gtt", "cancel_gtt"):

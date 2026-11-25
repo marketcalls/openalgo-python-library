@@ -6,7 +6,10 @@ explain it, the guard holds back every order that would close more than the brok
 For a CNC or NRML leg the stop is a GTT: the guard holds the cancel of the stop GTT while
 the engine holds a position (a target's or a strategy's exit asks for it first, and that
 exit would be held), so the GTT stays at the broker protecting what it holds, and it holds
-a stop GTT placed again for more units than the broker holds.
+a stop GTT placed again for more units than the broker holds. Such a place was never handed
+to the order worker, so the 10-second deadline of a stop GTT not confirmed has not begun for
+it: nothing exits the leg, and once the books agree it goes and the leg stays protected
+(review round 2 finding 3 of unit N3b).
 
 The market and the strategies are `positional_samples`': `CncHold` buys 10 SBIN CNC at
 14:42:01, filled at 500.00, with a stop GTT at 497.00; `CncTarget` adds a target at
@@ -99,6 +102,57 @@ def test_a_stop_gtt_ended_by_hand_on_a_guarded_leg_is_not_placed_again_beyond_th
     assert gtts(world) == [("cancelled", 10, GTT_TRIGGER, "SELL")]
     held = [e for e in events(outcome, "exit_held") if e.get("gtt") is not None]
     assert [(e["gtt"], e["held"]) for e in held] == [(2, "request")]
+
+
+def cancelled_by_hand_at(world, instant_ns):
+    """The first GTT is cancelled by hand at `instant_ns`: the engine places its stop again
+    for its 10 units, which the guard holds while the broker holds 5."""
+    world.trace.waive("exits within the position", "the GTT is cancelled by hand")
+
+    def cancel_by_hand():
+        world.fake.set_gtt_status(first_trigger(world), "cancelled")
+
+    world.script.at(instant_ns, cancel_by_hand)
+
+
+@MODES
+def test_a_stop_gtt_place_the_guard_holds_starts_no_unprotected_deadline(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # The place was never handed to the order worker: the deadline of a stop GTT not
+    # confirmed runs from that hand-over, so nothing exits the leg and no alert says the
+    # GTT was accepted.
+    world = guarded_world(make_fake_openalgo, monkeypatch, tmp_path, analyzer)
+    cancelled_by_hand_at(world, ist(14, 44))
+
+    outcome = world.run(CncHold)
+
+    assert events(outcome, "stop_unconfirmed") == []
+    assert not [a for a in alerts(caplog, "error") if "not confirmed working" in a]
+    assert calls(world, "cancelgttorder") == []
+    assert sells(world) == []
+
+
+@MODES
+def test_a_held_stop_gtt_place_goes_once_the_books_agree_and_the_leg_stays_protected(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    world = guarded_world(make_fake_openalgo, monkeypatch, tmp_path, analyzer)
+    cancelled_by_hand_at(world, ist(14, 44))
+    agree_at = ist(14, 45)
+    world.script.at(agree_at, lambda: world.fake.set_holding("SBIN", "NSE", 0))
+
+    outcome = world.run(CncHold)
+
+    assert [c.ts_ns > agree_at for c in calls(world, "placegttorder")] == [False, True]
+    assert events(outcome, "stop_unconfirmed") == []
+    assert calls(world, "cancelgttorder") == []
+    assert sells(world) == []
+    assert world.fake.position("SBIN", "NSE") == 10
+    assert gtts(world) == [
+        ("cancelled", 10, GTT_TRIGGER, "SELL"),
+        ("active", 10, GTT_TRIGGER, "SELL"),
+    ]
 
 
 @MODES
