@@ -103,7 +103,8 @@ def test_a_child_not_filled_through_a_base_bar_is_cancelled_and_the_position_exi
     assert list(trades["exit_reason"]) == ["leg_sl"]
     # The engine's exit of what the child left is flagged as such (20-positional-live 3.2).
     fills = outcome.outputs["CncHold"]["fills"]
-    sold = [list(flags) for side, flags in zip(fills["side"], fills["flags"]) if side == "SELL"]
+    rows = zip(fills["side"], fills["flags"], strict=True)
+    sold = [list(flags) for side, flags in rows if side == "SELL"]
     assert sold == [["gtt_child_unfilled"]]
 
 
