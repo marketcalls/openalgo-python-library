@@ -26,19 +26,23 @@ saved state still waits for (`settle`), by the kernel's state and the journal's 
 - Requested, the journal's not placed (refused by the broker, or never reached it): placed
   again; a second refusal is answered as one (`apply_gtt_refused`: the leg is exited and
   entries locked for the day), and a transient one is placed.
+- Requested, the journal's requested and bound to no trigger ID (its place under way when
+  the crash came: it may rest at the broker, which only a read of the GTT book can tell):
+  settled by the order worker as an unanswered place (`_carry_restore.settle_place`; the
+  lead's ruling N5a-5): one of its shape resting is bound, none with no fall since a
+  reference from before the place is placed again once, anything else is unresolved.
 - Anything else: unsettled.
 
 "Bound" is a journal's GTT bound to the broker's trigger ID that has not ended (placed,
 resting, or fired with its child not resolved, which the follower finds). The journal's
 GTT of a restored one is the latest of the day's GTTs of the strategy with its kernel id
-that has not ended, else the latest that has (`Journal.day_gtts`). A call the crash
-caught under way (a place, modify or cancel sent and not answered: a place's GTT not
-bound to a trigger ID yet may rest at the broker, which only a read of the GTT book can
-tell), a GTT that fired or ended with its child followed, or terms that agree with
-neither is **unsettled**: the GTT map
-sends nothing more about it, the strategy's entries are locked with an ERROR alert naming
-it, and nothing is exited (as for an unresolved GTT, 16-session-design 5.3): the user
-settles it by hand. GTTs of earlier days are unit N5's (the follower follows them).
+that has not ended, else the latest that has (`Journal.day_gtts`), else, for a GTT carried
+from an earlier day, the one the saved state binds it to (`_carry_restore.gtt_bindings`).
+A modify or cancel the crash caught under way, a GTT that fired or ended with its child
+followed, or terms that agree with neither is **unsettled**: the GTT map sends nothing
+more about it, the strategy's entries are locked with an ERROR alert naming it, and
+nothing is exited (as for an unresolved GTT, 16-session-design 5.3): the user settles it
+by hand.
 
 Quantities are whole units, prices rupees. Run by the main thread at a restart.
 """
@@ -51,6 +55,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._engine import call
+from ._carry_restore import settle_place
 from ._gtt_types import GttRequest
 from ._journal_gtt_rows import GttBinding, GttState
 from ._plan_catch_up import INSTRUMENT
@@ -77,6 +82,7 @@ class Settle(enum.Enum):
     CONFIRM_MODIFY = "confirm_modify"
     CANCEL = "cancel"
     CONFIRM_CANCEL = "confirm_cancel"
+    SETTLE_PLACE = "settle_place"
     UNSETTLED = "unsettled"
 
 
@@ -98,6 +104,8 @@ def settle(view: Mapping[str, Any], row: GttBinding | None) -> Settled:
     bound = row is not None and row.trigger_id is not None and row.state in _BOUND
     if state == "Requested" and row is None:
         return Settled(Settle.PLACE)
+    if state == "Requested" and row is not None and row.state is GttState.REQUESTED:
+        return Settled(Settle.SETTLE_PLACE)
     if bound and state in ("Requested", "Active") and _same(view, row):
         return Settled(Settle.CONFIRM_PLACE if state == "Requested" else Settle.TAKE_BACK)
     if bound and state == "ModifyPending" and _same(view, row):
@@ -123,21 +131,28 @@ def _ended(view: Mapping[str, Any], row: GttBinding) -> Settled:
     )
 
 
-def restore_gtts(session: Any, trader: Trader) -> None:
+def restore_gtts(session: Any, trader: Trader, bindings: Mapping[int, int] | None = None) -> None:
     """Take back `trader`'s restored GTTs (module docstring) and hand the order worker the
     calls that never reached it, after the kernel's restore and before its leg is
-    protected; `session` is the `_session_loop.Session`."""
+    protected; `session` is the `_session_loop.Session`, `bindings` the journal's GTT of
+    each kernel GTT the saved state kept (`_carry_restore.gtt_bindings`), by which a GTT
+    carried from an earlier day is found. A GTT the strategy's GTT map took back already
+    (`_carry_restore`) is left as it is."""
     gtts = trader.gtts
     if gtts is None or not overnight(trader):
         return
     views = [dict(v) for v in call(trader.engine.gtts, INSTRUMENT, trader.product)]
-    views = [view for view in views if view["state"] in _LIVE_STATES]
+    views = [v for v in views if v["state"] in _LIVE_STATES and gtts.gtt(int(v["gtt_id"])) is None]
     if not views:
         return
-    today = session.parts.journal.day_gtts(trader.name, day=session.parts.spec.day)
+    journal = session.parts.journal
+    today = journal.day_gtts(trader.name, day=session.parts.spec.day)
     # By kernel GTT id, the latest that has not ended, else the latest (module docstring).
     rows = {row.gtt_id: row for row in today if row.state.terminal}
     rows.update({row.gtt_id: row for row in today if not row.state.terminal})
+    for gtt_id, seq in (bindings or {}).items():
+        if gtt_id not in rows and (carried := journal.gtt(seq)) is not None:
+            rows[gtt_id] = carried
     requests: list[GttRequest] = []
     for view in views:
         row = rows.get(int(view["gtt_id"]))
@@ -162,6 +177,8 @@ def _apply(
     gtt_id = int(view["gtt_id"])
     if decided.settle is Settle.PLACE:
         return gtts.requests({**view, "command": "place_gtt"})
+    if decided.settle is Settle.SETTLE_PLACE and row is not None:
+        return settle_place(gtts, view, row)
     seq = None if row is None else row.seq
     trigger_id = "" if row is None or row.trigger_id is None else row.trigger_id
     unsettled = decided.settle is Settle.UNSETTLED

@@ -9,9 +9,11 @@ Times are UTC nanoseconds. Used by the worker's thread only.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
+from ._carry_start import carried_references
 from ._gtt_calls import GttCalls
 from ._gtt_follow import GttFollower
 from ._gtt_reads import GttReader
@@ -40,10 +42,13 @@ def gtt_parts(
     sleep: Sleep,
     calling: Callable[[], AbstractContextManager[None]],
     market_open: Callable[[int], bool] | None,
+    day: dt.date,
 ) -> GttSender:
     """The GTT sender of an order worker and the follower it holds (module docstring),
-    through `client` (the orders client). Raises JournalError when the journal's GTTs
-    cannot be read."""
+    through `client` (the orders client), for the session of trading `day`, whose GTTs
+    carried from an earlier day take their references from the day-close records
+    (`_carry_start.carried_references`). Raises JournalError when the journal's GTTs or
+    records cannot be read."""
     reader = GttReader(
         client,
         guard=guard,
@@ -61,7 +66,7 @@ def gtt_parts(
         market_open=market_open,
         busy=lambda: path.silent_since_ns is not None,
     )
-    follower.restore()
+    follower.restore(carried_references(journal, day))
     news.unknown_order = follower.order_seen
     calls = GttCalls(client, path=path, guard=guard, budget=budget, sleep=sleep, now=now)
     return GttSender(

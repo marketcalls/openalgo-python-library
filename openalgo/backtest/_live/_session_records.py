@@ -6,7 +6,9 @@ closed, and, at the close, every order its venue maps placed.
   poll's, a released held fill's, the trade book's at a reconciliation or a restart) and
   each fill of other orders the reconciler adopted (`source` "external"), with whether
   its price was released unconfirmed (`estimated`) or may lie on another tick
-  (`derived_from_average`).
+  (`derived_from_average`), and the flags the venue gave it (`flags`: "price_unverified"
+  for a fired GTT's child missed and priced at its limit, "missed_day" for one that fired
+  on a day no session ran; 20-positional-live 3.3, 4.3).
 - **Locks** (`LockRecord`): each reason a strategy's entries were locked for, when, and
   when it was lifted (None while it stands). The kernel's own halts (its daily loss
   limit, its drawdown halt) are its trading state, in each strategy's result.
@@ -46,7 +48,7 @@ class FillRecord:
     """A fill the kernel took: when (the word's receive time), the strategy, the broker's
     order ID ("" for an adopted fill of other orders), BUY or SELL, whole units, the
     price, the order's purpose ("external" for an adopted fill), where the word came from
-    (`source`), and the two flags of the module docstring."""
+    (`source`), and the two marks and the venue's flags of the module docstring."""
 
     at_ns: int
     strategy: str
@@ -60,11 +62,15 @@ class FillRecord:
     source: str
     estimated: bool = False
     derived_from_average: bool = False
+    flags: tuple[str, ...] = ()
 
 
-def fill_record(intent: Any, update: Any, increment: Any, *, estimated: bool) -> FillRecord:
+def fill_record(
+    intent: Any, update: Any, increment: Any, *, estimated: bool, flags: tuple[str, ...] = ()
+) -> FillRecord:
     """The record of `increment` (a `_fill_ledger.Increment`) of the order of `intent`, as
-    `update` gave it; `estimated` when its price was released unconfirmed."""
+    `update` gave it; `estimated` when its price was released unconfirmed, with the venue's
+    `flags`."""
     return FillRecord(
         at_ns=update.ts_recv_ns,
         strategy=intent.strategy,
@@ -78,6 +84,7 @@ def fill_record(intent: Any, update: Any, increment: Any, *, estimated: bool) ->
         source=update.source,
         estimated=estimated,
         derived_from_average=increment.derived_from_average,
+        flags=tuple(flags),
     )
 
 

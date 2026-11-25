@@ -103,14 +103,20 @@ def read_server(client: PreflightClient, plan: PreflightPlan) -> ServerFindings:
         if capital is not None:
             needed = f"the capital of {indian_digits(capital)} rupees"
             checks.append(funds_check(available, capital, needed, plan.mode))
-    found = [_symbol_check(client, symbol, exchange) for symbol, exchange in plan.instruments]
+    expired = {(fact.symbol, fact.exchange): fact for fact in plan.expired}
+    found = [
+        _expired_check(expired[pair]) if pair in expired else _symbol_check(client, *pair)
+        for pair in plan.instruments
+    ]
     checks += [check for check, _ in found]
     facts = tuple(facts for _, facts in found if facts is not None)
-    checks += expiry_checks(plan.contracts, facts)
+    contracts = [c for c in plan.contracts if (c.symbol, c.exchange) not in expired]
+    checks += expiry_checks(contracts, facts)
     # One quote shows the broker answers. With no instrument found there is none to ask
-    # for, and their own checks have failed.
-    if facts:
-        checks.append(_quotes_check(client, facts[0]))
+    # for, and their own checks have failed; an expired contract has no quote.
+    quoted_facts = [fact for fact in facts if (fact.symbol, fact.exchange) not in expired]
+    if quoted_facts:
+        checks.append(_quotes_check(client, quoted_facts[0]))
     checks.append(_interval_check(client.intervals(), plan.bar_intervals))
     return ServerFindings(tuple(checks), broker, available, facts)
 
@@ -265,6 +271,17 @@ def _symbol_check(
         True,
         f"{exchange}:{symbol}: lot size {facts.lot_size} units, tick size {facts.tick_size} "
         f"rupees, {limit}",
+    ), facts
+
+
+def _expired_check(facts: InstrumentFacts) -> tuple[Check, InstrumentFacts]:
+    """A carried contract past its last trading day (`PreflightPlan.expired`): not looked
+    up, its facts the reference tables'."""
+    return Check(
+        f"symbol:{facts.exchange}:{facts.symbol}",
+        True,
+        f"{facts.exchange}:{facts.symbol}: a carried contract past its last trading day, not "
+        "looked up in today's master contract; its facts are the reference tables'",
     ), facts
 
 

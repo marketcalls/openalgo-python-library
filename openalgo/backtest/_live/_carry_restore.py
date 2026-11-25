@@ -1,0 +1,148 @@
+"""What a strategy carries from an earlier day, restored into today's kernel session
+(20-positional-live 4.2 steps 4 and 5, section 9; the lead's ruling N5a-1), at the start's
+step 11 once the plan's catch-up is done, for a strategy with nothing saved today.
+
+- **The kernel** takes the day-close record's carried state (`restore_carried_state`): the
+  positions marked at the catch-up's last close, the legs with the levels and rules saved
+  with them (new parameters apply to new entries), the GTTs and GTT orders under new ids,
+  the daily loss measure starting the day as a backtest's does. A state the kernel
+  refuses (another capital, other instruments) stops the start with its words.
+- **Expired contracts**: a position on a contract whose last trading day has passed is
+  recorded exited at its carried last close (reason expiry, flagged
+  `filled_at_last_close`) and its instrument is never traded; a SESSION alert and a
+  warning of the result name it (`expired_words`).
+- **The GTTs** are taken back into the strategy's GTT map by the journal's GTT the record
+  binds each to (`_carry_start.BINDINGS_KEY`): one still bound at the broker is followed
+  as before; one whose place was under way at the close is settled by the order worker as
+  an unanswered place (`settle_place`, the lead's ruling N5a-5); one the journal ended after
+  the close (cancelled by hand, found by the close's follower) ended outside the session,
+  so the kernel places the leg's stop again; any other is unsettled: entries locked with
+  an ERROR alert, never an exit (`_session_restore_gtts`). Each binding is kept with the
+  strategy's saved state (`gtt_bindings`), so a restart later today takes them back too.
+
+Quantities are signed whole units, prices rupees. Run by the main thread at the start.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import replace
+from typing import Any
+
+from .._engine import call
+from .._futures_contracts import last_day
+from ..errors import LiveError
+from ._carry_start import Carried, gtt_seqs
+from ._gtt_types import GttRequest
+from ._journal_gtt_rows import GttBinding, GttState
+from ._plan_catch_up import INSTRUMENT
+from ._session_gtts import lock_unresolved
+from ._session_trader import Trader
+from ._stops_gtt import overnight
+from ._types import AlertKind
+from ._venue_gtts import GttMap
+
+#: The journal's states of a carried GTT still bound at the broker.
+_BOUND = frozenset({GttState.PLACED, GttState.ACTIVE, GttState.TRIGGERED})
+#: The journal's states of a GTT that ended without firing.
+_ENDED_UNFIRED = frozenset({GttState.ENDED, GttState.CANCELLED})
+
+
+def restore_carried(session: Any, trader: Trader, carried: Carried) -> None:
+    """Restore what `trader` carries (module docstring) into its kernel session; `session`
+    is the `_session_loop.Session`. Raises LiveError when the kernel refuses the carried
+    state."""
+    record = carried.record
+    try:
+        ids = call(trader.engine.restore_carried_state, record.carried)
+    except Exception as error:
+        raise LiveError(
+            f"{trader.name}: the engine refused what it carries from {record.day} ({error}): "
+            "the session cannot continue it. Check its position in OpenAlgo"
+        ) from error
+    session.event("carried", strategy=trader.name, day=str(record.day), gtts=len(ids["gtts"]))
+    for index in ids["expired"]:
+        words = expired_words(trader, carried, int(index))
+        session.warn(words)
+        session.alert(AlertKind.SESSION, words)
+    seqs = gtt_seqs(record)
+    requests = []
+    for old, new in sorted(ids["gtts"].items(), key=lambda pair: int(pair[1])):
+        seq = seqs.get(int(old))
+        row = None if seq is None else session.parts.journal.gtt(seq)
+        requests += _take_back(session, trader, int(new), row)
+    session.hand_over(requests)
+
+
+def _take_back(session: Any, trader: Trader, gtt_id: int, row: GttBinding | None) -> list[Any]:
+    """Take carried kernel GTT `gtt_id` back by its journal GTT `row` (module docstring);
+    the requests for the order worker."""
+    gtts = trader.gtts
+    view = call(trader.engine.gtt, gtt_id)
+    if gtts is None or view is None:
+        return []
+    bound = row is not None and row.trigger_id is not None and row.state in _BOUND
+    if row is not None and bound:
+        gtts.take_back(view, seq=row.seq, trigger_id=row.trigger_id or "", unsettled=False)
+        return []
+    if row is not None and row.state is GttState.REQUESTED:
+        return settle_place(gtts, view, row)
+    if row is not None and row.state in _ENDED_UNFIRED:
+        gtts.take_back(view, seq=row.seq, trigger_id=row.trigger_id or "", unsettled=False)
+        call(trader.engine.apply_gtt_cancelled, gtt_id)
+        session.event("carried_gtt_ended", strategy=trader.name, gtt=gtt_id, seq=row.seq)
+        return []
+    seq = None if row is None else row.seq
+    trigger_id = "" if row is None else row.trigger_id or ""
+    gtts.take_back(view, seq=seq, trigger_id=trigger_id, unsettled=True)
+    state = "not in the journal" if row is None else f"{row.state.value} in the journal"
+    lock_unresolved(
+        session,
+        trader,
+        f"its GTT g{gtt_id} carried from an earlier day cannot be taken back ({state})",
+    )
+    return []
+
+
+def settle_place(gtts: GttMap, view: Mapping[str, Any], row: GttBinding) -> list[GttRequest]:
+    """The request that settles a restored GTT whose place the journal shows under way and
+    unbound (`row`; the lead's ruling N5a-5): its place, naming the journal's GTT, which the
+    order worker settles as an unanswered place before anything is sent (`_gtt_send`). The
+    GTT map takes the kernel's GTT `view` (an `Engine.gtt` dict) as a place handed over;
+    its later commands wait for the answer."""
+    (request,) = gtts.requests({**view, "command": "place_gtt"})
+    return [replace(request, seq=row.seq)]
+
+
+def expired_words(trader: Trader, carried: Carried, index: int) -> str:
+    """The words of a carried position on a contract that expired before today (module
+    docstring): its units, the day it was carried from, the contract's last trading day and
+    its last close."""
+    state = carried.record.carried
+    instrument = state["instruments"][index]
+    symbol, exchange = instrument["symbol"], instrument["exchange"]
+    units = sum(p.units for p in carried.positions if (p.symbol, p.exchange) == (symbol, exchange))
+    closes = {int(row["instrument"]): float(row["close_rupees"]) for row in state["last_closes"]}
+    ended = [last_day(i) for i in trader.part.spec.instruments if i.symbol == symbol]
+    when = f" on {ended[0]}" if ended else ""
+    return (
+        f"{trader.name}: {units:g} {symbol} {exchange} carried from {carried.record.day} "
+        f"expired{when}: the exchange settled it, and the engine records it exited at its "
+        f"last close, {closes.get(index, 0.0):.2f}; the session does not trade it"
+    )
+
+
+def gtt_bindings(trader: Trader) -> list[dict[str, int]]:
+    """The journal's GTT each of `trader`'s kernel GTTs is bound to, as its saved state
+    keeps them under `BINDINGS_KEY` (module docstring); none for an MIS strategy."""
+    if not overnight(trader) or trader.gtts is None:
+        return []
+    bindings = []
+    for view in call(trader.engine.gtts, INSTRUMENT, trader.product):
+        known = trader.gtts.gtt(int(view["gtt_id"]))
+        if known is not None and known.seq is not None:
+            bindings.append({"gtt": int(view["gtt_id"]), "seq": known.seq})
+    return bindings
+
+
+__all__ = ["expired_words", "gtt_bindings", "restore_carried", "settle_place"]

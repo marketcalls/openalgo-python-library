@@ -11,6 +11,9 @@ Times are UTC nanoseconds, quantities signed whole units. Used by the worker's t
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from ._carry_start import CarriedReference
 from ._gtt_followed import Followed
 from ._gtt_reads import BookRead, GttReader, LegKey
 from ._gtt_units import References
@@ -37,14 +40,34 @@ class FollowerIntake:
         """Judge `read` (`_gtt_follow.GttFollower.observe`)."""
         raise NotImplementedError
 
-    def restore(self) -> None:
+    def restore(self, carried: Sequence[CarriedReference] = ()) -> None:
         """Follow every GTT of the journal the broker holds that has not ended, and read
         the book at the first step when there is any (20-positional-live 4.2 step 5). Its
         child is looked for from its last change in the journal (it was placed or modified
-        then). It has no reference until a settled read shows it resting (`_gtt_units`)."""
-        for gtt in self._journal.open_gtts():
+        then). It has no reference until a settled read shows it resting (`_gtt_units`),
+        but a GTT carried from an earlier day by a day-close record (`carried`,
+        `_carry_start.carried_references`; the lead's ruling N5a-1 (3)): its leg's units
+        read at that close are the leg's reference, with nothing of the session's own filled
+        on it then (the order path follows today's orders only), and the GTT's own when the
+        close's read confirmed it resting, which is then its last resting read too; it is
+        also the reference from before the place of a GTT of the leg recorded after it (a
+        place a restart finds under way, `_gtt_send`). One the close did not confirm is
+        judged by the first read of the GTT book: resting, it takes the leg's reference
+        then; gone, it has none (a MISMATCH)."""
+        gtts = self._journal.open_gtts()
+        for gtt in gtts:
             if gtt.trigger_id is not None:
                 self._followed[gtt.seq] = Followed(gtt, active_ns=self._last_change(gtt))
+        for reference in carried:
+            leg, read_ns = reference.leg, reference.read_ns
+            self._references.take(leg, reference.units, 0, read_ns)
+            followed = self._followed.get(reference.seq)
+            if followed is not None and reference.confirmed:
+                self._references.pin(reference.seq, leg)
+                followed.active_ns = max(followed.active_ns or 0, read_ns)
+            for later in gtts:
+                if _leg_of(later) == leg and later.recorded_ns > read_ns:
+                    self._references.pin(later.seq, leg)
         self._asked = bool(self._followed)
 
     def _last_change(self, gtt: GttBinding) -> int:
@@ -144,6 +167,10 @@ class FollowerIntake:
         JournalError as `Journal.bind_gtt_child` does."""
         self._journal.bind_gtt_child(seq, order_id, kernel_order)
         self._journal.set_gtt_state(seq, GttState.FIRED, note=f"its child is order {order_id}")
+
+
+def _leg_of(gtt: GttBinding) -> LegKey:
+    return gtt.symbol, gtt.exchange, gtt.product
 
 
 __all__ = ["FollowerIntake"]

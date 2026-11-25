@@ -36,15 +36,18 @@ class FillNews(ResolutionNews):
 
     _session: Any
 
-    def apply_update(self, trader: Trader, update: OrderUpdate) -> FillResult:
-        """Give one order update to the kernel through `trader`'s venue map, then send the
+    def apply_update(
+        self, trader: Trader, update: OrderUpdate, flags: tuple[str, ...] = ()
+    ) -> FillResult:
+        """Give one order update to the kernel through `trader`'s venue map, its fills with
+        the venue's `flags` (a GTT child's fill missed, `_session_gtts`), then send the
         alerts it calls for and note it in the event stream."""
         session = self._session
         kernel_order = trader.venue.kernel_order_of(update.order_id)
         if update.status is OrderStatus.REJECTED and kernel_order is not None:
             self._closing_rejected(trader, kernel_order, update)
         before = trader.open_units()
-        result = trader.venue.news(update)
+        result = trader.venue.news(update, flags)
         if result.increment is not None:
             trader.records.filled(before, trader.open_units())
         session.stops.updated(trader, update, result)
@@ -64,7 +67,7 @@ class FillNews(ResolutionNews):
             session.reconcile.filled(trader, update.ts_recv_ns)
             reason = exit_reason(trader, result.kernel_order, intent.purpose)
             words = None if reason is None else exit_words(trader, result.kernel_order, reason)
-            self._fill_alert(intent, update, result.increment, words)
+            self._fill_alert(intent, update, result.increment, words, flags)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
@@ -87,21 +90,29 @@ class FillNews(ResolutionNews):
         margin.reject(trader, kernel_order, intent, update.rejection_reason or "no reason given")
 
     def _fill_alert(
-        self, intent: OrderIntent, update: OrderUpdate, increment: Increment, words: str | None
+        self,
+        intent: OrderIntent,
+        update: OrderUpdate,
+        increment: Increment,
+        words: str | None,
+        flags: tuple[str, ...],
     ) -> None:
         """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
-        the exit reason of an order that closes a position (`_exit_reasons`), and in a
-        session of several strategies, first, the strategy whose order filled."""
+        the exit reason of an order that closes a position (`_exit_reasons`), the fill's
+        `flags` when it has any, and in a session of several strategies, first, the
+        strategy whose order filled."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
         why = intent.purpose.value
         if words is not None:
             why = f"{why}: {words}"
+        if flags:
+            why = f"{why}; flagged {', '.join(flags)}"
         session = self._session
         # The alert's prefix lists every strategy of the session, so with several the line
         # says whose order it was (2.4.0 item P5-1); a session of one keeps its old line.
         named = f"{intent.strategy} " if len(session.traders) > 1 else ""
         estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
-        record = fill_record(intent, update, increment, estimated=estimated)
+        record = fill_record(intent, update, increment, estimated=estimated, flags=flags)
         session.fills.append(record)
         session.event(
             "fill",
@@ -112,6 +123,7 @@ class FillNews(ResolutionNews):
             source=update.source,
             derived_from_average=increment.derived_from_average,
             estimated=record.estimated,
+            flags=list(flags),
         )
         self._session.alert(
             kind,

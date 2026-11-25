@@ -10,6 +10,7 @@ import contextlib
 from dataclasses import dataclass
 
 from ._alerts_logs import SessionLogs
+from ._carry_start import CarryAtStart
 from ._journal_reads import JournalSession
 from ._preflight_plan import PreflightReport
 from ._shared_alerts import SharedAlerts
@@ -53,7 +54,9 @@ class SessionParts:
     `account`, the guard's `banner` line and the preflight's `report`, the `clients`,
     the `guard`, the shared `alerts` and their `sender`, the session `logs`, journal
     handle L (`journal`) and its `journal_session`, the order `worker`, the loop's
-    `inbox`, and `stack`, which closes what was opened, in reverse."""
+    `inbox`, `stack`, which closes what was opened, in reverse, and `carry`, what the
+    session continues from earlier days (`_carry_start`; None for a part built without
+    one, which continues nothing)."""
 
     spec: SessionSpec
     plan: SessionPlan
@@ -72,6 +75,7 @@ class SessionParts:
     worker: OrderWorker
     inbox: Inbox
     stack: contextlib.ExitStack
+    carry: CarryAtStart | None = None
 
 
 __all__ = ["SessionParts", "SessionStopped", "StopFlag"]

@@ -97,8 +97,8 @@ class Hooks:
         def locked(guard: Any, *args: Any, **kwargs: Any) -> None:
             hooks.locked(guard, *args, **kwargs)
 
-        def applied(news: Any, trader: Any, update: Any) -> Any:
-            return hooks.applied(news, trader, update)
+        def applied(news: Any, trader: Any, update: Any, flags: tuple[str, ...] = ()) -> Any:
+            return hooks.applied(news, trader, update, flags)
 
         for (owner, name), original in self._acts.items():
             monkeypatch.setattr(owner, name, self._acting(owner, name, original))
@@ -172,10 +172,11 @@ class Hooks:
             alerts.__dict__.setdefault("traced", []).append((kind, text))
         self._send(alerts, kind, text, **kwargs)
 
-    def applied(self, news: Any, trader: Any, update: Any) -> Any:
-        """An order word handed to `trader`'s kernel: noted in its run (I5) when its order
-        is not bound in `trader`'s venue map, or the fake records it for another strategy;
-        then handed on, `trader` noted as the one whose word is applied meanwhile."""
+    def applied(self, news: Any, trader: Any, update: Any, flags: tuple[str, ...] = ()) -> Any:
+        """An order word handed to `trader`'s kernel with the venue's `flags`: noted in its
+        run (I5) when its order is not bound in `trader`'s venue map, or the fake records it
+        for another strategy; then handed on, `trader` noted as the one whose word is
+        applied meanwhile."""
         run = self._run_of(trader)
         if run is not None:
             order_id = update.order_id
@@ -186,7 +187,7 @@ class Hooks:
                 run.strayed.append(f"{trader.name} took order {order_id}, recorded for {tag}")
         self._applying.append(trader)
         try:
-            return self._apply_update(news, trader, update)
+            return self._apply_update(news, trader, update, flags)
         finally:
             self._applying.pop()
 

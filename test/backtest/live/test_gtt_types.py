@@ -43,10 +43,16 @@ def test_a_stop_with_a_trigger_a_limit_and_units_is_a_request():
         ({"trigger_price": 0.0}, "its trigger and limit are above 0 rupees"),
         ({"product": "MIS"}, "a GTT holds a CNC or NRML position"),
         ({"quantity": 0}, "its units are above 0"),
-        ({"seq": 3}, "a place names no journal GTT"),
+        ({"action": GttAction.MODIFY}, "a modify or cancel names the journal GTT it is of"),
+        ({"action": GttAction.CANCEL}, "a modify or cancel names the journal GTT it is of"),
     ],
-    ids=["a limit of 0", "a trigger of 0", "MIS", "no units", "a place naming a GTT"],
+    ids=["a limit of 0", "a trigger of 0", "MIS", "no units", "a modify of none", "a cancel"],
 )
 def test_a_request_that_cannot_be_sent_is_refused_saying_why(change, words):
     with pytest.raises(LiveError, match=words):
         GttRequest(**(STOP | change))
+
+
+def test_a_place_naming_its_journal_gtt_is_a_place_under_way_to_settle():
+    # A restart's place the journal shows under way and unbound (the lead's ruling N5a-5).
+    assert GttRequest(**(STOP | {"seq": 3})).seq == 3

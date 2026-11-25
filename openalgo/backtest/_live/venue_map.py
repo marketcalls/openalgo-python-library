@@ -315,12 +315,12 @@ class VenueMap(RestoredOrders, Withdrawals, GttChildren):
             return self._reject(order, "not placed: the order book does not hold it", placed=False)
         return Handled(Applied.NOTHING)
 
-    def news(self, update: OrderUpdate) -> FillResult:
+    def news(self, update: OrderUpdate, flags: tuple[str, ...] = ()) -> FillResult:
         """Take an order's news (2.5 A.2): a quantity that shows the pending modify
-        confirms it first, then the fills and the terminal status go through the order's
-        ledger; a terminal word the kernel took ends what waited for a result (one it
-        refused leaves the order working there, a mismatch in the result). Raises
-        LiveError for an order this map has not bound."""
+        confirms it first, then the fills (with the venue's `flags`) and the terminal status
+        go through the order's ledger; a terminal word the kernel took ends what waited for
+        a result (one it refused leaves the order working there, a mismatch in the result).
+        Raises LiveError for an order this map has not bound."""
         kernel_order = self._by_order_id.get(update.order_id)
         if kernel_order is None:
             raise LiveError(f"order {update.order_id} is not bound in this venue map")
@@ -328,7 +328,7 @@ class VenueMap(RestoredOrders, Withdrawals, GttChildren):
         pending, units = order.modify, update.quantity
         if pending is not None and units == pending.terms.quantity != order.terms.quantity:
             self._modify_result(order, pending, confirmed=True)
-        result = order.ledger.apply(update)
+        result = order.ledger.apply(update, flags)
         # Ended only once the kernel has ended it: after a refused terminal result the
         # kernel still works the order, and its modify and cancel still need results.
         if update.status.terminal and kernel_order not in self._engine.working_orders():

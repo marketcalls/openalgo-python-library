@@ -290,6 +290,7 @@ class OrderWorker(WorkerThread):
             sleep=self._sleep,
             calling=self._calling,
             market_open=self._market_open,
+            day=self._target.day,
         )
 
     def step(self) -> bool:

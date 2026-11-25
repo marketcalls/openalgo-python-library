@@ -34,10 +34,12 @@
   reference under `REFERENCES_KEY` (the kernel's restore takes the record whole), the
   strategy's `self.state` and its version id, on the session's trading day, in the
   ledger of the session's mode (journal L), with each stop GTT the close did not confirm
-  under `UNCONFIRMED_KEY` (its kernel id, trigger ID and why). A strategy that ends flat
-  writes none, but
-  one with a record of the same day (an earlier start's Ctrl+C that kept its leg) has it
-  replaced by its flat state, so the latest record never names a closed position.
+  under `UNCONFIRMED_KEY` (its kernel id, trigger ID and why), and the journal's GTT each
+  carried kernel GTT is bound to under `BINDINGS_KEY`, by which the next day's session
+  takes them back (`_carry_restore`). A strategy that ends flat writes none, but one with
+  a record of the same day (an earlier start's Ctrl+C that kept its leg), or one that
+  continued a record of an earlier day (`_carry_start`), has its flat state written, so
+  the latest record never names a closed position.
 
 Times are UTC nanoseconds, quantities signed whole units, prices rupees. Used by the loop
 only.
@@ -53,6 +55,7 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError
 from ._broker_units import broker_units
+from ._carry_start import BINDINGS_KEY, REFERENCES_KEY, UNCONFIRMED_KEY
 from ._gtt_types import GttBookSeen, GttEvent, GttOutcome, ReadGtts
 from ._own_fills import POSITION_BOOK_LAG_S
 from ._session_trader import Trader
@@ -64,12 +67,6 @@ from .inbox import Books
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: The key of the day-close record that holds each carried leg's reference (module
-#: docstring), beside the kernel's carried state.
-REFERENCES_KEY = "gtt_references"
-#: The key of the day-close record that names each stop GTT the close's read did not
-#: confirm (module docstring), beside the kernel's carried state.
-UNCONFIRMED_KEY = "gtts_not_confirmed"
 #: Half a paisa: two trigger prices closer than it are the same price.
 _PAISA = 0.005
 #: The follower's findings, after the close, of a GTT that holds no carried leg's stop
@@ -234,7 +231,9 @@ class CarriedLegs:
             return
         carried = call(trader.engine.carried_state)
         flat = not carried.get("positions") and not carried.get("orders")
-        if flat and not self._recorded_today(trader):
+        carry = session.parts.carry
+        continued = carry is not None and carry.of(trader.name) is not None
+        if flat and not continued and not self._recorded_today(trader):
             return
         reference = self.references.get(trader.name)
         carried[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]
@@ -242,6 +241,7 @@ class CarriedLegs:
         version = trader.part.spec.version.version_id
         state = dict(trader.part.strategy.state)
         try:
+            carried[BINDINGS_KEY] = self._bindings(trader, carried.get("gtts", []))
             session.parts.journal.put_day_close(
                 trader.name, carried, state, version, day=session.parts.spec.day
             )
@@ -249,6 +249,23 @@ class CarriedLegs:
             session.warn(f"{trader.name}: the day-close record was not written ({error})")
             return
         session.event("day_close", strategy=trader.name, references=len(carried[REFERENCES_KEY]))
+
+    def _bindings(self, trader: Trader, gtts: list[dict[str, Any]]) -> list[dict[str, int]]:
+        """The journal's GTT each carried kernel GTT of `gtts` is bound to, as the record
+        keeps it under `BINDINGS_KEY`: the GTT map's, else (a place under way) the latest
+        journal GTT of the day the strategy recorded with that kernel id."""
+        day = self._session.parts.spec.day
+        rows = self._session.parts.journal.day_gtts(trader.name, day=day)
+        bindings = []
+        for gtt in gtts:
+            gtt_id = int(gtt["gtt"])
+            known = None if trader.gtts is None else trader.gtts.gtt(gtt_id)
+            seqs = [row.seq for row in rows if row.gtt_id == gtt_id and not row.state.terminal]
+            seq = None if known is None else known.seq
+            seq = max(seqs, default=None) if seq is None else seq
+            if seq is not None:
+                bindings.append({"gtt": gtt_id, "seq": seq})
+        return bindings
 
     def _recorded_today(self, trader: Trader) -> bool:
         """Whether the journal holds a day-close record of `trader` of the session's day.

@@ -2,7 +2,10 @@
 strategy's kernel session given its saved state once the plan's catch-up is done, the
 venue map rebuilt from the kernel's (saved id, new id) pairs, every restored order checked
 against the journal and the start's books, the day-long locks set again, the start's
-differences acted on, and then, before the banner, the protective start phase.
+differences acted on, and then, before the banner, the protective start phase. A strategy
+with nothing saved today that carries a position or a GTT from an earlier day is given
+its day-close record instead (`_carry_restore`, 20-positional-live 4.2), and its start's
+difference is acted on as any (`_restart_carried` judged it).
 
 **The restored-order check** (`_check`, 3.6), for each order the saved state worked:
 
@@ -50,6 +53,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._carry_restore import restore_carried
 from ._fill_ledger import VENUE_REJECT_CODE
 from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
@@ -100,11 +104,15 @@ def restore(session: Any, restart: Restart, sleep: Sleep) -> None:
         name: leg.saved.adopted for name, leg in restart.legs.items() if leg.saved is not None
     }
     session.reconcile.start(adopted, restart.own)
+    carry = session.parts.carry
     for trader in session.traders:
         leg = restart.legs[trader.name]
+        carried = None if carry is None else carry.of(trader.name)
         if leg.saved is not None:
             _catch_up_to(session, trader, int(leg.saved.live_state["slice"]), sleep)
             _restore(session, trader, leg.saved, restart)
+        elif carried is not None:
+            restore_carried(session, trader, carried)
         _after(session, trader, leg, restart)
     if adopted:
         # Every order taken back is polled once: the stream may have missed its words.
@@ -269,7 +277,7 @@ def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> Non
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
         reconcile = session.reconcile
         reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
-    restore_gtts(session, trader)
+    restore_gtts(session, trader, None if leg.saved is None else leg.saved.bindings)
     units = trader.open_units()
     if units == 0:
         return

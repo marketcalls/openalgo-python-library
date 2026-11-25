@@ -18,6 +18,7 @@ from typing import Any
 from .._calendar_convert import format_ist
 from ..calendar import default_calendar
 from ..report._format import indian_digits
+from ._carry_lines import carry_lines
 from ._groups import shared_lines
 from ._preflight_gtt import SANDBOX_GTT_LINE
 from ._session_restore import restart_lines
@@ -58,7 +59,8 @@ ON_STOP_LINES = {
 def banner_lines(session: Any) -> list[str]:
     """The start banner of `session` (a `_session_loop.Session` whose strategies are
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
-    zerodha"), at a restart the start's number and each resumed leg with its stop, then
+    zerodha"), at a restart the start's number and each resumed leg with its stop, what
+    the session continues from earlier days (`_carry_lines`), then
     the funds, each strategy's instrument, interval, capital, daily loss limit, entry
     cut-off and square-off, and its daily limits when set (18-multi-strategy 2.5a), each
     instrument's freeze cap (once; `strategy_lines`), each strategy's version id, a
@@ -70,7 +72,7 @@ def banner_lines(session: Any) -> list[str]:
     difference, and the warnings, each once with one prefix."""
     parts = session.parts
     spec = parts.spec
-    lines = [parts.banner, *restart_lines(session)]
+    lines = [parts.banner, *restart_lines(session), *carry_lines(session)]
     lines.append(f"Funds available: Rs {indian_digits(parts.report.funds_available)}")
     lines += strategy_lines(session)
     lines += session.versions.banner_lines()

@@ -68,8 +68,12 @@ leg's stop GTT as the stops supervisor sees it), `_reconcile_guard_gtt` (the exi
 rules for a leg's GTT calls) and `_session_restore_gtts` (the GTTs a same-day restart
 takes back); the end of the day is
 `_session_day_end`, the legs carried past the close and their day-close records
-`_session_carry`, and the worker's GTT requests `_worker_gtts`. OpenAlgo's product names
-are `.._products`'.
+`_session_carry`, and the worker's GTT requests `_worker_gtts`. What a start continues
+from earlier days (20-positional-live 4; unit N5a) is read by `_carry_start` before the
+preflight, judged against the broker's books by `_restart_carried`, restored into the
+kernel by `_carry_restore` and named in the banner by `_carry_lines`; the alert of a
+resumed leg without its stop is `_restart_stops`. OpenAlgo's product names are
+`.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module
 prints: they log to the `openalgo.backtest.live` logger, and a session's own output goes

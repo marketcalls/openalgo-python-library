@@ -17,8 +17,10 @@ GTT map (`_venue_gtts`), then what the session must do around it.
 - **Fired**: the child the follower found is bound in the venue map and, through the order
   worker, in the journal (`BindGttChild`), so its fills and its end come as an order's;
   with its child missed, the fill the position's move stands for is given at once through
-  the venue map's fill path, at the trade book's price or the child's limit (with an
-  ERROR alert when unverified).
+  the venue map's fill path, at the trade book's price or the child's limit, with the
+  finding's flags (`price_unverified`, and `missed_day` for a GTT that fired on a day no
+  session ran: 20-positional-live 3.3, 4.3), and a WARN alert when unverified naming the
+  GTT, the price used and that the contract note holds the true one.
 - **Ended outside the session**, expired or rejected after placement: the kernel places
   the stop again (or exits flagged `stop_crossed`), the session asks `protect` for the leg
   too (it answers that the stop works when the kernel placed it), and a REJECT alert
@@ -35,7 +37,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
-from ._gtt_types import PRICE_UNVERIFIED, GttAction, GttAnswer, GttOutcome
+from ._gtt_types import MISSED_DAY, PRICE_UNVERIFIED, GttAction, GttAnswer, GttOutcome
 from ._journal_gtt_rows import GttTerms
 from ._session_trader import Trader
 from ._stops_kernel import protect
@@ -69,6 +71,8 @@ class GttNewsHandler:
         except LiveError:
             logger.error("GTT news of %s, which runs in no strategy of the session", strategy)
             return
+        if trader.gtts is not None and isinstance(news, GttOutcome):
+            news = trader.gtts.local(news)
         if trader.gtts is None or trader.finished:
             logger.warning("%s: GTT news after its kernel session ended: %r", strategy, news)
             if trader.gtts is not None and isinstance(news, GttOutcome):
@@ -183,15 +187,17 @@ class GttNewsHandler:
             ts_recv_ns=session.now(),
             source=MISSED_SOURCE,
         )
-        session.news.apply_update(trader, update)
+        session.news.apply_update(trader, update, outcome.flags)
         if PRICE_UNVERIFIED in outcome.flags:
+            when = "on a trading day no session ran" if MISSED_DAY in outcome.flags else ""
+            when = when or "and its child order was not found"
+            done = "bought" if terms.side == "BUY" else "sold"
             session.alert(
-                AlertKind.ERROR,
-                f"{trader.name}: {_named(outcome.trigger_id, Purpose.STOP)} of "
-                f"{trader.symbol} {trader.exchange} fired and its child order was not found: "
-                f"its {outcome.units} units are recorded at the child's limit, "
-                f"{outcome.price:.2f}, a price the trade book did not confirm. Check the "
-                "contract note",
+                AlertKind.WARN,
+                f"{trader.name}: {_named(outcome.trigger_id, purpose)} of {trader.symbol} "
+                f"{trader.exchange} fired {when}: its {outcome.units} units are recorded "
+                f"{done} at the child's limit, {outcome.price:.2f}, flagged "
+                f"{', '.join(outcome.flags)}; the contract note holds the true price",
             )
 
     def _unresolved(self, trader: Trader, why: str) -> None:

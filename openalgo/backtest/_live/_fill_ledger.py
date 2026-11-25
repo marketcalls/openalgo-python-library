@@ -210,11 +210,12 @@ class FillLedger:
         """Rupees: `filled_units` times the prices they were given at."""
         return self._filled_value
 
-    def apply(self, update: OrderUpdate) -> FillResult:
-        """Give the kernel the fills `update` (a cumulative word of this order) adds, then
-        its terminal status (module docstring). Never raises for a refusal by the kernel:
-        it is in the result. Raises LiveError when the kernel no longer knows the order
-        whose fill it refused in part."""
+    def apply(self, update: OrderUpdate, flags: tuple[str, ...] = ()) -> FillResult:
+        """Give the kernel the fills `update` (a cumulative word of this order) adds, with
+        the venue's `flags` (`VENUE_FILL_FLAGS`: a GTT child's fill priced at its limit,
+        made on a day no session ran), then its terminal status (module docstring). Never
+        raises for a refusal by the kernel: it is in the result. Raises LiveError when the
+        kernel no longer knows the order whose fill it refused in part."""
         outcome, increment = next_increment(
             self._filled_units,
             self._filled_value,
@@ -227,7 +228,7 @@ class FillLedger:
             told, known = update.filled_quantity, self._filled_units
             logger.info("order %s: a stale word, %d filled of %d", update.order_id, told, known)
         elif increment is not None:
-            refusal, increment = self._give(update, increment)
+            refusal, increment = self._give(update, increment, flags)
             if refusal:
                 outcome = FillOutcome.REFUSED
         ended, differs = self._end(update)
@@ -235,13 +236,19 @@ class FillLedger:
             self._order, outcome, increment, refusal, ended, mismatch=bool(refusal) or differs
         )
 
-    def _give(self, update: OrderUpdate, increment: Increment) -> tuple[str, Increment | None]:
-        """Hand the increment to the kernel: ("", the increment) when it took it, else the
-        refusal's kind and what it recorded (None but after a "would_reverse")."""
+    def _give(
+        self, update: OrderUpdate, increment: Increment, flags: tuple[str, ...]
+    ) -> tuple[str, Increment | None]:
+        """Hand the increment to the kernel with `flags`: ("", the increment) when it took
+        it, else the refusal's kind and what it recorded (None but after a
+        "would_reverse")."""
+        units, price, at = float(increment.units), increment.price, update.ts_recv_ns
         try:
-            self._engine.apply_fill(
-                self._order, float(increment.units), increment.price, update.ts_recv_ns
-            )
+            # Flags go only with a fill that has them: every other fill's call is as before.
+            if flags:
+                self._engine.apply_fill(self._order, units, price, at, flags=list(flags))
+            else:
+                self._engine.apply_fill(self._order, units, price, at)
         except VenueRefusalError as error:
             self._mismatch(
                 f"the engine refused {increment.units} units at {increment.price} of order "

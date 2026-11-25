@@ -83,6 +83,7 @@ class AlertKind(enum.Enum):
     FEED_DEAD = "feed_dead"
     DAILY_SUMMARY = "daily_summary"
     ERROR = "error"
+    WARN = "warn"
 
 
 @dataclass(frozen=True)

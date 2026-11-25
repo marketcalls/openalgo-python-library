@@ -11,6 +11,7 @@ plain-data dict:
 | "adopted" | the signed units the reconciler adopted from other orders' trades (5.3) |
 | "figures" | the strategy's figures of the day as that state holds them (`_session_figures`) |
 | "fill_comparison" | its fills against a backtest, the day's so far (`_fill_comparison`) |
+| "gtt_bindings" | the journal's GTT each kernel GTT is bound to (`_carry_restore.gtt_bindings`) |
 
 It is saved before each batch of the kernel's commands reaches the order worker (design
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
@@ -29,11 +30,13 @@ Quantities are signed units, prices rupees.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._carry_restore import gtt_bindings
+from ._carry_start import BINDINGS_KEY
 from ._fill_comparison import COMPARED, slippage_of, strategy_rows
 from ._kill_switch import ACCOUNT_LOSS, ACCOUNT_PROFIT
 from ._plan_catch_up import INSTRUMENT
@@ -60,14 +63,15 @@ DAY_LOCKS = frozenset(
 class Saved:
     """A strategy's saved state, read back: the kernel's `live_state`, the venue map's
     orders by saved kernel id, whether each saved working order was sent (`sent`), the
-    units the reconciler had adopted, and the product the strategy trades, whose position
-    the state is read for."""
+    units the reconciler had adopted, the product the strategy trades, whose position the
+    state is read for, and the journal's GTT each saved kernel GTT is bound to."""
 
     live_state: dict[str, Any]
     orders: dict[int, SavedOrder]
     sent: dict[int, bool]
     adopted: int
     product: str
+    bindings: dict[int, int] = field(default_factory=dict)
 
     @property
     def units(self) -> int:
@@ -138,6 +142,7 @@ def save(session: Any, trader: Trader) -> None:
         "adopted": session.reconcile.adopted(trader.name),
         FIGURES: session.figures.strategy(trader, slippage_of(rows)),
         COMPARED: session.figures.rows.saved(trader.name, rows),
+        BINDINGS_KEY: gtt_bindings(trader),
     }
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
@@ -190,13 +195,14 @@ def read_saved(state: Mapping[str, Any] | None, strategy: str, product: str) -> 
         orders = read_records(state["venue_map"])
         sent = {int(order["order"]): bool(order["sent"]) for order in live_state["orders"]}
         adopted = int(state.get("adopted", 0))
+        bindings = {int(row["gtt"]): int(row["seq"]) for row in state.get(BINDINGS_KEY, [])}
     except (KeyError, TypeError, ValueError, LiveError) as error:
         raise LiveError(
             f"the saved state of {strategy} in the journal cannot be read ({error}): the "
             "restart cannot resume it. Check its positions in OpenAlgo, then start under "
             "another account name (account=) once they are closed"
         ) from None
-    return Saved(live_state, orders, sent, adopted, product)
+    return Saved(live_state, orders, sent, adopted, product, bindings)
 
 
 def another_instrument(

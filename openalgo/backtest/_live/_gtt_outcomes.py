@@ -2,7 +2,8 @@
 module keeps one job (20-positional-live 3.2, 3.3; the lead's ruling N3a-2): each finding
 a typed outcome (`_gtt_types.GttOutcome`, as `inbox.GttNews`), the journal noted first.
 Triggered (its child found), its child missed (the position's move applied at the trade
-book's price, or at the GTT's limit flagged `price_unverified`), ended outside the session,
+book's price, or at the GTT's limit flagged `price_unverified`, and `missed_day` when it
+fired on a trading day no session ran, 20-positional-live 4.3), ended outside the session,
 expired or rejected, and a mismatch the engine never guesses through stop the following
 of the GTT; the follower posts the others (in flight, resting again, other terms) and
 follows on. The orders already taken (the session's own, or another GTT's child) are never
@@ -23,16 +24,20 @@ Prices are rupees, quantities whole units. Used by the worker's thread only.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .._series import ist_time
+from ..calendar import default_calendar
 from ._gtt_child import missed_price
 from ._gtt_followed import Followed, outcome_of
-from ._gtt_types import PRICE_UNVERIFIED, GttEvent
+from ._gtt_types import MISSED_DAY, PRICE_UNVERIFIED, GttEvent
 from ._gtt_units import UNTOLD, LegUnits, References, UnitsSign, went
 from ._journal_gtt_rows import GttState, GttTerms
-from ._types import LOGGER_NAME
+from ._preflight_carry import missed_days
+from ._types import LOGGER_NAME, Now
 from .inbox import GttNews, Message
 from .journal import Journal
 
@@ -50,11 +55,13 @@ class GttOutcomes:
         post: Callable[[Message], None],
         followed: dict[int, Followed],
         references: References,
+        now: Now,
     ) -> None:
         self._journal = journal
         self._post = post
         self._followed = followed
         self._references = references
+        self._now = now
         self._children: set[str] = set()
 
     def post(self, followed: Followed, event: GttEvent, **fields: Any) -> None:
@@ -74,10 +81,15 @@ class GttOutcomes:
     ) -> None:
         """`followed`'s GTT fired on `terms` with its child missed: their units at the
         price of `tradebook`'s trades (the trade book's answer, None when not read), or at
-        their limit flagged; the journal notes it fired."""
+        their limit flagged `price_unverified`, and `missed_day` too when a trading day of
+        its exchange lies between its last resting read's day and today: it fired on a day
+        no session ran, whose trades today's trade book does not hold (20-positional-live
+        4.3); the journal notes it fired."""
         gtt = followed.gtt
         price = missed_price(gtt, terms, tradebook, self.taken)
-        flags = () if price is not None else (PRICE_UNVERIFIED,)
+        flags: tuple[str, ...] = () if price is not None else (PRICE_UNVERIFIED,)
+        if price is None and self._missed_days(followed):
+            flags += (MISSED_DAY,)
         price = terms.limit_price if price is None else price
         note = f"fired, its child missed: {terms.quantity} units at {price:.2f}"
         self._journal.set_gtt_state(gtt.seq, GttState.FIRED, note=note)
@@ -126,6 +138,14 @@ class GttOutcomes:
             self.unresolved(followed, went(found))
         elif found.sign is UnitsSign.NO_REFERENCE or waited_out:
             self.unresolved(followed, f"{UNTOLD[found.sign]}: whether it fired cannot be told")
+
+    def _missed_days(self, followed: Followed) -> tuple[dt.date, ...]:
+        """The trading days of `followed`'s GTT's exchange after its last resting read's
+        IST day and before today's (none when it has none)."""
+        if followed.active_ns is None:
+            return ()
+        rested, today = ist_time(followed.active_ns).date(), ist_time(self._now()).date()
+        return missed_days(followed.gtt.exchange, rested, today, default_calendar())
 
     def _stop(self, seq: int) -> None:
         self._followed.pop(seq, None)

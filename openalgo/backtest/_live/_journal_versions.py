@@ -19,10 +19,11 @@ from typing import Any
 from ..errors import JournalError
 from ._journal_file import check_name
 from ._journal_handle import JournalHandle
-from ._journal_rows import state_json, unreadable
+from ._journal_rows import day_key, state_json, unreadable
 
 _RECORD = "INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)"
 _OF_DAY = "SELECT * FROM versions WHERE ledger = ? AND day = ? ORDER BY rowid"
+_LAST_RAN = "SELECT MAX(day) AS day FROM versions WHERE ledger = ? AND strategy = ? AND day < ?"
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,18 @@ class JournalVersions(JournalHandle):
                 )
                 for row in rows
             ]
+        except ValueError as error:
+            raise JournalError(unreadable("a strategy's version", error)) from error
+
+    def last_ran(self, strategy: str, before: date) -> date | None:
+        """The latest trading day before `before` on which a session of `strategy` started
+        in the handle's ledger (a start records its version), or None for none: a session
+        that ran after a day-close record may have changed what the record carries
+        (20-positional-live 4.2). Raises `JournalError` for a row it cannot read."""
+        with self._sql("read the days a strategy ran") as sql:
+            row = sql.execute(_LAST_RAN, (self._ledger, strategy, day_key(before))).fetchone()
+        try:
+            return None if row["day"] is None else date.fromisoformat(row["day"])
         except ValueError as error:
             raise JournalError(unreadable("a strategy's version", error)) from error
 

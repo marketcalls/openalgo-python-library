@@ -72,6 +72,7 @@ COLUMNS = {
         "source",
         "estimated",
         "derived_from_average",
+        "flags",
     ],
     "fill_comparison": [
         "strategy",

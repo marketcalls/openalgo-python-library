@@ -31,7 +31,7 @@ from .answers import (
     broker_http_error,
 )
 from .gtts import gtt_rows
-from .hidden_rows import GTT_BOOK, ORDER_BOOK
+from .hidden_rows import GTT_BOOK, ORDER_BOOK, TRADE_BOOK
 from .rows import (
     funds_data,
     holdings_data,
@@ -71,10 +71,12 @@ def tradebook(venue: Venue, payload: dict[str, Any]) -> Answer:
     book = venue.book
     if book.mode is Mode.SANDBOX:
         rows = [trade_row(fill, Mode.SANDBOX) for fill in reversed(book.fills)]
+        rows = venue.hidden.shown(TRADE_BOOK, rows)
         return {"status": "success", "data": rows, **_ANALYZE}, 200
     if venue.session_expired:
         return _broker_failed("trades")
-    return {"status": "success", "data": [trade_row(fill, Mode.LIVE) for fill in book.fills]}, 200
+    rows = venue.hidden.shown(TRADE_BOOK, [trade_row(fill, Mode.LIVE) for fill in book.fills])
+    return {"status": "success", "data": rows}, 200
 
 
 def positionbook(venue: Venue, payload: dict[str, Any]) -> Answer:

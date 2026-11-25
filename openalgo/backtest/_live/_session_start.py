@@ -6,17 +6,16 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
 3. The mode: the guard reads OpenAlgo's analyzer switch, and the session adopts it.
 4. The alerts, on their own client, shared by every thread.
 5. `ping` names the broker (the default account name); the account and server locks.
-6. The day's logs under the account's folder.
-7. The preflight. Started before the open, a preflight that fails only on the broker's
-   login is run again every `LOGIN_RETRY_EVERY_S`, its alert test reported again rather
-   than sent, with an ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The
-   guard's banner line is read now. The later days on which OpenAlgo's holidays and the
-   package calendar disagree are the event `CALENDAR_DISAGREES` once the session exists.
+6. The day's logs under the account's folder; what the session continues from earlier
+   days read from the journal (`_carry_start`: a capital other than a carry's refused).
+7. The preflight. Started before the open, one that fails only on the broker's login runs
+   again every `LOGIN_RETRY_EVERY_S` (its alert test reported again, not sent), with an
+   ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The guard's banner line is
+   read now; the later days OpenAlgo's holidays and the calendar disagree on are the
+   event `CALENDAR_DISAGREES`.
 8. The order worker starts journal handle W, the journal's session of the day and the
-   order path (on its own thread, or inline under the test seam), and the main thread
-   opens journal handle L (`_session_worker`). A strategy a kept stop GTT refusal names,
-   or one that holds a position or a GTT from an earlier day, is refused now, before
-   anything is sent (`_preflight_carry`: PreflightError).
+   order path, and the main thread opens journal handle L (`_session_worker`). A
+   strategy a kept stop GTT refusal names is refused now (PreflightError).
 9. and 10. Unbound intents of the day resolved first, then the books read and each
    strategy's journal position judged against the broker's (`_restart_books`): a broker
    position on a traded symbol that the journal does not hold, or a journal position the
@@ -25,8 +24,8 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
    live series and `init`, its saved `self.state` merged, the catch-up to the present.
    Each kernel session's entries are locked ("starting") and its sizing equity capped by
    the funds available (`_session_traders`); each strategy's version and run manifest
-   written to journal L (`_session_versions`); a restart's saved state restored and
-   checked (`_session_restore.restore`).
+   written to journal L (`_session_versions`); a restart's saved state, or a carry from
+   an earlier day, restored and checked (`_session_restore.restore`).
 
 A failure up to step 11 closes what was opened, in reverse, and is raised. Then
 `begin_trading`: 12. the data worker starts and the loop turns (the start phase): with a
@@ -51,8 +50,9 @@ from ..calendar import default_calendar
 from ..errors import LiveError
 from ..strategy import Strategy
 from ._alerts_logs import SessionLogs, configure_session_logs
+from ._carry_start import CarryAtStart, open_carry, preflight_terms
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
-from ._preflight_carry import refuse_carried, refuse_kept
+from ._preflight_carry import refuse_kept
 from ._preflight_lock import live_root
 from ._preflight_plan import WARNING
 from ._restart_books import judge_start, read_start
@@ -131,7 +131,7 @@ def open_session(
 class _Opened:
     """What steps 2 to 6 opened: the session's `clients`, the `shared` alerts and their
     `sender`, the mode `guard` and the `mode` it adopted, the `account` and its `folder`,
-    and the day's `logs`."""
+    the day's `logs`, and the `broker` `ping` named."""
 
     clients: SessionClients
     shared: SharedAlerts
@@ -141,6 +141,7 @@ class _Opened:
     account: str
     folder: pathlib.Path
     logs: SessionLogs
+    broker: str
 
 
 def _open(
@@ -149,10 +150,12 @@ def _open(
     """Steps 2 to 11 (module docstring) for the checked `spec`, what each step opens closed
     by `stack`."""
     opened = _open_account(spec, client, settings, stack)
-    report = _preflight(spec, opened.clients, opened.mode, opened.shared, settings)
+    path = opened.folder / JOURNAL_FILE_NAME
+    where = {"path": path, "account": opened.account, "broker": opened.broker}
+    carry = open_carry(spec, **where, mode=opened.mode, now=settings.now)
+    report = _preflight(spec, opened, settings, carry)
     banner = opened.guard.banner(report.broker)
     inbox = Inbox(settings.now)
-    path = opened.folder / JOURNAL_FILE_NAME
     target = JournalTarget(
         path, opened.account, report.broker, opened.mode, spec.day, DEFAULT_BUSY_TIMEOUT_S
     )
@@ -172,10 +175,8 @@ def _open(
     )
     journal = started.journal
     refuse_kept(journal.kept_refusals(), spec.positional)
-    names = tuple(each.name for each in spec.strategies)
-    refuse_carried(journal.day_closes(), journal.open_gtts(), names, spec.day)
     start = read_start(started.worker, inbox, settings, journal, spec.day, opened.shared)
-    restart = judge_start(spec, journal, start, opened.shared)
+    restart = judge_start(spec, journal, start, opened.shared, carry)
     snapshot = journal.snapshot(day=spec.day)
     saved = {name: kept.state for name, kept in snapshot.user_states.items()}
     data = opened.clients.data
@@ -198,6 +199,7 @@ def _open(
         worker=started.worker,
         inbox=inbox,
         stack=stack,
+        carry=carry,
     )
     return _ready(parts, settings, start, restart, snapshot)
 
@@ -238,7 +240,7 @@ def _open_account(
     # The alerts close before the logs (closing them twice is safe), so what they say at
     # their end is in the day's log.
     stack.callback(sender.close)
-    return _Opened(clients, shared, sender, guard, mode, account, folder, logs)
+    return _Opened(clients, shared, sender, guard, mode, account, folder, logs, broker)
 
 
 def _ready(
@@ -305,10 +307,12 @@ def _broker(client: Any, account: str | None) -> str:
 
 
 def _preflight(
-    spec: SessionSpec, clients: SessionClients, mode: Mode, alerts: Any, settings: StartSettings
+    spec: SessionSpec, opened: _Opened, settings: StartSettings, carry: CarryAtStart
 ) -> Any:
-    """Step 7, with the wait for the broker's login before the open (3.2). Raises
-    PreflightError as the preflight does."""
+    """Step 7, with the wait for the broker's login before the open (3.2), and the terms
+    of what the session continues from earlier days (`_carry_start.preflight_terms`).
+    Raises PreflightError as the preflight does."""
+    clients, mode, alerts = opened.clients, opened.mode, opened.shared
     now, options = settings.now, spec.arguments
     plan = PreflightPlan(
         instruments=spec.instruments,
@@ -321,6 +325,7 @@ def _preflight(
         alerts=alerts,
         contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
         gtt=bool(spec.gtt_legs),
+        **preflight_terms(carry, spec),
     )
     calendar = default_calendar()
     opens = [calendar.session(exchange, spec.day) for _, exchange in spec.instruments]
