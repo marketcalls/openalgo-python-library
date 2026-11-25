@@ -140,6 +140,24 @@ fn a_flag_the_kernel_sets_itself_is_refused_from_the_venue_and_nothing_is_record
 }
 
 #[test]
+fn a_bit_that_names_no_flag_is_refused_by_its_value_and_nothing_is_recorded() {
+    // Bit 128 is no fill flag (`FillFlags::NAMED`): the refusal says so by its value
+    // rather than naming no flag (unit N4f round 1, finding 5).
+    let mut kernel = long_with_child_fired();
+    let unknown = FillFlags(128).with(FillFlags::PRICE_UNVERIFIED);
+    let refused = kernel.apply_fill_flagged(CHILD, UNITS, CHILD_LIMIT, at(1, 31), unknown);
+    let Err(KernelError::Venue(refusal @ VenueError::InvalidFill { .. })) = refused else {
+        panic!("refused as an invalid fill: {refused:?}");
+    };
+    let message = refusal.to_string();
+    assert!(
+        message.contains("bits 0b10000000 name no fill flag"),
+        "{message}"
+    );
+    assert_eq!(held(&kernel), Some(UNITS));
+}
+
+#[test]
 fn a_backtest_takes_no_flagged_fill() {
     let mut kernel = backtest(config(), bars(&[], &[]));
     let refused = kernel.apply_fill_flagged(OrderId(1), 10.0, 500.0, minute(1), unverified());

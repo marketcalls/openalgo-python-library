@@ -95,17 +95,27 @@ pub(super) fn check_fill(units: f64, price_rupees: f64) -> Result<(), VenueError
 }
 
 /// Refuse the flags of a fill that a venue does not report: any but `FillFlags::FROM_VENUE`'s
-/// (module docs).
+/// (module docs), naming a flag the kernel sets itself, or the value of bits that name no
+/// flag (only a Rust caller can set those; the bindings take names).
 fn check_venue_flags(flags: FillFlags) -> Result<(), VenueError> {
-    let kernels_own = FillFlags(flags.0 & !FillFlags::FROM_VENUE.0);
-    if kernels_own == FillFlags::NONE {
+    let refused = FillFlags(flags.0 & !FillFlags::FROM_VENUE.0);
+    if refused == FillFlags::NONE {
         return Ok(());
     }
+    let named = FillFlags::NAMED
+        .iter()
+        .fold(0, |bits, (flag, _)| bits | flag.0);
+    let unnamed = refused.0 & !named;
+    let what = match unnamed {
+        0 => format!(
+            "flag {} is set by the engine itself",
+            refused.names().join(" and ")
+        ),
+        bits => format!("bits {bits:#b} name no fill flag"),
+    };
     Err(VenueError::InvalidFill {
         reason: format!(
-            "flag {} is set by the engine itself: a venue reports a fill with {} only, \
-             or with none",
-            kernels_own.names().join(" and "),
+            "{what}: a venue reports a fill with {} only, or with none",
             FillFlags::FROM_VENUE.names().join(" or ")
         ),
     })

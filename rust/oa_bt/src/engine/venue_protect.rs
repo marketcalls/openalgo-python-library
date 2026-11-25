@@ -19,6 +19,7 @@ use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::kernel::Engine;
+use super::rearm::StopAsk;
 use super::venue::Replacement;
 use super::venue_roles::{EngineExit, OrderRole};
 use super::venue_session::ExitRequest;
@@ -33,9 +34,7 @@ pub enum Protect {
     WaitsForCancels,
     /// A stop of the leg works already.
     StopWorks,
-    /// An exit of the position waits or works: it closes what the stop would cover. Also a
-    /// rearm_daily leg whose contract's expiry exit is due: no day's stop is placed, and
-    /// the expiry exit goes as the session reaches its next open (`rearm`).
+    /// An exit of the position waits or works: it closes what the stop would cover.
     Exiting,
     /// The leg has no stop level (no `stop=`, a trail or breakeven not armed yet).
     NoStopLevel,
@@ -134,14 +133,12 @@ impl Engine {
         if self.day_validity(&at.slice, at.decided_at).is_err() {
             return Ok(Protect::MarketClosed);
         }
-        if self.rearm_leg_expiring(&at, key)? {
-            return Ok(Protect::Exiting);
-        }
         self.renew_leg_stop(key, false);
         if self.rearms_daily(key) && self.before_session_open(&at) {
             return Ok(Protect::WaitsForOpen);
         }
-        self.sync_leg_stop(at, key)?;
+        // Placed even while the leg's expiry exit is due, as a GTT leg's stop is (`rearm`).
+        self.sync_leg_stop(at, key, StopAsk::Protect)?;
         Ok(match self.working_leg_stop(key) {
             Some(_) => Protect::Placed,
             // Only a rearm_daily leg whose stop the price has crossed is exited here.

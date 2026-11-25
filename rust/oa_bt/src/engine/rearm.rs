@@ -24,13 +24,18 @@
 //! trading day's open, the first day's (a leg carried from an earlier day, `carry`) and
 //! every later day's of a session of several days (`pre_open::reach_session_open`).
 //!
-//! No day's stop is placed for a leg whose contract's expiry exit is due (`expiry`: its
-//! positional exit has passed): the expiry exit goes first and alone, as the session
-//! reaches the open it is due at, and the stop waits for it rather than being placed and
-//! cancelled at once. At a session's first open the expiry exit is made before the stops
-//! are synced; a session started late (its catch-up past the open, or past the exit day's
-//! square-off) makes it at the next open it reaches, and meanwhile neither a tick nor
-//! `protect` places the stop (`protect` then returns `Protect::Exiting`).
+//! The kernel places no day's stop for a leg whose contract's expiry exit is due
+//! (`expiry`: its positional exit has passed): the expiry exit goes first and alone, as
+//! the session reaches the open it is due at, and the stop waits for it rather than being
+//! placed and cancelled at once. At a session's first open the expiry exit is made before
+//! the stops are synced; a session started late (its catch-up past the open, or past the
+//! exit day's square-off) makes it at the next open it reaches, and meanwhile no tick
+//! places the stop. The session's `protect` does place it (`StopAsk::Protect`), as it
+//! places a GTT leg's stop GTT again: the session asks for it when the leg has neither a
+//! stop nor an exit at the broker (an expiry exit the venue rejected, a leg left bare), so
+//! the broker holds a stop until the next open's expiry exit cancels it first. An exit
+//! sent there instead could be rejected as the last one was, and the session protects the
+//! leg again on each such rejection.
 //!
 //! A backtest of it assumes the engine was started before the open on every trading day
 //! the position was held; the result says so (`bt.backtest`). A live session started
@@ -56,6 +61,19 @@ use super::venue_roles::{EngineExit, RiskExitReason};
 /// to be placed again: the leg's stop level was reached (`leg_sl`), as `venue_gtt_protect`
 /// exits a CNC or NRML leg whose stop GTT it cannot place again.
 const CROSSED_EXIT: EngineExit = EngineExit::Risk(RiskExitReason::StopCrossed);
+
+/// Who asks for a leg's stop to be placed (`venue_stop_terms::sync_leg_stop`): it decides
+/// whether a rearm_daily leg's day stop waits while its contract's expiry exit is due
+/// (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StopAsk {
+    /// The kernel keeping the leg's stop on its leg (a fill, a tick, an open, a stop that
+    /// ended by itself): the day stop waits for the expiry exit.
+    Kernel,
+    /// The session's `protect` (`venue_protect`): the day stop is placed even while the
+    /// expiry exit is due.
+    Protect,
+}
 
 /// What a backtest keeps for `rearm_daily`: the session day of each instrument's latest
 /// base bar, so the first bar of a session is known in step 2.
@@ -143,23 +161,28 @@ impl Engine {
     }
 
     /// In a live session, before a rearm_daily leg's stop is placed for `key` at
-    /// `trigger_rupees`, decided as `at` says (module docs): true while the session has not
-    /// reached its open (the stop waits for it), and true after the leg was exited at
+    /// `trigger_rupees`, decided as `at` says and asked for by `ask` (module docs): true
+    /// while the session has not reached its open (the stop waits for it), true while the
+    /// kernel asks and the leg's expiry exit is due, and true after the leg was exited at
     /// market, flagged `stop_crossed`, because the session's last price is at or beyond the
     /// stop; false when the stop is to be placed now. Always false for any other leg.
     ///
-    /// Errors: those of the exit owner.
+    /// Errors: those of `expiry_exit_due` and of the exit owner.
     pub(super) fn rearm_waits_or_crosses(
         &mut self,
         at: SendAt,
         key: PositionKey,
         trigger_rupees: f64,
+        ask: StopAsk,
     ) -> Result<bool, KernelError> {
         if !self.rearms_daily(key) {
             return Ok(false);
         }
         let market_closed = self.day_validity(&at.slice, at.decided_at).is_err();
-        if market_closed || self.before_session_open(&at) || self.rearm_leg_expiring(&at, key)? {
+        if market_closed || self.before_session_open(&at) {
+            return Ok(true);
+        }
+        if ask == StopAsk::Kernel && self.expiry_exit_due(&at.slice, key.instrument)? {
             return Ok(true);
         }
         if !self.stop_crossed(key, trigger_rupees) {
@@ -167,18 +190,6 @@ impl Engine {
         }
         self.request_flagged_exit(at, key, CROSSED_EXIT, FillFlags::STOP_CROSSED)?;
         Ok(true)
-    }
-
-    /// True when `key` is a rearm_daily leg whose contract's expiry exit is due in `at`'s
-    /// slice: no day's stop is placed for it (module docs).
-    ///
-    /// Errors: those of `expiry_exit_due`.
-    pub(super) fn rearm_leg_expiring(
-        &mut self,
-        at: &SendAt,
-        key: PositionKey,
-    ) -> Result<bool, KernelError> {
-        Ok(self.rearms_daily(key) && self.expiry_exit_due(&at.slice, key.instrument)?)
     }
 
     /// As a live session reaches a trading day's open: each open rearm_daily leg whose day

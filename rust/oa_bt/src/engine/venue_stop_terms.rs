@@ -34,6 +34,7 @@ use crate::portfolio::PositionKey;
 
 use super::error::KernelError;
 use super::kernel::Engine;
+use super::rearm::StopAsk;
 use super::venue::{Replacement, SendAt};
 use super::venue_owner::closing_side;
 
@@ -82,20 +83,22 @@ impl Engine {
         self.venue.fired_targets.retain(|(key, _)| open(*key));
         let keys: Vec<PositionKey> = self.venue.leg_stops.iter().map(|stop| stop.key).collect();
         for key in keys {
-            self.sync_leg_stop(at, key)?;
+            self.sync_leg_stop(at, key, StopAsk::Kernel)?;
         }
         Ok(())
     }
 
     /// Keep `key`'s leg stop on its leg (`sync_leg_stops`): a stop not placed yet (the leg
     /// has had none, or `renew_leg_stop` asked for a new one) is placed once the leg has a
-    /// level, no exit closing the whole position waits and no margin rejection holds it.
+    /// level, no exit closing the whole position waits and no margin rejection holds it;
+    /// `ask` says who asks for it (`rearm::StopAsk`).
     ///
     /// Errors: those of `sync_leg_stops`.
     pub(super) fn sync_leg_stop(
         &mut self,
         at: SendAt,
         key: PositionKey,
+        ask: StopAsk,
     ) -> Result<(), KernelError> {
         let Some(stop) = self.leg_stop_of(key) else {
             return Ok(());
@@ -107,7 +110,7 @@ impl Engine {
         let Some(id) = stop.order else {
             let due = wanted > 0.0 && !self.venue.group.holds(key) && !self.exit_closes_leg(key)?;
             // A rearm_daily stop waits for the open, or its leg exits instead (`rearm`).
-            if due && !self.rearm_waits_or_crosses(at, key, trigger)? {
+            if due && !self.rearm_waits_or_crosses(at, key, trigger, ask)? {
                 let units = self.take_room_for_stop(at, key, None, wanted)?;
                 self.place_leg_stop(at, key, units, stop.replaced)?;
             }

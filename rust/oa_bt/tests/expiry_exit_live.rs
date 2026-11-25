@@ -509,13 +509,76 @@ fn a_late_start_after_the_exit_days_square_off_sends_the_expiry_exit_alone() {
     );
 }
 
+/// The rearm_daily leg's day stop at 950.00, the 1,000.00 entry less 50 points.
+fn days_stop_at_950() -> (Side, f64, OrderType, OrderRole) {
+    let stop = OrderType::StopMarket {
+        trigger_rupees: 950.0,
+    };
+    (Side::Sell, 75.0, stop, OrderRole::LegStop)
+}
+
 #[test]
-fn protect_of_a_late_started_rearm_daily_leg_past_its_exit_places_no_stop_and_names_the_exit() {
-    // The session asks to protect the carried leg at its late start: the leg is to be
-    // exited at the next open the session reaches, so no day's stop goes out for it.
+fn protect_of_a_late_started_rearm_daily_leg_past_its_exit_places_its_days_stop() {
+    // The session asks to protect the carried leg at its late start, before the next open
+    // sends its expiry exit: the leg has neither a stop nor an exit at the broker, so its
+    // day's stop is placed, as protect places a GTT leg's stop GTT (unit N4f round 1,
+    // finding 1). Only the session's own ticks and opens wait for the expiry exit.
     let (instrument, carried) = carried_from_monday(rearm_daily(), stop_50(), tuesday());
     let mut kernel = started_late(instrument, &carried, 30);
-    assert_eq!(kernel.protect(SBIN, Product::Nrml), Ok(Protect::Exiting));
+    assert_eq!(kernel.protect(SBIN, Product::Nrml), Ok(Protect::Placed));
+    assert_eq!(placed(&kernel.take_commands()), vec![days_stop_at_950()]);
+}
+
+/// Wednesday's session, the contract's exit day, holding one lot of a rearm_daily leg
+/// bought at 1,000.00 with its day stop at 950.00: the 15:10 expiry exit cancelled the
+/// stop first, and the venue rejected the exit, so nothing of the leg is at the broker.
+fn expiry_exit_rejected_on_the_exit_day() -> Engine {
+    let instrument = contract("SBIN31JUL25FUT", Some(wednesday()));
+    let session = session_with(wednesday(), instrument, rearm_daily());
+    let mut kernel = holding_in(session, wednesday(), stop_50());
+    let mut script = Script::new(Vec::new());
+    run_until(&mut kernel, wednesday(), &mut script, SQUARE_OFF);
+    let cancels = kernel.take_commands();
+    let [VenueCommand::Cancel { order: stop }] = cancels[..] else {
+        panic!("the expiry exit cancels the day's stop first: {cancels:?}");
+    };
+    kernel.apply_cancel(stop).expect("the venue confirms");
+    let sent = kernel.take_commands();
+    let [VenueCommand::Place {
+        order: exit,
+        role: EXPIRY_EXIT,
+        ..
+    }] = sent[..]
+    else {
+        panic!("then the expiry exit goes: {sent:?}");
+    };
+    kernel
+        .apply_reject(exit, RejectCode::Venue)
+        .expect("the venue rejects it");
+    assert_eq!(kernel.take_commands(), Vec::new(), "nothing else is sent");
+    kernel
+}
+
+#[test]
+fn protect_after_the_venue_rejected_the_expiry_exit_places_the_days_stop_again() {
+    // The live layer protects a leg whose exits failed: the day's stop goes out again
+    // (unit N4f round 1, finding 1), as a GTT leg's stop GTT does, and the next open's
+    // expiry exit cancels it first. An exit sent here instead would be rejected as the
+    // last one was, and the live layer would protect again on that rejection.
+    let mut kernel = expiry_exit_rejected_on_the_exit_day();
+    assert_eq!(kernel.protect(SBIN, Product::Nrml), Ok(Protect::Placed));
+    assert_eq!(placed(&kernel.take_commands()), vec![days_stop_at_950()]);
+}
+
+#[test]
+fn a_tick_after_the_venue_rejected_the_expiry_exit_places_no_stop() {
+    // With no protect the session's own tick waits for the next open's expiry exit: the
+    // stop the exit cancelled is not placed again by the kernel (`venue_legs`).
+    let mut kernel = expiry_exit_rejected_on_the_exit_day();
+    let tick = minute_on(wednesday(), SQUARE_OFF as u32) + 10_000_000_000;
+    kernel
+        .push_tick(SBIN, 1000.0, tick)
+        .expect("the tick is taken");
     assert_eq!(kernel.take_commands(), Vec::new());
 }
 
@@ -526,13 +589,7 @@ fn a_late_started_rearm_daily_leg_before_its_exit_gets_its_days_stop() {
     let (instrument, carried) = carried_from_monday(rearm_daily(), stop_50(), last_day());
     let mut kernel = started_late(instrument, &carried, 30);
     let sent = first_tick_and_next_open(&mut kernel, 30);
-    let stop = OrderType::StopMarket {
-        trigger_rupees: 950.0,
-    };
-    assert_eq!(
-        placed(&sent),
-        vec![(Side::Sell, 75.0, stop, OrderRole::LegStop)]
-    );
+    assert_eq!(placed(&sent), vec![days_stop_at_950()]);
 }
 
 #[test]
