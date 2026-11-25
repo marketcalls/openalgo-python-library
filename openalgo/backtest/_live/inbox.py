@@ -20,6 +20,7 @@ worker put on it; only the loop takes from it, in the order the messages were pu
 | `GuardLocked` | order worker | the mode guard's breach |
 | `Books` | order worker | the books and funds read for a reconciliation |
 | `PositionRows` | order worker | a position book read for a held cancel |
+| `GttNews` | order worker | a GTT call's answer, or what the GTT follower found |
 | `WorkerFailed` | order worker | a fatal error |
 | `Candles` | data worker | closed 1-minute broker candles of one instrument |
 | `Quote` | data worker | one instrument's REST quote, while the feed is silent |
@@ -28,7 +29,8 @@ worker put on it; only the loop takes from it, in the order the messages were pu
 A put never waits: the queue is unbounded, because a feed callback must never wait, and
 the loop watches its depth instead (2.9). The order worker's inbox is its request queue
 (the worker's own) plus `RawUpdates`, the FIFO of the order updates the feed's order
-callback receives (`RawOrderUpdate`; both in `_inbox_raw`, re-exported here).
+callback receives (`RawOrderUpdate`; both in `_inbox_raw`, re-exported here, as `GttNews`
+is from `_gtt_types`).
 
 Every message is a frozen dataclass; a raw message from the feed is the callback's own
 copy, which only its reader looks at. Times are UTC nanoseconds, prices rupees.
@@ -43,6 +45,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._bars_candle import Row
+from ._gtt_types import GttNews
 from ._guard_breach import ModeBreach
 from ._inbox_raw import RawOrderUpdate, RawUpdates
 from ._journal_reads import JournalSession
@@ -300,6 +303,7 @@ Message = (
     | GuardLocked
     | Books
     | PositionRows
+    | GttNews
     | WorkerFailed
     | Candles
     | Quote
@@ -369,6 +373,7 @@ __all__ = [
     "FeedEvent",
     "FeedEventKind",
     "FeedTick",
+    "GttNews",
     "GuardLocked",
     "HeldFills",
     "Inbox",

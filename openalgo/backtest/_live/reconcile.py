@@ -8,7 +8,8 @@ safe corrections; it never exits a position and never fires the kill switch).
 product is compared as one group (`_reconcile_groups`, 18-multi-strategy 4.6); each leg's
 broker units are its product's (`_broker_units`).
 
-**In flight** (`_reconcile_steps.in_flight`). A read compares a leg only when it was out of
+**In flight** (`_reconcile_steps.in_flight`; a GTT fired or gone and not resolved holds its
+leg in flight too, `gtts`). A read compares a leg only when it was out of
 flight from before the read began (a fill restarts that) and still is; a leg in flight
 past `RECONCILE_IN_FLIGHT_MAX_S` is compared anyway (late): a difference is alerted, with
 no automatic action and no sighting. A fill of the leg's own orders the read's trade book
@@ -51,6 +52,7 @@ from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ._group_rules import GroupFigure
 from ._groups import GroupKey
+from ._gtt_flight import GttFlight
 from ._reconcile_act import Corrections
 from ._reconcile_ended import EndQueries
 from ._reconcile_findings import FILL_DURING_READ, Findings, Reconciliation
@@ -94,6 +96,8 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
     def __init__(self, session: Any) -> None:
         self._session = session
         self.guard = ExitGuard(session)
+        #: The legs a GTT holds in flight until the GTT follower resolves it (`_gtt_flight`).
+        self.gtts = GttFlight()
         self._adopted: dict[str, int] = {}
         self._orphans: set[str] = set()
         # By strategy: its shared instrument's group as the last comparison judged it.

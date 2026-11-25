@@ -3,11 +3,8 @@
 supervisor (`stops`); the market's messages (ticks, quotes, candles, the feed's events,
 other clients' fills) go to `_session_feed`.
 
-- `OrderNews`: through the order's venue map and fill ledger to the kernel; ENTRY, EXIT
-  and REJECT alerts with the order IDs, an EXIT alert with the order's exit reason
-  (`_exit_reasons`), an ENTRY or EXIT alert of a session of several strategies with the
-  strategy's name after its kind; a fill the kernel refuses is a reconciliation
-  mismatch: the strategy's entries are locked and a RECONCILE_MISMATCH alert sent.
+- `OrderNews`: through the order's venue map and fill ledger to the kernel, with its
+  alerts (`_session_fills`); news of an orphan the reconciler cancels is expected.
 - `SendResult`: the venue map binds, rejects or waits; a refused placement is a REJECT
   alert, a queued one (semi-auto) an ERROR alert, an exit with no answer an ERROR alert.
 - `NotSent`: the venue map rejects an entry or refuses a modify; a stale or refused entry,
@@ -24,39 +21,41 @@ other clients' fills) go to `_session_feed`.
 - `Books`: to the reconciler (`reconcile`); a read the worker did not make (the guard
   locked) stops its reads. Each fill the kernel takes is told to it too, and the news of
   an orphan it cancels is expected.
+- `GttNews`: to the reconciler's record of the legs a GTT holds in flight
+  (`_gtt_flight`), and an event; what each answer and outcome asks of the kernel is
+  applied by unit N3b of 2.5.0, with the kernel's GTT answer calls.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
 Each order answer reaches the stops supervisor after the venue map has applied it. A
 closing order rejected on an instrument several strategies trade, by its placement's
-answer or its REJECTED word, is taken by `_margin_reject` first (its word's fills before
-it): the venue map then takes the answer, whose own rejection the kernel refuses as the
-race of an order ended already. Times are UTC nanoseconds, prices rupees, quantities
-units. Used by the loop only.
+answer or its REJECTED word (`_session_fills`), is taken by `_margin_reject` first: the
+venue map then takes the answer, whose own rejection the kernel refuses as the race of an
+order ended already. Times are UTC nanoseconds, prices rupees, quantities units. Used by
+the loop only.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
-from ._exit_reasons import exit_reason, exit_words
-from ._fill_ledger import FillOutcome, FillResult, Increment
+from ._gtt_types import GttOutcome
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
 from ._order_throttle import throttled_news
 from ._session_feed import MARKET_DATA_HANDLERS
-from ._session_records import fill_record
-from ._session_resolved import ResolutionNews, order_words
+from ._session_fills import RECONCILE_LOCK, FillNews
+from ._session_resolved import order_words
 from ._session_trader import Trader
-from ._types import LOGGER_NAME, AlertKind, OrderIntent, OrderStatus, OrderUpdate
+from ._types import LOGGER_NAME, AlertKind
 from ._venue_requests import Applied, CancelRequest, Handled, ModifyRequest, PlaceRequest
 from ._worker_queue import ReadBooks
 from .inbox import (
     Books,
+    GttNews,
     GuardLocked,
     HeldFills,
     Message,
@@ -73,9 +72,6 @@ from .inbox import (
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: The entry lock a fill the kernel refused sets on its strategy (16-session-design 6.2,
-#: decision 2: lock and alert, nothing sent to fix it).
-RECONCILE_LOCK = "reconciliation"
 #: Why a request was not sent, for the REJECT alert of an entry.
 _NOT_SENT_ENTRY = frozenset({NotSentReason.STALE, NotSentReason.REFUSED, NotSentReason.THROTTLED})
 
@@ -88,7 +84,7 @@ class WorkerFailedError(Exception):
         self.error = error
 
 
-class News(ResolutionNews):
+class News(FillNews):
     """The handlers of the loop's messages (module docstring) for `session`, the
     `_session_loop.Session` that owns them."""
 
@@ -124,102 +120,6 @@ class News(ResolutionNews):
             )
             return
         self.apply_update(trader, message.update)
-
-    def apply_update(self, trader: Trader, update: OrderUpdate) -> FillResult:
-        """Give one order update to the kernel through `trader`'s venue map, then send the
-        alerts it calls for and note it in the event stream."""
-        session = self._session
-        kernel_order = trader.venue.kernel_order_of(update.order_id)
-        if update.status is OrderStatus.REJECTED and kernel_order is not None:
-            self._closing_rejected(trader, kernel_order, update)
-        before = trader.open_units()
-        result = trader.venue.news(update)
-        if result.increment is not None:
-            trader.records.filled(before, trader.open_units())
-        session.stops.updated(trader, update, result)
-        intent = trader.venue.intent_of(result.kernel_order)
-        session.event(
-            "news",
-            strategy=trader.name,
-            order_id=update.order_id,
-            kernel_order=kernel_order,
-            status=update.status.value,
-            filled=update.filled_quantity,
-            average_price=update.average_price,
-            source=update.source,
-            outcome=result.outcome.value,
-        )
-        if result.increment is not None:
-            session.reconcile.filled(trader, update.ts_recv_ns)
-            reason = exit_reason(trader, result.kernel_order, intent.purpose)
-            words = None if reason is None else exit_words(trader, result.kernel_order, reason)
-            self._fill_alert(intent, update, result.increment, words)
-        if result.ended is OrderStatus.REJECTED:
-            why = update.rejection_reason or "no reason given"
-            session.rejected += 1
-            session.alert(
-                AlertKind.REJECT, f"{order_words(intent)} order {update.order_id} rejected: {why}"
-            )
-            session.exits.rejected(trader, result.kernel_order, intent, why)
-        if result.outcome is FillOutcome.REFUSED or result.mismatch:
-            self._mismatch(trader, update)
-        return result
-
-    def _closing_rejected(self, trader: Trader, kernel_order: int, update: OrderUpdate) -> None:
-        """A REJECTED word of `trader`'s working order: a closing order on a shared
-        instrument is held (`_margin_reject`), the word's fills given first."""
-        intent, margin = trader.venue.intent_of(kernel_order), self._session.margin
-        if not margin.takes(trader, intent) or kernel_order not in trader.working():
-            return
-        if update.filled_quantity > trader.venue.filled(kernel_order):
-            self.apply_update(trader, dataclasses.replace(update, status=OrderStatus.OPEN))
-        margin.reject(trader, kernel_order, intent, update.rejection_reason or "no reason given")
-
-    def _fill_alert(
-        self, intent: OrderIntent, update: OrderUpdate, increment: Increment, words: str | None
-    ) -> None:
-        """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
-        the exit reason of an order that closes a position (`_exit_reasons`), and in a
-        session of several strategies, first, the strategy whose order filled."""
-        kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
-        why = intent.purpose.value
-        if words is not None:
-            why = f"{why}: {words}"
-        session = self._session
-        # The alert's prefix lists every strategy of the session, so with several the line
-        # says whose order it was (2.4.0 item P5-1); a session of one keeps its old line.
-        named = f"{intent.strategy} " if len(session.traders) > 1 else ""
-        estimated = session.stops.held.estimated(update.order_id, update.filled_quantity)
-        record = fill_record(intent, update, increment, estimated=estimated)
-        session.fills.append(record)
-        session.event(
-            "fill",
-            strategy=intent.strategy,
-            order_id=update.order_id,
-            units=increment.units,
-            price=increment.price,
-            source=update.source,
-            derived_from_average=increment.derived_from_average,
-            estimated=record.estimated,
-        )
-        self._session.alert(
-            kind,
-            f"{named}{intent.action} {increment.units} {intent.symbol} {intent.exchange} at "
-            f"{increment.price:.2f} ({why}, order {update.order_id})",
-        )
-
-    def _mismatch(self, trader: Trader, update: OrderUpdate) -> None:
-        session = self._session
-        session.mismatches += 1
-        if trader.lock(RECONCILE_LOCK):
-            session.event("lock", strategy=trader.name, reason=RECONCILE_LOCK)
-        session.alert(
-            AlertKind.RECONCILE_MISMATCH,
-            f"{trader.name}: the engine and OpenAlgo differ on order {update.order_id} "
-            f"({update.symbol} {update.exchange}, {update.filled_quantity} filled): entries "
-            "of the strategy are locked for the rest of the session and nothing is sent to "
-            "fix it. Check the position and the order in OpenAlgo",
-        )
 
     def _sent(self, message: SendResult) -> None:
         session = self._session
@@ -341,6 +241,15 @@ class News(ResolutionNews):
     def _books(self, message: Books) -> None:
         self._session.reconcile.books(message)
 
+    def _gtt_news(self, message: GttNews) -> None:
+        news = message.news
+        self._session.reconcile.gtts.take(news)
+        if isinstance(news, GttOutcome):
+            fields = {"strategy": news.strategy, "seq": news.seq, "found": news.event.value}
+        else:
+            fields = {"strategy": news.request.strategy, "seq": news.seq, "answer": news.kind.value}
+        self._session.event("gtt", **fields)
+
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)
 
@@ -376,6 +285,7 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         HeldFills: News._held_fills,
         PositionRows: News._positions,
         Books: News._books,
+        GttNews: News._gtt_news,
         GuardLocked: News._guard_locked,
         WorkerFailed: News._worker_failed,
     }

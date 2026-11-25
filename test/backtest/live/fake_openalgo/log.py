@@ -1,8 +1,9 @@
 """What happened inside the fake OpenAlgo, in order, for a test to assert on.
 
 Every REST call, every fault applied, every tick and order update sent or lost, every
-fill and every switch flipped is an `Entry`. A call the fake does not model, or a failure
-inside the fake itself, is a problem: the SDK turns any exception of its HTTP client into
+fill, every GTT that fired and every switch flipped is an `Entry`. A call the fake does
+not model, or a failure inside the fake itself, is a problem: the SDK turns any
+exception of its HTTP client into
 an "unknown_error" answer, which would hide it, so the fixture fails the test on any
 problem instead.
 """
@@ -22,7 +23,9 @@ FILL = "fill"
 SWITCH = "switch"
 TELEGRAM = "telegram"
 PROBLEM = "problem"
-KINDS = frozenset({CALL, FAULT, TICK, ORDER_UPDATE, FILL, SWITCH, TELEGRAM, PROBLEM})
+#: A GTT fired and placed its child order.
+GTT = "gtt"
+KINDS = frozenset({CALL, FAULT, TICK, ORDER_UPDATE, FILL, SWITCH, TELEGRAM, PROBLEM, GTT})
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,7 @@ __all__ = [
     "CALL",
     "FAULT",
     "FILL",
+    "GTT",
     "KINDS",
     "ORDER_UPDATE",
     "PROBLEM",

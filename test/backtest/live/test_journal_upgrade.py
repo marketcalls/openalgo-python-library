@@ -12,6 +12,7 @@ import pytest
 from journal_samples import ACCOUNT, BROKER, DAY, DAY_NS, journal_path, open_journal
 from journal_samples import started_journal as started
 
+from openalgo.backtest._live._types import Purpose
 from openalgo.backtest._live.journal import GttTerms
 from openalgo.backtest.errors import JournalError
 
@@ -138,9 +139,8 @@ def test_an_upgraded_journal_reads_its_old_rows_and_takes_the_new_ones(path):
     with started(path) as journal:
         assert journal.order_id_of("i1") == "9"
         assert journal.user_state("ema").state == {"count": 4}
-        seq = journal.record_gtt(
-            "ema", 1, 7, "SBIN", "NSE", "CNC", GttTerms("SELL", 790.0, 780.0, 10)
-        )
+        terms = GttTerms("SELL", 790.0, 780.0, 10)
+        seq = journal.record_gtt("ema", 1, 7, "SBIN", "NSE", "CNC", terms, purpose=Purpose.STOP)
         journal.put_day_close("ema", {"positions": []}, {"count": 4}, "0a1b2c3d4e5f")
 
         assert journal.gtt(seq).terms.quantity == 10

@@ -4,9 +4,12 @@ the GTT capability check against the fake OpenAlgo's GTT book in each answer, th
 days missed since a day-close record, the other ledger's carried positions named for the
 banner, the funds check of a carry, and a kept refusal refusing its strategy.
 
-The messages the design quotes are checked word for word. Amounts are worked by hand from
-each position (units times average price, and a future's margin as a percent of its
-contract value or rupees per lot). Nothing contacts a server.
+The messages the design quotes are checked word for word. The rupees a carried position
+holds are the margin its engine blocked when it entered, as its day-close record keeps it
+(`margin_rupees`), each worked by hand from the position: a delivery buy's whole cost (units
+times average price), a future's default margin of 20 percent of its contract value, cut
+with the units a part exit sold, and an option's premium (units times price). Nothing
+contacts a server.
 """
 
 from __future__ import annotations

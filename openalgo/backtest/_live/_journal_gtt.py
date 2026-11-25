@@ -5,7 +5,8 @@ state it took and when, and the child order it placed when it fired.
 A GTT is written before its place call (`record_gtt`), as an intent is, so a restart that
 meets an unanswered place finds what to look for in the GTT book; the place's answer binds
 it to the broker's trigger ID (`bind_gtt`), and the session notes each later state
-(`set_gtt_state`) and each modify the broker confirmed (`set_gtt_terms`). A GTT lives
+(`set_gtt_state`), each modify the broker confirmed (`set_gtt_terms`) and the units its
+leg would hold had it not fired (`set_gtt_baseline`). A GTT lives
 across days: it is recorded on the session's day and read back on any later one, by its
 number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`).
 A trigger ID is the broker's GTT's, so it is unique in a ledger. A fired GTT's child is
@@ -25,6 +26,7 @@ from ..errors import JournalError
 from . import _journal_reads as reads
 from ._journal_file import check_name
 from ._journal_gtt_rows import (
+    GTT_PURPOSES,
     GttBinding,
     GttChild,
     GttState,
@@ -32,14 +34,16 @@ from ._journal_gtt_rows import (
     binding_from,
     check_leg,
     child_from,
+    refusal_note,
 )
 from ._journal_handle import JournalHandle
 from ._journal_rows import whole_number
+from ._types import Purpose
 
 _INSERT = (
     "INSERT INTO gtts (ledger, day, strategy, gtt_id, request_id, trigger_id, symbol, "
-    "exchange, product, side, trigger_price, limit_price, quantity, state, recorded_ns, "
-    "changed_ns) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "exchange, product, purpose, side, trigger_price, limit_price, quantity, state, "
+    "recorded_ns, changed_ns) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _STATE = "INSERT INTO gtt_states VALUES (?, ?, ?, ?, ?)"
 _BY_SEQ = "SELECT * FROM gtts WHERE ledger = ? AND seq = ?"
@@ -48,6 +52,14 @@ _OPEN = "SELECT * FROM gtts WHERE ledger = ? AND state NOT IN ({ended}) ORDER BY
 _ENDED = tuple(state.value for state in GttState if state.terminal)
 _CHILD = "SELECT * FROM gtt_children WHERE ledger = ? AND gtt_seq = ?"
 _CHILD_OF_ORDER = "SELECT * FROM gtt_children WHERE ledger = ? AND day = ? AND order_id = ?"
+_REFUSED_DAYS = (
+    "SELECT DISTINCT g.day FROM gtts AS g JOIN gtt_states AS s "
+    "ON s.ledger = g.ledger AND s.gtt_seq = g.seq "
+    "WHERE g.ledger = ? AND g.strategy = ? AND g.symbol = ? AND g.exchange = ? "
+    "AND g.product = ? AND g.purpose = ? AND g.day < ? AND s.state = ? "
+    "AND substr(s.note, 1, ?) = ? "
+    "ORDER BY g.day"
+)
 
 
 class JournalGtts(JournalHandle):
@@ -62,17 +74,22 @@ class JournalGtts(JournalHandle):
         exchange: str,
         product: str,
         terms: GttTerms,
+        *,
+        purpose: Purpose,
     ) -> int:
         """Write a GTT of `strategy` (the kernel's `gtt_id`, placed by the order worker's
-        request `request_id`) before its place call, on the session's day, as REQUESTED;
-        its number in the journal (`GttBinding.seq`). Raises JournalError for a blank name,
-        a product other than CNC or NRML, unusable terms (`GttTerms.checked`), ids that
-        are not whole numbers, or with no `start_session`."""
+        request `request_id`) for `purpose` before its place call, on the session's day, as
+        REQUESTED; its number in the journal (`GttBinding.seq`). Raises JournalError for a
+        blank name, a product other than CNC or NRML, a purpose other than a leg's stop or
+        a strategy's entry, unusable terms (`GttTerms.checked`), ids that are not whole
+        numbers, or with no `start_session`."""
         check_leg(strategy, symbol, exchange, product)
+        if purpose not in GTT_PURPOSES:
+            raise JournalError(f"a GTT is a leg's stop or a strategy's entry, not {purpose!r}")
         terms = terms.checked()
         ids = (whole_number("gtt_id", gtt_id), whole_number("request_id", request_id))
         key, now = self._day_key(None, "record a GTT"), self._now_ns()
-        leg = (strategy, *ids, symbol, exchange, product)
+        leg = (strategy, *ids, symbol, exchange, product, purpose.value)
         prices = (terms.side, terms.trigger_price, terms.limit_price, terms.quantity)
         with self._sql("record the GTT") as sql:
             row = (self._ledger, key, *leg, *prices, GttState.REQUESTED.value, now, now)
@@ -165,6 +182,25 @@ class JournalGtts(JournalHandle):
                 ),
             )
 
+    def set_gtt_baseline(self, seq: int, units: int) -> None:
+        """Note `units`, the signed units GTT `seq`'s leg would hold at the broker had it
+        not fired (its reference moved by the session's own fills since, `_gtt_units`;
+        20-positional-live 3.3, 4.3), as the GTT follower last noted it. A restart does not
+        take it back as the GTT's reference (`_gtt_units` says why). Raises JournalError for
+        units that are not a whole number, and a GTT not in the ledger, not bound to a
+        trigger yet or ended."""
+        baseline = whole_number("baseline_units", units)
+        with self._sql("note the GTT's baseline") as sql:
+            gtt = self._gtt(sql, seq)
+            if gtt.trigger_id is None or gtt.state.terminal:
+                raise JournalError(
+                    f"GTT {seq} is {gtt.state.value}: only a GTT the broker holds has a baseline"
+                )
+            sql.execute(
+                "UPDATE gtts SET baseline_units = ? WHERE ledger = ? AND seq = ?",
+                (baseline, self._ledger, seq),
+            )
+
     def gtt(self, seq: int) -> GttBinding | None:
         """GTT `seq` of the ledger, of whatever day, or None."""
         with self._sql("read the GTT") as sql:
@@ -184,6 +220,23 @@ class JournalGtts(JournalHandle):
         with self._sql("read the open GTTs") as sql:
             rows = sql.execute(query, (self._ledger, *_ENDED)).fetchall()
         return [binding_from(row) for row in rows]
+
+    def refused_days(
+        self, strategy: str, symbol: str, exchange: str, product: str, purpose: Purpose
+    ) -> list[date]:
+        """The trading days before the session's on which the broker refused to place a
+        GTT of `strategy`'s leg made for `purpose`, oldest first: those whose placement was
+        noted not placed with the broker's refusal (`_journal_gtt_rows.refusal_note`).
+        Raises JournalError before `start_session`."""
+        key = self._day_key(None, "read the GTT refusals of earlier days")
+        prefix = refusal_note("")
+        leg = (strategy, symbol, exchange, product, purpose.value)
+        state = GttState.NOT_PLACED.value
+        with self._sql("read the GTT refusals of earlier days") as sql:
+            rows = sql.execute(
+                _REFUSED_DAYS, (self._ledger, *leg, key, state, len(prefix), prefix)
+            ).fetchall()
+        return [date.fromisoformat(row["day"]) for row in rows]
 
     def gtt_states(self, seq: int) -> list[tuple[GttState, str, int]]:
         """Each state GTT `seq` took, with its note and when (UTC nanoseconds), oldest

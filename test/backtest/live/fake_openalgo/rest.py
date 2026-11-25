@@ -5,7 +5,9 @@ unchanged and nothing leaves the process.
 Each call: the scheduled fault of its endpoint (`faults`), the route's rate limit on the
 fake's clock (`limiter`), the API key and OpenAlgo's hold on the broker's login, then the
 route, under the venue's lock; the order updates the route caused are sent once the lock
-is released. A timeout costs the client's read timeout on the fake's clock. Every answer
+is released. A timeout costs the client's read timeout on the fake's clock; a call whose
+server finishes it after that (`Faults.late_landing`) runs its route when the first call
+the fake answers from that time on arrives, before that call is answered. Every answer
 carries an HTTP `Date` from the fake's clock, which the
 preflight's clock check reads, and so does a HEAD of the server's root (the web app's
 page, blueprints/react_app.py). A call the fake does not model, and any failure inside
@@ -20,18 +22,21 @@ import json
 import math
 import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 
 from openalgo.backtest._layout import NANOS_PER_SECOND
 
-from . import routes_account, routes_data, routes_orders
+from . import routes_account, routes_data, routes_gtt, routes_orders
 from .answers import (
     CANCEL_FAILED,
+    CANCEL_GTT_FAILED,
     DROPPED_WORDS,
     INVALID_KEY,
     MODIFY_FAILED,
+    MODIFY_GTT_FAILED,
+    PLACE_GTT_FAILED,
     REFUSED_WORDS,
     TIMEOUT_WORDS,
     UNANSWERED_ORDER_MESSAGE,
@@ -46,6 +51,7 @@ from .faults import (
     BAD_GATEWAY_PAGE,
     DROPPED_CONNECTION,
     GATEWAY_ERROR,
+    LATE_LANDING,
     LOST_ANSWER,
     RATE_LIMITED,
     REFUSED_CONNECTION,
@@ -75,6 +81,9 @@ ROUTES: dict[str, Route] = {
     "holdings": routes_account.holdings,
     "funds": routes_account.funds,
     "gttorderbook": routes_account.gttorderbook,
+    "placegttorder": routes_gtt.place,
+    "modifygttorder": routes_gtt.modify,
+    "cancelgttorder": routes_gtt.cancel,
     "analyzer": routes_account.analyzer,
     "ping": routes_account.ping,
     "symbol": routes_data.symbol,
@@ -91,11 +100,15 @@ _TELEGRAM = "telegram/notify"
 _TELEGRAM_KEY_REFUSED = ({"status": "error", "message": "Invalid or missing API key"}, 401)
 #: The server's answer when it lost the broker's answer to an order write after the
 #: broker acted (services/place_order_service.py, modify_order_service.py,
-#: cancel_order_service.py).
+#: cancel_order_service.py), or the broker module failed after it acted on a GTT call
+#: (services/place_gtt_order_service.py and its siblings: HTTP 500 "due to internal error").
 _LOST = {
     "placeorder": ({"status": "error", "message": UNANSWERED_ORDER_MESSAGE}, 502),
     "modifyorder": ({"status": "error", "message": MODIFY_FAILED}, 500),
     "cancelorder": ({"status": "error", "message": CANCEL_FAILED}, 500),
+    "placegttorder": ({"status": "error", "message": PLACE_GTT_FAILED}, 500),
+    "modifygttorder": ({"status": "error", "message": MODIFY_GTT_FAILED}, 500),
+    "cancelgttorder": ({"status": "error", "message": CANCEL_GTT_FAILED}, 500),
 }
 
 
@@ -109,6 +122,10 @@ class RestHandler:
         self._limiter = RateLimiter()
         # The client of the call being answered on each thread, for the log.
         self._calling = threading.local()
+        # The calls the server finishes after the client's timeout, by when (UTC ns):
+        # (when, endpoint, request, client), oldest first.
+        self._late: list[tuple[int, str, dict[str, Any], str]] = []
+        self._late_lock = threading.Lock()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         """The answer to one request; raises the client's own transport errors for a
@@ -133,6 +150,7 @@ class RestHandler:
         if request.method != "POST" or endpoint == path or endpoint not in ROUTES:
             raise Unmodelled(f"the fake OpenAlgo does not answer {request.method} {path}")
         payload = json.loads(request.content)
+        self._land_due()
         fault = self._faults.take(endpoint)
         if fault is not None:
             self._venue.log.record(self._venue.clock.now(), FAULT, fault.name, endpoint=endpoint)
@@ -147,7 +165,8 @@ class RestHandler:
             return self._sent(endpoint, payload, rate_limited(endpoint), None, limited=True)
         read_timeout = _read_timeout(request)
         times_out = fault is not None and (
-            fault.name == TIMEOUT or (fault.name == SLOW_ANSWER and fault.seconds > read_timeout)
+            fault.name in (TIMEOUT, LATE_LANDING)
+            or (fault.name == SLOW_ANSWER and fault.seconds > read_timeout)
         )
         if fault is not None and fault.name == SLOW_ANSWER and not times_out:
             self._venue.clock.advance(fault.seconds)
@@ -156,14 +175,41 @@ class RestHandler:
         if acts:
             body, status = self._route(endpoint, payload, self._calling.client)
             self._venue.flush()
-        if times_out:
-            # The client gives up after its read timeout, whatever the server does.
-            self._venue.clock.advance(read_timeout)
-            self._note(endpoint, payload, 0, None, fault=TIMEOUT)
-            raise httpx.ReadTimeout(TIMEOUT_WORDS, request=request)
+        if fault is not None and times_out:
+            self._time_out(endpoint, payload, fault, read_timeout, request)
         if fault is not None and fault.name != SLOW_ANSWER:
             return self._faulty(endpoint, payload, fault, request)
         return self._sent(endpoint, payload, service(body, status), body)
+
+    def _time_out(
+        self,
+        endpoint: str,
+        payload: dict[str, Any],
+        fault: RestFault,
+        read_timeout: float,
+        request: httpx.Request,
+    ) -> NoReturn:
+        """The client gives up after its read timeout, whatever the server does: raise its
+        timeout, a late landing kept for its time (module docstring)."""
+        gave_up_ns = self._venue.clock.advance(read_timeout)
+        if fault.name == LATE_LANDING:
+            lands_ns = gave_up_ns + round(fault.seconds * NANOS_PER_SECOND)
+            with self._late_lock:
+                self._late.append((lands_ns, endpoint, payload, self._calling.client))
+        self._note(endpoint, payload, 0, None, fault=TIMEOUT)
+        raise httpx.ReadTimeout(TIMEOUT_WORDS, request=request)
+
+    def _land_due(self) -> None:
+        """Run the routes of the late landings whose time has come, oldest first (module
+        docstring); each is logged as a fault that acted."""
+        now = self._venue.clock.now()
+        with self._late_lock:
+            due = [late for late in self._late if late[0] <= now]
+            self._late = [late for late in self._late if late[0] > now]
+        for _, endpoint, payload, client in due:
+            self._venue.log.record(now, FAULT, "landed", endpoint=endpoint)
+            self._route(endpoint, payload, client)
+            self._venue.flush()
 
     def _route(
         self, endpoint: str, payload: dict[str, Any], client: str

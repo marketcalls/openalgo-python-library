@@ -36,9 +36,9 @@ from .._layout import parse_interval
 from .._manifest import strategy_source_hash
 from .._margin_check import check_margin
 from .._messages import not_supported
+from .._products import MIS
 from .._risk_settings import rupees_amount
 from .._series import ist_time
-from .._setting_checks import INTRADAY_PRODUCT
 from .._settings import RunPlan, resolve
 from .._timeframes import _check_interval
 from .._warm_up import SeriesNeed
@@ -130,12 +130,11 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
         )
     # Until positional live trading is built (20-positional-live, unit N3) a strategy trades
     # the intraday product only: a CNC or NRML one is told to trade it.
-    if strategy.product is not None and strategy.product != INTRADAY_PRODUCT:
+    if strategy.product is not None and strategy.product != MIS:
         raise not_supported(
             f"product {strategy.product} in a live session (positions held overnight need "
             "GTT orders)",
-            f"trade {INTRADAY_PRODUCT}: remove product from the class, or set it to "
-            f"'{INTRADAY_PRODUCT}'",
+            f"trade {MIS}: remove product from the class, or set it to '{MIS}'",
         )
     if strategy.interval:
         _check_interval(strategy.interval, DEFAULT_BASE)

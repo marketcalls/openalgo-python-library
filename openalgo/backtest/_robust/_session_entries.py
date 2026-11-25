@@ -45,6 +45,7 @@ import pandas as pd
 
 from .._calendar_convert import to_seconds
 from .._layout import NANOS_PER_SECOND
+from .._products import MIS
 from ..data._sessions import day_start_ns
 from . import _random
 from ._ohlc import session_days
@@ -85,7 +86,7 @@ def session_times(plan: Any, calendar: Any, days: Sequence[dt.date]) -> tuple[Se
             continue
         opens, closes = hours
         start, until, square = opens, closes, closes
-        if plan.product == "MIS":
+        if plan.product == MIS:
             defaults = calendar.intraday_times(plan.exchange, day)
             start = _clock(day, plan.entry_from) if plan.entry_from else opens
             until = _clock(day, plan.entry_until) if plan.entry_until else defaults.entry_until

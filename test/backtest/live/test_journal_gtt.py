@@ -22,7 +22,8 @@ from journal_samples import (
     started_journal,
 )
 
-from openalgo.backtest._live._types import Mode
+from openalgo.backtest._live._journal_gtt_rows import refusal_note
+from openalgo.backtest._live._types import Mode, Purpose
 from openalgo.backtest._live.journal import GttState, GttTerms
 from openalgo.backtest.errors import JournalError
 
@@ -35,8 +36,12 @@ def path(tmp_path):
     return journal_path(tmp_path)
 
 
-def recorded(journal, gtt_id=1, request_id=7, terms=STOP, product="CNC") -> int:
-    return journal.record_gtt("ema", gtt_id, request_id, "SBIN", "NSE", product, terms)
+def recorded(
+    journal, gtt_id=1, request_id=7, terms=STOP, product="CNC", purpose=Purpose.STOP
+) -> int:
+    return journal.record_gtt(
+        "ema", gtt_id, request_id, "SBIN", "NSE", product, terms, purpose=purpose
+    )
 
 
 # ----- recording and binding --------------------------------------------------------------
@@ -50,6 +55,28 @@ def test_a_gtt_written_before_its_place_call_reads_back_as_requested(path):
     assert (gtt.day, gtt.strategy, gtt.gtt_id, gtt.request_id) == (DAY, "ema", 1, 7)
     assert (gtt.symbol, gtt.exchange, gtt.product, gtt.terms) == ("SBIN", "NSE", "CNC", STOP)
     assert (gtt.state, gtt.trigger_id, gtt.recorded_ns) == (GttState.REQUESTED, None, DAY_NS)
+    assert gtt.purpose is Purpose.STOP
+
+
+@pytest.mark.parametrize("purpose", [Purpose.EXIT, "stop"], ids=["an exit", "a word"])
+def test_a_gtt_is_a_legs_stop_or_a_strategys_entry(path, purpose):
+    with (
+        started_journal(path) as journal,
+        pytest.raises(JournalError, match="a leg's stop or a strategy's entry"),
+    ):
+        recorded(journal, purpose=purpose)
+
+
+def test_an_earlier_days_refusal_is_found_by_what_the_gtt_was_for(path):
+    with started_journal(path) as journal:
+        entry = recorded(journal, purpose=Purpose.ENTRY)
+        journal.set_gtt_state(entry, GttState.NOT_PLACED, note=refusal_note("too close"))
+
+    with started_journal(path, day=NEXT_DAY) as journal:
+        leg = ("ema", "SBIN", "NSE", "CNC")
+        found = [journal.refused_days(*leg, purpose) for purpose in (Purpose.ENTRY, Purpose.STOP)]
+
+    assert found == [[DAY], []]
 
 
 def test_each_gtt_has_its_own_number_in_order(path):
@@ -158,6 +185,41 @@ def test_a_confirmed_modify_keeps_the_terms_the_broker_holds(path):
         journal.set_gtt_terms(seq, trailed)
 
         assert journal.gtt_by_trigger("T-901").terms == trailed
+
+
+def test_a_gtts_baseline_is_none_until_one_is_noted(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+
+        assert journal.gtt(seq).baseline_units is None
+
+
+def test_a_gtts_baseline_is_the_last_one_noted_and_read_back_on_a_later_day(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+        journal.set_gtt_baseline(seq, 10)
+        journal.set_gtt_baseline(seq, 6)
+    clock = ManualClock(ist_ns(NEXT_DAY, 9))
+    with started_journal(path, day=NEXT_DAY, now=clock) as journal:
+        assert [gtt.baseline_units for gtt in journal.open_gtts()] == [6]
+
+
+@pytest.mark.parametrize(("units", "words"), [(2.5, "whole number"), ("10", "whole number")])
+def test_a_baseline_that_is_not_whole_units_is_refused(path, units, words):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        journal.bind_gtt(seq, "T-901")
+        with pytest.raises(JournalError, match=words):
+            journal.set_gtt_baseline(seq, units)
+
+
+def test_a_gtt_not_at_the_broker_has_no_baseline(path):
+    with started_journal(path) as journal:
+        seq = recorded(journal)
+        with pytest.raises(JournalError, match="only a GTT the broker holds has a baseline"):
+            journal.set_gtt_baseline(seq, 10)
 
 
 def test_a_gtt_not_at_the_broker_is_not_modified(path):

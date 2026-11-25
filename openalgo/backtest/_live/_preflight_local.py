@@ -11,12 +11,12 @@ import datetime as dt
 from collections.abc import Iterable
 from typing import Any
 
+from .._products import MIS
 from .._protocols import COVERAGE_LEVELS
 from .._series import ist_time
 from ..calendar import Calendar, IntradayTimes, SessionInfo
 from ..errors import CalendarError
 from ..report._format import indian_digits
-from ._broker_units import MIS
 from ._preflight_plan import WARNING, Check, positive_amount
 from ._types import AlertsLike, Mode
 

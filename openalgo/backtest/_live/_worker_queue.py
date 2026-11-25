@@ -12,8 +12,11 @@ cancel of it is unsettled (`hold`), and a request put back (`put_back`) waits un
 `not_before_ns`, at the head of its FIFO.
 
 The worker's own requests (`ReleaseFill`, `ReleaseCancel`, `ReadBooks`, `ReadPositions`,
-`Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`) belong
-to no order: each is its own FIFO. An entry or add whose
+`Probe`, `StreamGap`, and a restart's `Settle` and the reconciler's `CancelOrphan`, and the
+GTT follower's `ReadGtts` and `BindGttChild`) belong to no order: each is its own FIFO. The
+requests of one kernel GTT (`_gtt_types.GttRequest`: place, modify, cancel; 20-positional-
+live 3.1) share a FIFO of their own, held while one waits for its confirmation, and each
+is an order call. An entry or add whose
 decision is older than `ENTRY_STALE_AFTER_S` when it is taken is not sent (`is_stale`,
 open decision 7). Times are UTC nanoseconds. Used by the worker's thread only; the
 requests any thread hands the worker wait in `_worker_incoming.Incoming` until the worker
@@ -33,6 +36,7 @@ import itertools
 from dataclasses import dataclass
 
 from .._layout import NANOS_PER_SECOND
+from ._gtt_types import BindGttChild, GttKey, GttRequest, ReadGtts, gtt_key
 from ._order_state import ENTRY_PURPOSES
 from ._venue_requests import CancelRequest, ModifyRequest, OrderRequest, PlaceRequest, Priority
 from .inbox import NotSentReason
@@ -156,12 +160,16 @@ WorkerRequest = (
     | Settle
     | CancelOrphan
     | WithdrawPlace
+    | ReadGtts
+    | BindGttChild
 )
 #: Everything the worker takes.
-Request = OrderRequest | WorkerRequest
+Request = OrderRequest | GttRequest | WorkerRequest
 #: A kernel order's FIFO key: (strategy, kernel order), since every engine numbers its
 #: orders from o1.
 OrderKey = tuple[str, int]
+#: A FIFO that can be held: a kernel order's, or a kernel GTT's (`_gtt_types.gtt_key`).
+HeldKey = OrderKey | GttKey
 
 
 def order_key(request: OrderRequest) -> OrderKey:
@@ -170,9 +178,12 @@ def order_key(request: OrderRequest) -> OrderKey:
 
 
 def is_order_call(request: Request) -> bool:
-    """True for a request that makes an order call (place, modify or cancel), the calls
-    the order rate counts (18-multi-strategy 2.5a rule 12)."""
-    return isinstance(request, PlaceRequest | ModifyRequest | CancelRequest | CancelOrphan)
+    """True for a request that makes an order call (place, modify or cancel, of an order
+    or of a GTT), the calls the order rate counts (18-multi-strategy 2.5a rule 12;
+    20-positional-live 13.2 PL3)."""
+    return isinstance(
+        request, PlaceRequest | ModifyRequest | CancelRequest | CancelOrphan | GttRequest
+    )
 
 
 def is_stale(request: Request, now_ns: int) -> bool:
@@ -198,7 +209,7 @@ class WorkerQueue:
 
     def __init__(self) -> None:
         self._fifos: dict[object, collections.deque[_Waiting]] = {}
-        self._held: set[OrderKey] = set()
+        self._held: set[HeldKey] = set()
         self._arrivals = itertools.count()
         # The request last taken, so one put back keeps its place among equal ranks.
         self._taken: _Waiting | None = None
@@ -239,16 +250,17 @@ class WorkerQueue:
         """True while `request` waits in the queue: put and not taken, or put back."""
         return any(waiting.request is request for fifo in self._fifos.values() for waiting in fifo)
 
-    def hold(self, key: OrderKey) -> None:
-        """Take nothing of order `key` until `release` (an unsettled modify or cancel)."""
+    def hold(self, key: HeldKey) -> None:
+        """Take nothing of order (or GTT) `key` until `release` (an unsettled modify or
+        cancel; a GTT call waiting for its confirmation)."""
         self._held.add(key)
 
-    def release(self, key: OrderKey) -> None:
-        """Take order `key`'s requests again."""
+    def release(self, key: HeldKey) -> None:
+        """Take order (or GTT) `key`'s requests again."""
         self._held.discard(key)
 
-    def held(self, key: OrderKey) -> bool:
-        """True while order `key` is held."""
+    def held(self, key: HeldKey) -> bool:
+        """True while order (or GTT) `key` is held."""
         return key in self._held
 
     def ready_orders(self, now_ns: int) -> list[Request]:
@@ -303,6 +315,8 @@ class WorkerQueue:
     def _key(self, request: Request, arrived: int) -> object:
         if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             return order_key(request)
+        if isinstance(request, GttRequest):
+            return gtt_key(request)
         return ("", arrived)
 
 
@@ -310,6 +324,7 @@ __all__ = [
     "CANCELLED_WORDS",
     "ENTRY_STALE_AFTER_S",
     "CancelOrphan",
+    "HeldKey",
     "OrderKey",
     "Probe",
     "ReadBooks",
