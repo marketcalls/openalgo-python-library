@@ -8,8 +8,8 @@ answered, unbound, held back or ambiguous; an add whose answer was lost; a word 
 path holds for the trade book; a modify or cancel waiting for its result or its bind; any
 order of the leg working other than its confirmed, unchanged stop, and other than those
 the exit guard holds (they are not at the broker), and, while the guard holds the stop's
-cancel, an exit never sent that waits for it; a GTT of the leg fired or gone and not
-resolved by the GTT follower (`_gtt_flight`, 20-positional-live 3.2).
+cancel (or the stop GTT's), an exit never sent that waits for it; a GTT of the leg fired
+or gone and not resolved by the GTT follower (`_gtt_flight`, 20-positional-live 3.2).
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -42,6 +42,7 @@ def in_flight(session: Any, trader: Trader) -> bool:
     if any(watched.state in IN_FLIGHT for watched in leg.orders.values()):
         return True
     held, waits = guard.held_orders(trader.name), bool(guard.held_cancels(trader.name))
+    waits = waits or guard.holds_gtt_cancel(trader.name)
     for kernel_order in trader.working():
         watched = leg.orders.get(kernel_order)
         if kernel_order in held or (waits and watched is None):

@@ -33,6 +33,10 @@ placements, entries against its position and the cancel of its stop are held; a 
 placed again is not (it rests until triggered). The comparison then guards the leg, or
 lets them go.
 
+**A leg's stop GTT** (a CNC or NRML leg, 20-positional-live 7.2): the same rules hold its
+GTT calls, the cancel of its stop GTT as the cancel of a stop, a stop GTT placed again or
+raised beyond the room as a stop placed again; `_reconcile_guard_gtt` has them.
+
 What no read knows yet, the limit 16-session-design 5.4 "As built" accepts: a sale by
 hand made after the read began; for a square-off, whose read is asked
 `reconcile.SQUARE_OFF_READ_BEFORE_S` ahead so the square-off is not delayed, one made in
@@ -66,9 +70,11 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from ._gtt_types import GttRequest
 from ._order_state import ENTRY_PURPOSES
+from ._reconcile_guard_gtt import gtt_holds, gtt_takes_away
 from ._reconcile_guard_held import HeldRequests
-from ._reconcile_rules import exit_room
+from ._reconcile_rules import exit_room, reduces
 from ._session_exits import EXIT_PURPOSES
 from ._types import LOGGER_NAME, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest
@@ -115,8 +121,7 @@ class ExitGuard(HeldRequests):
         self._broker[name] = broker_units
         if hold_all:
             self._hold_all.add(name)
-        for request in self._held.get(name, []):
-            self._alert(request)
+        self._alert_held(name)
 
     def close(self, name: str) -> None:
         """The leg agrees with the broker again: its held requests go once it awaits no
@@ -166,6 +171,8 @@ class ExitGuard(HeldRequests):
         self._ended = True
 
     def _holds(self, request: Any) -> bool:
+        if isinstance(request, GttRequest):
+            return self._holds_gtt(request)
         if not isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
             return False
         intent: OrderIntent = request.intent
@@ -181,7 +188,7 @@ class ExitGuard(HeldRequests):
         if isinstance(request, CancelRequest):
             return intent.purpose is Purpose.STOP and engine != 0 and not allowed
         if intent.purpose in ENTRY_PURPOSES:
-            return isinstance(request, PlaceRequest) and _against(intent.action, engine)
+            return isinstance(request, PlaceRequest) and reduces(intent.action, engine)
         if intent.purpose not in CLOSING:
             return False
         if not guarded:
@@ -192,6 +199,21 @@ class ExitGuard(HeldRequests):
             if units <= request.replaces.quantity:
                 return False
         return name in self._hold_all or units > exit_room(engine, self._broker[name])
+
+    def _holds_gtt(self, request: GttRequest) -> bool:
+        """Whether the guard holds a GTT call of a CNC or NRML leg (`_reconcile_guard_gtt`,
+        module docstring "A leg's stop GTT")."""
+        name = request.strategy
+        trader = self._session.trader_named(name)
+        if self._ended:
+            return not gtt_takes_away(trader, request)
+        return gtt_holds(
+            trader,
+            request,
+            awaiting=name in self._awaiting,
+            broker=self._broker.get(name),
+            hold_all=name in self._hold_all,
+        )
 
     def _takes_away(self, request: Any) -> bool:
         """Whether an order request only takes exposure away, so it goes after the end
@@ -213,11 +235,6 @@ class ExitGuard(HeldRequests):
             )
             return same and new.quantity < old.quantity
         return False
-
-
-def _against(action: str, engine_units: int) -> bool:
-    """Whether an order on `action`'s side reduces the engine's position (signed units)."""
-    return (engine_units > 0 and action == "SELL") or (engine_units < 0 and action == "BUY")
 
 
 __all__ = ["CLOSING", "ExitGuard"]

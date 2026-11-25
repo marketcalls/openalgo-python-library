@@ -296,6 +296,11 @@ def exit_room(engine_units: int, broker_units: int) -> int:
     return min(abs(engine_units), abs(broker_units))
 
 
+def reduces(action: str, engine_units: int) -> bool:
+    """Whether an order on `action`'s side reduces the engine's position (signed units)."""
+    return (engine_units > 0 and action == "SELL") or (engine_units < 0 and action == "BUY")
+
+
 def restart_kind(journal_units: int, broker_units: int, unexplained: int) -> RestartKind:
     """What a restart does with a leg (module docstring): `journal_units` the journal
     position, `broker_units` the broker's, `unexplained` what the trades of other orders do
@@ -383,6 +388,7 @@ __all__ = [
     "exit_room",
     "judge",
     "leg_books",
+    "reduces",
     "restart_kind",
     "unexplained_by",
 ]
