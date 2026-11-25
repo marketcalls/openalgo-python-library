@@ -7,17 +7,30 @@ Option buying on NRML passes.
 
 The kernel session is played by hand (no server): a NIFTY call on NFO, lot 75, on
 1-minute slices of Tuesday 2025-07-01 from 09:15 IST, bars flat at 100.00.
+
+In a live session (`bt.live` on the fake OpenAlgo, `stops_samples.option_world`) the
+refusal is the strategy's own exception from `on_bar`: the session alerts it, stops
+safely with nothing sent, and raises it again, as for any error in a strategy's code
+(16-session-design 3.5). The lead's ruling N3b-1 asked for a venue-style rejection at the
+order path; the kernel's refusal comes first, at submission, for MIS as for NRML, so none
+is added (review finding 9 of unit N3b).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any
 
 import numpy as np
 import pytest
+from fake_openalgo.fixtures import *  # noqa: F403
+from session_samples import alerts
+from stops_samples import OPTION, OPTION_LOT, option_world
 
+import openalgo.backtest as bt
 from openalgo.backtest._calendar_convert import native_attr, to_day
+from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest.calendar import default_calendar
 
 DAY = dt.date(2025, 7, 1)
@@ -106,3 +119,32 @@ def test_an_option_bought_on_nrml_is_placed():
     (placed,) = engine.take_commands()
 
     assert (placed["command"], placed["side"], placed["product"]) == ("place", "BUY", "NRML")
+
+
+class OptionSeller(bt.Strategy):
+    """Sells one lot of the option NRML at its first decision, to open a short."""
+
+    symbol, exchange, interval, product = OPTION, "NFO", "1m", "NRML"
+
+    def init(self):
+        self.calls = 0
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.sell(OPTION_LOT)
+
+
+def test_a_live_strategy_that_sells_an_option_to_open_stops_safely_with_nothing_sent(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    world = option_world(make_fake_openalgo, monkeypatch, tmp_path)
+
+    with pytest.raises(NotImplementedError, match="selling an option to open a short position"):
+        world.run(OptionSeller)
+
+    assert world.orders() == []
+    assert world.fake.position(OPTION, "NFO") == 0
+    (alert,) = [a for a in alerts(caplog, "error") if "raised NotImplementedError" in a]
+    assert "The session stops safely" in alert
