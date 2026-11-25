@@ -29,6 +29,11 @@ backstop. That advice holds while the session runs, unlike the note of another l
 session sends nothing more for the instrument today, so it cannot sell beside the
 operator.
 
+A CNC or NRML leg has no square-off (20-positional-live 7.3; the lead's ruling N3b-4): its
+position is carried overnight with its stop GTT, so the review alerts nothing for it, and
+its note says only why nothing more is sent and that the order holding the instrument is
+what to check in the order book (review finding 2 of round 3 of unit N3b).
+
 Times are UTC nanoseconds. Used by the loop only.
 """
 
@@ -38,6 +43,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ._session_trader import Trader
+from ._stops_gtt import overnight
 from ._stops_orders import Sent
 from ._stops_report import left_open, leg_words, stop_state
 from ._types import AlertKind, Purpose
@@ -71,10 +77,18 @@ class DayHolds:
         """What a note of `trader`'s position says of its instrument held for the day, or
         None when it is not held: why nothing can be sent for it, then what to do (module
         docstring), the order book checked first when `check` (an order may still work, or
-        the stop may be at the broker without covering the position)."""
+        the stop may be at the broker without covering the position). A CNC or NRML leg is
+        carried: the order holding it is what to check."""
         holder = self.holder(trader)
         if holder is None:
             return None
+        if overnight(trader):
+            return (
+                f"{trader.symbol} {trader.exchange} is held for the day by {holder}, which "
+                "the order book cannot tell apart from another order: nothing more can be "
+                "sent for it today, so check that order in the order book; the position is "
+                "carried, never squared off"
+            )
         stop_id, confirmed = stop_state(self._stops, trader)
         steps = [f"cancel its stop {stop_id} at the broker"] if confirmed else []
         if check:
@@ -106,10 +120,13 @@ class DayHolds:
 
     def review(self, now_ns: int) -> None:
         """Once a member's square-off has come at `now_ns`, one ERROR alert for each member
-        with a position on an instrument held for the day (module docstring)."""
+        with a position on an instrument held for the day, a CNC or NRML one left out: it
+        has no square-off (module docstring)."""
         session = self._session
         for trader in session.traders:
             if trader.name in self._alerted or now_ns < trader.square_off_ns:
+                continue
+            if overnight(trader):
                 continue
             units = trader.open_units()
             if not units or self.holder(trader) is None:
