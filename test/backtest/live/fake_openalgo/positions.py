@@ -62,6 +62,18 @@ class Positions:
             self._rows[key] = Position(fill.symbol, fill.exchange, fill.product)
         self._rows[key].take(fill)
 
+    def carry(self, position: Position) -> None:
+        """Open the day with `position` carried over from the day before: its units at its
+        average price, nothing realized yet."""
+        key = (position.symbol, position.exchange, position.product)
+        self._rows[key] = Position(
+            position.symbol,
+            position.exchange,
+            position.product,
+            position.quantity,
+            position.average_price,
+        )
+
     def rows(self) -> list[Position]:
         """Every position, flat ones included (a broker lists the day's closed rows)."""
         return list(self._rows.values())

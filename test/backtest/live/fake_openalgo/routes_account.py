@@ -13,7 +13,8 @@ services/analyzer_service.py). The GTT book of a broker that ships no GTT module
 OpenAlgo's HTTP 501, whatever the login; the sandbox answers it for every broker
 (services/gtt_orderbook_service.py). A broker's GTT book on an expired login is the
 broker's own refusal, passed on with its status (broker/zerodha/api/gtt_api.py,
-get_gtt_book).
+get_gtt_book). A row a test hides is left out of the next reads of its book
+(`hidden_rows`).
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from .answers import (
     GTT_NOT_SUPPORTED,
     broker_http_error,
 )
+from .gtts import gtt_rows
+from .hidden_rows import GTT_BOOK, ORDER_BOOK
 from .rows import (
     funds_data,
     holdings_data,
@@ -51,11 +54,12 @@ def orderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
     orders = list(book.orders.values())
     if book.mode is Mode.SANDBOX:
         rows = [order_row(order, Mode.SANDBOX) for order in reversed(orders)]
+        rows = venue.hidden.shown(ORDER_BOOK, rows)
         data = {"orders": rows, "statistics": order_statistics(orders, Mode.SANDBOX)}
         return {"status": "success", "data": data, **_ANALYZE}, 200
     if venue.session_expired:
         return _broker_failed("orders")
-    rows = [order_row(order, Mode.LIVE) for order in orders]
+    rows = venue.hidden.shown(ORDER_BOOK, [order_row(order, Mode.LIVE) for order in orders])
     data = {"orders": rows, "statistics": order_statistics(orders, Mode.LIVE)}
     return {"status": "success", "data": data}, 200
 
@@ -114,20 +118,23 @@ def holdings(venue: Venue, payload: dict[str, Any]) -> Answer:
 
 def gttorderbook(venue: Venue, payload: dict[str, Any]) -> Answer:
     """`gttorderbook` (restx_api/gtt_orderbook.py, services/gtt_orderbook_service.py): the
-    GTTs the account holds, none in this fake, from the sandbox in analyzer mode and from
-    a broker that ships GTT orders; OpenAlgo's 501 from one that does not, and the
-    broker's 403 refusal of an expired login (module docstring)."""
+    GTTs the account holds (`gtts.gtt_rows`: active ones, and with status "all" the ended
+    ones where the book keeps them), from the sandbox in analyzer mode and from a broker
+    that ships GTT orders; OpenAlgo's 501 from one that does not, and the broker's 403
+    refusal of an expired login (module docstring)."""
     status = payload.get("status", "active")
     if status not in GTT_BOOK_STATUSES:
         words = {"status": [f"Must be one of: {', '.join(GTT_BOOK_STATUSES)}."]}
         return {"status": "error", "message": words}, 400
+    book = venue.book
+    rows = gtt_rows(list(book.gtts.values()), book.mode, status=status, history=venue.gtt_history)
     if venue.mode is Mode.SANDBOX:
-        return {"status": "success", "data": [], **_ANALYZE}, 200
+        return {"status": "success", "data": venue.hidden.shown(GTT_BOOK, rows), **_ANALYZE}, 200
     if not venue.gtt_supported:
         return {"status": "error", "message": GTT_NOT_SUPPORTED.format(broker=venue.broker)}, 501
     if venue.session_expired:
         return {"status": "error", "message": EXPIRED_TOKEN}, 403
-    return {"status": "success", "data": []}, 200
+    return {"status": "success", "data": venue.hidden.shown(GTT_BOOK, rows)}, 200
 
 
 def funds(venue: Venue, payload: dict[str, Any]) -> Answer:

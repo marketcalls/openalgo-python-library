@@ -8,7 +8,8 @@ answered, unbound, held back or ambiguous; an add whose answer was lost; a word 
 path holds for the trade book; a modify or cancel waiting for its result or its bind; any
 order of the leg working other than its confirmed, unchanged stop, and other than those
 the exit guard holds (they are not at the broker), and, while the guard holds the stop's
-cancel, an exit never sent that waits for it.
+cancel, an exit never sent that waits for it; a GTT of the leg fired or gone and not
+resolved by the GTT follower (`_gtt_flight`, 20-positional-live 3.2).
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -32,6 +33,8 @@ Finding = tuple[Any, ...]
 
 def in_flight(session: Any, trader: Trader) -> bool:
     """Whether `trader`'s leg is in flight (module docstring)."""
+    if session.reconcile.gtts.holds(trader.name):
+        return True
     stops, guard = session.stops, session.reconcile.guard
     leg = stops.leg(trader)
     if leg.unbound_add_units or stops.held.holds(trader):

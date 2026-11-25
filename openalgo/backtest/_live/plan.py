@@ -60,10 +60,10 @@ from typing import Any
 import pandas as pd
 
 from .._calendar_convert import interval_nanos
+from .._products import CNC
 from ..calendar import Calendar, default_calendar
 from ..strategy import Strategy
 from ._bars_candle import candle_bar
-from ._broker_units import CNC
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_engine import bind_strategy, check_grid, session_engine

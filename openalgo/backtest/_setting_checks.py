@@ -25,12 +25,12 @@ from __future__ import annotations
 from typing import Any
 
 from ._messages import not_supported
+from ._products import MIS
 from .errors import ConfigError
 
 INTRADAY_TIMES = ("entry_from", "entry_until", "square_off")
 # The values of `after_risk_exit` that only the combined rules (Phase 3) would act on.
 AFTER_RISK_EXIT_NOT_BUILT = ("allow_reentry",)
-INTRADAY_PRODUCT = "MIS"
 
 
 def class_leverage(strategy: type) -> float | None:
@@ -80,7 +80,7 @@ def unused_settings(
         )
     if args.get("client") is not None and args["data"] is not None:
         notes.append("client= is not used: the bars come from data=")
-    if product != INTRADAY_PRODUCT:
+    if product != MIS:
         for name in INTRADAY_TIMES:
             value = times[name]
             if value is not None:
@@ -92,4 +92,4 @@ def unused_settings(
     return notes
 
 
-__all__ = ["INTRADAY_PRODUCT", "class_leverage", "refuse_unusable", "unused_settings"]
+__all__ = ["class_leverage", "refuse_unusable", "unused_settings"]

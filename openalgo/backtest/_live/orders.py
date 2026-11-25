@@ -13,7 +13,8 @@ stream, with polling as the fallback and fills confirmed from the tradebook
 
 Reading answers, updates, the order book and one order's row lives in `_order_answers`,
 `_order_updates`, `_order_news`, `_order_book` and `_order_check`, the budget in
-`_order_rate`; their public names are exported here. Times are UTC nanoseconds, prices
+`_order_rate`; their public names are exported here. The session's own fills on a leg, as
+the GTT parts read them, are `_own_fills`' (`own_fills`). Times are UTC nanoseconds, prices
 rupees, quantities units. One loop owns an `OrderPath`: it is not thread-safe, and the
 feed's thread only queues the updates it receives.
 """
@@ -41,6 +42,8 @@ from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS, UnboundResolv
 from ._order_state import ENTRY_PURPOSES, HeldFill
 from ._order_trades import UNSUPPORTED_BROKERS
 from ._order_updates import normalize_update
+from ._order_watch import WatchedPath
+from ._own_fills import OwnFills, OwnOrder
 from ._types import (
     LOGGER_NAME,
     AlertsLike,
@@ -61,9 +64,10 @@ _MODIFY_REQUIRED = frozenset(
 _MODIFY_OPTIONAL = frozenset({"disclosed_quantity"})
 
 
-class OrderPath:
+class OrderPath(WatchedPath):
     """Sends the session's orders through an OpenAlgo client, once each, and follows
-    them until they are terminal.
+    them until they are terminal. Whether OpenAlgo answers, and the probe that asks it,
+    are `_order_watch`'s.
 
     `client` is an `openalgo.api`; `journal`, `guard` and `alerts` the session's; `now`
     gives UTC nanoseconds and `sleep` waits seconds (the clock must move while it waits);
@@ -105,6 +109,9 @@ class OrderPath:
             watch=self._watch,
             now=now,
         )
+        #: The session's own fills on each leg and whether the broker's books show them
+        #: yet, which the GTT parts net out of a leg's broker units (20-positional-live 3.3).
+        self.own_fills = OwnFills(self._own_orders, journal=journal, now=now)
 
     def restore(self) -> None:
         """Take back the journal's bound orders after a restart: they can then be
@@ -300,29 +307,6 @@ class OrderPath:
         one round a second). Nothing is read here."""
         self._follower.stream_gap(since_ns)
 
-    @property
-    def silent_since_ns(self) -> int | None:
-        """Since when (UTC nanoseconds) OpenAlgo has not answered a call after a client
-        timeout or a dropped connection (nothing is sent then); None while it answers."""
-        return self._watch.silent_since_ns
-
-    @property
-    def asked_ns(self) -> int | None:
-        """The time (UTC nanoseconds) of the order path's last answer from OpenAlgo, as
-        `ServerWatch` notes it; None before the first."""
-        return self._watch.asked_ns
-
-    def probe(self) -> bool:
-        """Ask OpenAlgo whether it answers again with one `orderbook` read, checked by the
-        guard: OpenAlgo's own JSON (a success or its own error) lifts a silent server's
-        hold on sending; a timeout, a dropped connection or a gateway's page does not.
-        Nothing is read while the guard is locked. True when OpenAlgo is not silent after."""
-        if not self._guard.locked:
-            answer = server_answer(self._client.orderbook())
-            self._watch.note(answer, self._now())
-            self._guard.check_response(answer)
-        return not self._watch.silent
-
     def resolve_unbound(self) -> list[Resolution]:
         """Look for the unbound intents in OpenAlgo's order book, at most once a second.
 
@@ -366,6 +350,16 @@ class OrderPath:
     def _wait_for_budget(self) -> None:
         while (wait := self._rate.wait_seconds()) > 0:
             self._sleep(wait)
+
+    def _own_orders(self) -> list[OwnOrder]:
+        """Every order the order path follows, terminal ones included, with its latest word."""
+        follower = self._follower
+        intents = {order_id: follower.intent_of(order_id) for order_id in follower.order_ids()}
+        return [
+            (intent, follower.last_known(order_id))
+            for order_id, intent in intents.items()
+            if intent is not None
+        ]
 
     def _intent_of(self, order_id: str) -> OrderIntent:
         intent = self._follower.intent_of(order_id)

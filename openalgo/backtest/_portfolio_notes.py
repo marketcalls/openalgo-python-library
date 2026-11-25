@@ -19,13 +19,11 @@ import pandas as pd
 
 from ._messages import counted, spoken_list
 from ._portfolio_tables import OppositeSides
+from ._products import CNC
 from ._strategy_args import PAISE_PER_RUPEE, Account
 from .report._format import indian_digits
 from .result import Result
 
-#: The product of delivery trades, which a broker's contract note nets across the
-#: account within a day.
-DELIVERY = "CNC"
 #: The Assumptions line of a run with an instrument several strategies trade (18-multi-
 #: strategy 3).
 SHARED_RULES = (
@@ -152,7 +150,9 @@ def _delivery_days(results: Mapping[str, Result]) -> pd.DataFrame:
     frames = []
     for name, result in results.items():
         fills = result.fills
-        fills = fills[fills["product"] == DELIVERY]
+        # Delivery (CNC) trades: a broker's contract note nets them across the account
+        # within a day.
+        fills = fills[fills["product"] == CNC]
         exchanges = [entry["exchange"] for entry in result.manifest["instruments"]]
         units = fills["quantity_units"].abs()
         frames.append(
@@ -218,7 +218,6 @@ def netting_warnings(results: Mapping[str, Result]) -> list[str]:
 
 
 __all__ = [
-    "DELIVERY",
     "SHARED_RULES",
     "account_note",
     "assumptions",

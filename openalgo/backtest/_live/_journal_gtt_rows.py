@@ -14,13 +14,25 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 
-from ...gtt import GTT_PRODUCTS
+from .._products import OVERNIGHT_PRODUCTS
 from ..errors import JournalError
 from ._journal_file import check_name
 from ._journal_rows import finite_number, unreadable, whole_number
+from ._types import Purpose
 
 #: The sides of a GTT's child order, as OpenAlgo's actions.
 GTT_SIDES = ("BUY", "SELL")
+#: What a GTT is for: a leg's stop, or a strategy's own order resting as a GTT.
+GTT_PURPOSES = frozenset({Purpose.STOP, Purpose.ENTRY})
+#: How a GTT's state note records the broker's refusal of its placement, before the
+#: broker's words: a refusal of an earlier day is found by it (20-positional-live 3.5,
+#: `JournalGtts.refused_days`).
+REFUSED_BY_BROKER = "refused by the broker: "
+
+
+def refusal_note(message: str) -> str:
+    """The state note of a GTT whose placement the broker refused with `message`."""
+    return f"{REFUSED_BY_BROKER}{message}"
 
 
 class GttState(enum.Enum):
@@ -92,8 +104,12 @@ class GttBinding:
     request that made it (its row, written before the place call); the trading `day` it
     was recorded on; the `strategy` and the kernel's `gtt_id` of that day's session; the
     order worker's `request_id` of the place request; the broker's `trigger_id` (None until
-    the place answered with one); its instrument and product; its `terms` as the broker
-    holds them; its `state`; and when it was recorded and last changed."""
+    the place answered with one); its instrument and product; what it is for (`purpose`,
+    one of `GTT_PURPOSES`); its `terms` as the broker holds them; its `state`; when it was
+    recorded and last changed; and the signed units its leg would hold at the broker had
+    it not fired, as the GTT follower last noted them (`baseline_units`, None before any:
+    its reference moved by the session's own fills since, `_gtt_units`; 20-positional-live
+    3.3; a restart does not take it back as the GTT's reference)."""
 
     seq: int
     day: date
@@ -104,10 +120,12 @@ class GttBinding:
     symbol: str
     exchange: str
     product: str
+    purpose: Purpose
     terms: GttTerms
     state: GttState
     recorded_ns: int
     changed_ns: int
+    baseline_units: int | None = None
 
 
 @dataclass(frozen=True)
@@ -128,7 +146,7 @@ def check_leg(strategy: str, symbol: str, exchange: str, product: str) -> None:
     cannot hold (OpenAlgo takes CNC and NRML only: MIS is squared off the same day)."""
     for name, value in (("strategy", strategy), ("symbol", symbol), ("exchange", exchange)):
         check_name(name, value)
-    if product not in GTT_PRODUCTS:
+    if product not in OVERNIGHT_PRODUCTS:
         raise JournalError(
             f"a GTT holds a position overnight, so its product is CNC or NRML, not {product!r}"
         )
@@ -148,10 +166,12 @@ def binding_from(row: sqlite3.Row) -> GttBinding:
             symbol=row["symbol"],
             exchange=row["exchange"],
             product=row["product"],
+            purpose=Purpose(row["purpose"]),
             terms=terms,
             state=GttState(row["state"]),
             recorded_ns=row["recorded_ns"],
             changed_ns=row["changed_ns"],
+            baseline_units=row["baseline_units"],
         )
     except ValueError as error:
         raise JournalError(unreadable("a GTT", error)) from error
@@ -167,7 +187,9 @@ def child_from(row: sqlite3.Row) -> GttChild:
 
 
 __all__ = [
+    "GTT_PURPOSES",
     "GTT_SIDES",
+    "REFUSED_BY_BROKER",
     "GttBinding",
     "GttChild",
     "GttState",
@@ -175,4 +197,5 @@ __all__ = [
     "binding_from",
     "check_leg",
     "child_from",
+    "refusal_note",
 ]

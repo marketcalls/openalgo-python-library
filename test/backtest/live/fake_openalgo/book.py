@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from openalgo.backtest._live._types import Mode
+from openalgo.backtest._products import CNC as DELIVERY
+from openalgo.backtest._products import MIS as INTRADAY
 
+from .gtts import FakeGtt, GttIds
 from .market import MarketState
 from .orders import (
     CANCELLED,
@@ -80,10 +83,11 @@ class OrderTerms:
 
 
 class Book:
-    """The orders, fills, positions and delivery holdings of one mode. `cash` is the
+    """The orders, fills, positions, delivery holdings and GTTs of one mode. `cash` is the
     available cash the book's funds report, rupees; `holdings` the units held for delivery
     and their average price in rupees, by (symbol, exchange), as a test sets them
-    (`FakeOpenAlgo.set_holding`)."""
+    (`FakeOpenAlgo.set_holding`) or a day boundary moves them (`end_day`); `gtts` the GTTs
+    by trigger ID, ended ones kept (`gtts.gtt_rows` decides what the book lists)."""
 
     def __init__(self, mode: Mode, ids: Ids, cash: float) -> None:
         self.mode = mode
@@ -93,6 +97,8 @@ class Book:
         self.fills: list[Fill] = []
         self.positions = Positions()
         self.holdings: dict[tuple[str, str], tuple[int, float]] = {}
+        self.gtts: dict[str, FakeGtt] = {}
+        self.gtt_ids = GttIds(mode)
 
     def place(
         self, terms: OrderTerms, now_ns: int, last_price: float | None, client: str = ""
@@ -202,6 +208,40 @@ class Book:
         self.fills.append(fill)
         self.positions.take(fill)
         return self._change(order, FILLED, fill)
+
+    def end_day(self) -> None:
+        """The book at a day boundary: each CNC position's units move into the holdings
+        (delivery settles them: a buy adds at its average price, a sale of held units takes
+        them away), each NRML position carries over as the next day's opening position at
+        its average price, and the day's orders and fills are cleared; GTTs stay. Raises
+        ValueError for an MIS position still open, which the broker squares off by the
+        close."""
+        carried = []
+        for row in self.positions.rows():
+            if row.quantity == 0:
+                continue
+            if row.product == INTRADAY:
+                raise ValueError(
+                    f"{row.exchange}:{row.symbol} is open in MIS at the day's end: the broker "
+                    "squares MIS off by the close, so close it before end_day"
+                )
+            if row.product == DELIVERY:
+                self._settle(row.symbol, row.exchange, row.quantity, row.average_price)
+            else:
+                carried.append(row)
+        self.orders.clear()
+        self.fills.clear()
+        self.positions = Positions()
+        for row in carried:
+            self.positions.carry(row)
+
+    def _settle(self, symbol: str, exchange: str, units: int, average_price: float) -> None:
+        """Move a CNC position's `units` (signed) into the holdings of the instrument."""
+        held, average = self.holdings.get((symbol, exchange), (0, 0.0))
+        total = held + units
+        if units > 0 and total:
+            average = (held * average + units * average_price) / total
+        self.holdings[(symbol, exchange)] = (total, average if total else 0.0)
 
     def working_orders(self, symbol: str, exchange: str) -> list[FakeOrder]:
         """The working orders of one instrument, oldest first."""

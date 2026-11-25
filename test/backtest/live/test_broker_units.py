@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from openalgo.backtest._live._broker_units import CNC, MIS, NRML, broker_units
+from openalgo.backtest._live._broker_units import broker_units
+from openalgo.backtest._products import CNC, MIS, NRML
 from openalgo.backtest.errors import LiveError
 
 
