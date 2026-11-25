@@ -33,7 +33,9 @@ pub enum Protect {
     WaitsForCancels,
     /// A stop of the leg works already.
     StopWorks,
-    /// An exit of the position waits or works: it closes what the stop would cover.
+    /// An exit of the position waits or works: it closes what the stop would cover. Also a
+    /// rearm_daily leg whose contract's expiry exit is due: no day's stop is placed, and
+    /// the expiry exit goes as the session reaches its next open (`rearm`).
     Exiting,
     /// The leg has no stop level (no `stop=`, a trail or breakeven not armed yet).
     NoStopLevel,
@@ -131,6 +133,9 @@ impl Engine {
         }
         if self.day_validity(&at.slice, at.decided_at).is_err() {
             return Ok(Protect::MarketClosed);
+        }
+        if self.rearm_leg_expiring(&at, key)? {
+            return Ok(Protect::Exiting);
         }
         self.renew_leg_stop(key, false);
         if self.rearms_daily(key) && self.before_session_open(&at) {

@@ -20,6 +20,18 @@
 //! stop sent after the close would be refused, or held by a broker for the next day) nor is
 //! the leg exited.
 //!
+//! A live session asks for each rearm_daily leg's new day stop as it reaches each
+//! trading day's open, the first day's (a leg carried from an earlier day, `carry`) and
+//! every later day's of a session of several days (`pre_open::reach_session_open`).
+//!
+//! No day's stop is placed for a leg whose contract's expiry exit is due (`expiry`: its
+//! positional exit has passed): the expiry exit goes first and alone, as the session
+//! reaches the open it is due at, and the stop waits for it rather than being placed and
+//! cancelled at once. At a session's first open the expiry exit is made before the stops
+//! are synced; a session started late (its catch-up past the open, or past the exit day's
+//! square-off) makes it at the next open it reaches, and meanwhile neither a tick nor
+//! `protect` places the stop (`protect` then returns `Protect::Exiting`).
+//!
 //! A backtest of it assumes the engine was started before the open on every trading day
 //! the position was held; the result says so (`bt.backtest`). A live session started
 //! before the open waits for the open to place the stop: `protect` on such a leg then
@@ -147,7 +159,7 @@ impl Engine {
             return Ok(false);
         }
         let market_closed = self.day_validity(&at.slice, at.decided_at).is_err();
-        if market_closed || self.before_session_open(&at) {
+        if market_closed || self.before_session_open(&at) || self.rearm_leg_expiring(&at, key)? {
             return Ok(true);
         }
         if !self.stop_crossed(key, trigger_rupees) {
@@ -155,5 +167,33 @@ impl Engine {
         }
         self.request_flagged_exit(at, key, CROSSED_EXIT, FillFlags::STOP_CROSSED)?;
         Ok(true)
+    }
+
+    /// True when `key` is a rearm_daily leg whose contract's expiry exit is due in `at`'s
+    /// slice: no day's stop is placed for it (module docs).
+    ///
+    /// Errors: those of `expiry_exit_due`.
+    pub(super) fn rearm_leg_expiring(
+        &mut self,
+        at: &SendAt,
+        key: PositionKey,
+    ) -> Result<bool, KernelError> {
+        Ok(self.rearms_daily(key) && self.expiry_exit_due(&at.slice, key.instrument)?)
+    }
+
+    /// As a live session reaches a trading day's open: each open rearm_daily leg whose day
+    /// stop no longer works (the close before ended it) asks for a new one, which
+    /// `sync_leg_stops` places, or exits the leg instead (`rearm_waits_or_crosses`).
+    pub(super) fn rearm_leg_stops_at_open(&mut self) {
+        let renewed: Vec<PositionKey> = self
+            .legs
+            .iter()
+            .map(|(key, _)| *key)
+            .filter(|key| self.rearms_daily(*key) && self.held_units(*key) != 0.0)
+            .filter(|key| self.working_leg_stop(*key).is_none())
+            .collect();
+        for key in renewed {
+            self.renew_leg_stop(key, false);
+        }
     }
 }
