@@ -34,6 +34,8 @@ from openalgo.backtest._live.journal import JOURNAL_FILE_NAME, Journal
 CLOSE = ist(15, 30)
 #: Seconds before the close the stop GTT is cancelled by hand.
 LAST_SECONDS = ist(15, 29, 55)
+#: Where `HoldAndRest`'s GTT buy rests, below every price of the market.
+REST_PRICE = 490.0
 
 
 @pytest.fixture(autouse=True)
@@ -96,12 +98,53 @@ def test_a_stop_gtt_ended_in_the_last_seconds_is_never_reported_as_protecting_th
     (line,) = carried_lines(world, "CncHold")
     assert "not confirmed at the broker after the close" in line
     (alert,) = [a for a in alerts(caplog, "error") if "CncHold" in a]
-    assert "carried overnight" in alert and "place its stop GTT in OpenAlgo by hand" in alert
+    assert "carried overnight" in alert
+    # Nothing of this version places it after the close: the alert asks for it by hand.
+    assert alert.endswith("place its stop GTT in OpenAlgo by hand before the next open")
     record = record_of(world, "CncHold")
     (unconfirmed,) = record.carried[UNCONFIRMED_KEY]
     assert (unconfirmed["gtt"], unconfirmed["trigger_id"]) == (1, trigger_id)
     restored = next_day(record.carried).restore_carried_state(record.carried)
     assert list(restored["gtts"]) == [1]
+
+
+class HoldAndRest(CncHold):
+    """CncHold that also rests a GTT buy of 5 SBIN at 490.00 at its second decision."""
+
+    def on_bar(self, bar):
+        self.calls += 1
+        if self.calls == 1:
+            self.buy(self.qty, **type(self).rules)
+        elif self.calls == 2:
+            self.buy(qty=5, price=REST_PRICE, validity="gtt")
+
+
+@BOOKS
+def test_a_gtt_order_ended_in_the_last_seconds_is_named_and_leaves_the_stop_confirmed(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, history
+):
+    # Found ended once the engine's session has closed: the GTT order is named in a REJECT
+    # alert of its own; the leg's stop GTT, which rests, is still the leg's confirmed stop.
+    world = to_the_close(make_fake_openalgo, monkeypatch, tmp_path, history=history)
+
+    def cancel_by_hand():
+        (order,) = [g for g in world.fake.gtts() if g.action == "BUY"]
+        world.fake.set_gtt_status(order.trigger_id, "cancelled")
+
+    world.script.at(LAST_SECONDS, cancel_by_hand)
+
+    outcome = world.run(HoldAndRest)
+
+    assert outcome.stopped_by == "session_end"
+    (order,) = [g for g in world.fake.gtts() if g.action == "BUY"]
+    named = [a for a in alerts(caplog, "reject") if "HoldAndRest" in a]
+    assert named
+    assert all(f"GTT order {order.trigger_id} of SBIN NSE was found" in a for a in named)
+    assert all("after the session's close" in a for a in named)
+    assert not [a for a in alerts(caplog, "error") if "HoldAndRest" in a]
+    (position,) = outcome.open_positions
+    assert position.stop_confirmed is True
+    assert record_of(world, "HoldAndRest").carried[UNCONFIRMED_KEY] == []
 
 
 def test_a_carried_leg_beside_an_mis_leg_left_open_at_the_close_is_no_error(

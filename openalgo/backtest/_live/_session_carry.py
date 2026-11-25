@@ -7,13 +7,16 @@
   `GttBookSeen`). Each carried leg's stop GTT must rest in that read with the trigger and
   the units the session holds it at; one that does not is an ERROR alert naming it. The
   kernel's session has finished at its close and places nothing more, so `protect` is
-  asked and answers nothing: the alert says to place the stop by hand or start the session
-  again before the open (a GTT that ended during the day was placed again by the kernel as
-  the follower found it, every 10 s). A finding of the GTT follower that comes once the
-  kernel's session has closed (a GTT cancelled by hand in the last seconds, found gone)
-  is the same (`after_close`). The kernel still holds such a GTT as resting, so the GTT
-  map notes why it is not confirmed (`KernelGtt.unconfirmed`): the stops supervisor, the
-  lines, the result and the day-close record never report it as protecting the leg.
+  asked and answers nothing: the alert says to place the stop by hand before the next open
+  (nothing of this version places it after the close; a GTT that ended during the day was
+  placed again by the kernel as the follower found it, every 10 s). A finding of the GTT
+  follower about a carried leg's stop GTT that comes once the kernel's session has closed
+  (a GTT cancelled by hand in the last seconds, found gone) is the same (`after_close`).
+  The kernel still holds such a GTT as resting, so the GTT map notes why it is not
+  confirmed (`KernelGtt.unconfirmed`): the stops supervisor, the lines, the result and the
+  day-close record never report it as protecting the leg. A finding after the close about
+  any other GTT (a strategy's GTT order, a stop GTT of a flat leg) touches no leg: it is
+  named in a REJECT alert, an ERROR one when it fired or its terms are not the session's.
 - **The reference for the next day** (`references`): each GTT leg's units at the broker,
   by product (`_broker_units`), read just before the close's GTT book read, with the
   read's time and whether the session's own fills on the leg had settled then; without
@@ -50,7 +53,8 @@ from ._own_fills import POSITION_BOOK_LAG_S
 from ._session_trader import Trader
 from ._stops_gtt import RESTING, overnight, resting_gtts, stop_gtts
 from ._stops_kernel import protect
-from ._types import LOGGER_NAME, AlertKind
+from ._types import LOGGER_NAME, AlertKind, Purpose
+from ._venue_gtts import KernelGtt
 from .inbox import Books
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -63,6 +67,11 @@ REFERENCES_KEY = "gtt_references"
 UNCONFIRMED_KEY = "gtts_not_confirmed"
 #: Half a paisa: two trigger prices closer than it are the same price.
 _PAISA = 0.005
+#: The follower's findings, after the close, of a GTT that holds no carried leg's stop
+#: that the operator must check by hand: it fired, or its terms are not the session's.
+_CHECK_BY_HAND = frozenset(
+    {GttEvent.TRIGGERED, GttEvent.CHILD_MISSED, GttEvent.MISMATCH, GttEvent.OTHER_TERMS}
+)
 _LAG_NS = round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
 
 
@@ -97,6 +106,8 @@ class CarriedLegs:
         self.references: dict[str, LegReference] = {}
         # The strategies whose carried leg an ERROR alert named as not confirmed.
         self._alerted: set[str] = set()
+        # The (strategy, kernel GTT, finding) of each other GTT named after the close.
+        self._named: set[tuple[str, int, GttEvent]] = set()
 
     def carried(self) -> list[Trader]:
         """The CNC and NRML strategies holding a position."""
@@ -129,13 +140,41 @@ class CarriedLegs:
 
     def after_close(self, trader: Trader, outcome: GttOutcome) -> None:
         """A finding of the GTT follower about `trader`'s GTT once its kernel session has
-        closed (module docstring): anything but RESTING leaves the stop not confirmed."""
+        closed (module docstring): anything but RESTING leaves the stop GTT of a leg with
+        a position not confirmed; any other GTT is named in an alert of its own."""
         if outcome.event is GttEvent.RESTING:
+            return
+        known = None if trader.gtts is None else trader.gtts.gtt(outcome.gtt_id)
+        if known is None or known.purpose is not Purpose.STOP or trader.open_units() == 0:
+            self._other_after_close(trader, known, outcome)
             return
         why = f"the GTT follower found it {outcome.event.value} after the close"
         if outcome.message:
             why += f" ({outcome.message})"
         self._not_confirmed(trader, outcome.gtt_id, why)
+
+    def _other_after_close(
+        self, trader: Trader, known: KernelGtt | None, outcome: GttOutcome
+    ) -> None:
+        """A finding after the close about a GTT that holds no carried leg's stop (a GTT
+        order, or a stop GTT of a flat leg), named once per finding: a REJECT alert, or an
+        ERROR alert when it fired or its terms are not the session's, since the engine
+        follows it no more (a fired GTT's child may open a position it does not hold)."""
+        event = outcome.event
+        key = (trader.name, outcome.gtt_id, event)
+        if key in self._named:
+            return
+        self._named.add(key)
+        kind = "GTT order" if known is not None and known.purpose is not Purpose.STOP else "GTT"
+        text = (
+            f"{trader.name}: {kind} {outcome.trigger_id} of {trader.symbol} {trader.exchange} "
+            f"was found {event.value} at the broker after the session's close: the session "
+            "follows it no more"
+        )
+        if event in _CHECK_BY_HAND:
+            self._session.alert(AlertKind.ERROR, f"{text}; check the GTT and order books")
+        else:
+            self._session.alert(AlertKind.REJECT, text)
 
     def alerted(self, name: str) -> bool:
         """Whether an ERROR alert named strategy `name`'s carried leg as not confirmed."""
@@ -238,8 +277,8 @@ class CarriedLegs:
         self._session.alert(
             AlertKind.ERROR,
             f"{trader.name}: {trader.symbol} {trader.exchange} {trader.open_units():g} units "
-            f"carried overnight, but {why}: place its stop GTT in OpenAlgo by hand, or start "
-            "the session again before the open to have it placed",
+            f"carried overnight, but {why}: place its stop GTT in OpenAlgo by hand before the "
+            "next open",
         )
 
     def _settled(self, trader: Trader, read_ns: int) -> bool:
