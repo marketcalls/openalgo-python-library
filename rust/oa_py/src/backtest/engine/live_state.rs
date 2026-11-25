@@ -39,7 +39,9 @@
 //! - Since layout 6 a state also holds "gtts" (every GTT of the session with its
 //!   "gtt" id, "status", "role" ("stop" or "order"), "order" and "terms") and, in "desk",
 //!   what the session follows of them and an engine exit's fill "flags"; a same-day
-//!   restore keeps every GTT's id.
+//!   restore keeps every GTT's id. Each of "open_trades" holds the "flags" of its fills so
+//!   far, which the trade keeps after a restore and in its row of the trades table once it
+//!   closes; a layout 6 state written without them restores the trade with none.
 //! - `carried_state()`: once the day's session has closed (after its close, or
 //!   `stop_session()`), the state the next trading day's session takes, as plain data like
 //!   `live_state()`'s: "kind" "carried", the "day" it closed, "instruments", "account",

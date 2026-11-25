@@ -44,7 +44,7 @@
 use crate::data::resample::CalendarUnit;
 use crate::exec::{FillFlags, OrderId};
 use crate::market::calendar::format_ist;
-use crate::model::{ist_day, TsNanos};
+use crate::model::{ist_day, Day, TsNanos};
 
 use super::clock::SliceInfo;
 use super::error::KernelError;
@@ -86,9 +86,11 @@ pub(super) struct PreOpenDesk {
     /// Orders of the decision waiting for the session's open, in the order they were
     /// decided.
     pub(super) at_open: Vec<OrderId>,
-    /// The session has reached the open of its first slice, and the expiry exits due
-    /// there have been made (`reach_session_open`).
-    pub(super) open_reached: bool,
+    /// The latest trading day whose open the session has reached, the expiry exits due
+    /// there made and the rearm_daily stops asked for again (`reach_session_open`); `None`
+    /// before the first. Keyed by the day, so a session of several days reaches each
+    /// day's open as it reaches the first.
+    pub(super) open_reached_on: Option<Day>,
 }
 
 fn invalid(reason: String) -> KernelError {
@@ -278,19 +280,21 @@ impl Engine {
     /// What waited for the session's open goes once the session has reached it, decided
     /// as `at` says, whatever reached it first (a tick at or after it, a venue's result, or
     /// the first slice's open phase): the expiry exit of a position carried past its
-    /// contract's exit day (`venue_exits::expiry_exits_at_session_open`), once, then the
-    /// orders of a pre-open decision. Called first as the exits move on
-    /// (`progress_exits`), so a rearm_daily leg being exited gets no day's stop when its
-    /// leg stops are synced after.
+    /// contract's exit day (`venue_exits::expiry_exits_at_session_open`) and a new day's
+    /// stop for each rearm_daily leg (`rearm`), once per trading day, then the orders of a
+    /// pre-open decision. Called first as the exits move on (`progress_exits`), so a
+    /// rearm_daily leg being exited gets no day's stop when its leg stops are synced after.
     ///
     /// Errors: those of the expiry exits and of `send_order`.
     pub(super) fn reach_session_open(&mut self, at: SendAt) -> Result<(), KernelError> {
         if self.before_session_open(&at) {
             return Ok(());
         }
-        if at.slice.opens_session && !self.venue.pre_open.open_reached {
-            self.venue.pre_open.open_reached = true;
+        let day = at.slice.day;
+        if at.slice.opens_session && self.venue.pre_open.open_reached_on != Some(day) {
+            self.venue.pre_open.open_reached_on = Some(day);
             self.expiry_exits_at_session_open(at)?;
+            self.rearm_leg_stops_at_open();
         }
         self.send_orders_at_open(at)
     }

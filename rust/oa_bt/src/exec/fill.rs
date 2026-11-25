@@ -81,14 +81,36 @@ impl FillFlags {
     /// later than a backtest of the same bars would (design 20-positional-live section 8,
     /// `engine::pre_open`).
     pub const LATE_DECISION: FillFlags = FillFlags(16);
+    /// The fill's price is not known: the broker filled a fired GTT's child order the
+    /// session never saw, and its trade book gives no price for it, so the fill is
+    /// recorded at the child's limit, which can be worse than the price the broker got.
+    /// The contract note holds the true price; check it, and the P&L of the trade, against
+    /// it (design 20-positional-live 3.3). Set by a live session's venue, never by a
+    /// backtest.
+    pub const PRICE_UNVERIFIED: FillFlags = FillFlags(32);
+    /// The fill happened on a trading day no session ran: a stop GTT that fired while the
+    /// engine was not started, found and recorded at the next start, in that start's day
+    /// (its daily loss counts there). The trade book of that day is gone, so the price is
+    /// unverified too; the contract note of the day it filled holds the true price
+    /// (design 20-positional-live 4.3). Set by a live session's venue, never by a
+    /// backtest.
+    pub const MISSED_DAY: FillFlags = FillFlags(64);
+
+    /// The flags a live session's venue may report with a fill
+    /// (`Engine::apply_fill_flagged`): `PRICE_UNVERIFIED` and `MISSED_DAY`. The others
+    /// are the kernel's own.
+    pub const FROM_VENUE: FillFlags =
+        FillFlags(FillFlags::PRICE_UNVERIFIED.0 | FillFlags::MISSED_DAY.0);
 
     /// Every flag with its name, in bit order.
-    pub const NAMED: [(FillFlags, &'static str); 5] = [
+    pub const NAMED: [(FillFlags, &'static str); 7] = [
         (FillFlags::FILLED_AT_LAST_CLOSE, "filled_at_last_close"),
         (FillFlags::GTT_CHILD_UNFILLED, "gtt_child_unfilled"),
         (FillFlags::EXTERNAL, "external"),
         (FillFlags::STOP_CROSSED, "stop_crossed"),
         (FillFlags::LATE_DECISION, "late_decision"),
+        (FillFlags::PRICE_UNVERIFIED, "price_unverified"),
+        (FillFlags::MISSED_DAY, "missed_day"),
     ];
 
     /// True when every bit of `other` is set.
@@ -214,6 +236,21 @@ mod tests {
             Some(FillFlags::STOP_CROSSED)
         );
         assert_eq!(FillFlags::from_name("crossed"), None);
+    }
+
+    #[test]
+    fn the_venues_two_flags_are_named_after_the_kernels_own_and_read_back() {
+        let both = FillFlags::PRICE_UNVERIFIED.with(FillFlags::MISSED_DAY);
+        assert_eq!(both.names(), vec!["price_unverified", "missed_day"]);
+        assert_eq!(both, FillFlags::FROM_VENUE);
+        assert_eq!(
+            FillFlags::from_name("missed_day"),
+            Some(FillFlags::MISSED_DAY)
+        );
+        let kernels = [1, 2, 4, 8, 16].map(FillFlags);
+        assert!(kernels
+            .iter()
+            .all(|own| !FillFlags::FROM_VENUE.contains(*own)));
     }
 
     #[test]

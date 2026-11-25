@@ -228,6 +228,15 @@ fn an_index_future_still_settles_at_expiry_at_its_last_close() {
 }
 
 #[test]
+fn the_trade_a_settlement_at_the_last_close_ends_carries_the_fills_flag() {
+    // The round trip's fills are the buy (no flag) and the settlement at the last close:
+    // the trade names the one flag among them.
+    let output = minute_run(index_future(), minute_bars(1000.0, 1002.0));
+    assert_eq!(output.trades.len(), 1);
+    assert_eq!(output.trades[0].flags.names(), vec!["filled_at_last_close"]);
+}
+
+#[test]
 fn an_index_option_held_to_expiry_exits_at_the_square_off() {
     // An option was left unsettled before: with no exit day it is still open at the end.
     let held = minute_run(index_option(None), minute_bars(120.0, 125.0));

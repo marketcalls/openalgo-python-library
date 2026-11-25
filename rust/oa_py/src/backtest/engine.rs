@@ -126,9 +126,12 @@ impl NativeEngine {
     }
 
     /// Record the venue's fill of `units` newly filled of an order at `price` rupees at
-    /// `at` (UTC nanoseconds); returns the stamp (slice, slice_ts, step). A fill beyond
-    /// the position of an order that may not reverse it raises `VenueRefusalError` of
-    /// kind "would_reverse" after recording the units that closed the position.
+    /// `at` (UTC nanoseconds), with the names of the flags the venue reports with it
+    /// (`flags`, of `VENUE_FILL_FLAGS`; `venue`); returns the stamp (slice, slice_ts,
+    /// step). A fill beyond the position of an order that may not reverse it raises
+    /// `VenueRefusalError` of kind "would_reverse" after recording the units that closed
+    /// the position.
+    #[pyo3(signature = (order_id, units, price, at, flags=Vec::new()))]
     fn apply_fill(
         &mut self,
         py: Python<'_>,
@@ -136,11 +139,10 @@ impl NativeEngine {
         units: f64,
         price: f64,
         at: i64,
+        flags: Vec<String>,
     ) -> PyResult<StampTuple> {
-        let filled = self
-            .engine_mut()?
-            .apply_fill(OrderId(order_id), units, price, at);
-        venue::recorded(py, filled)
+        let fill = (order_id, units, price, at);
+        venue::fill(py, self.engine_mut()?, fill, &flags)
     }
 
     /// Record that the venue rejected an order with a reject code; returns the stamp.

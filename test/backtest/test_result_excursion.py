@@ -79,8 +79,12 @@ def test_the_trades_keep_their_columns_and_add_the_new_ones_at_the_end(slipped):
         "r_multiple",
     ]
     added = ["mae_rupees", "mfe_rupees", "slippage_rupees", "mae_pct", "mfe_pct"]
-    assert list(slipped.trades.columns) == earlier + added
+    assert list(slipped.trades.columns) == earlier + added + ["flags"]
     assert list(slipped.fills.columns)[-2:] == ["filled_at_last_close", "slippage_rupees"]
+
+
+def test_a_trade_whose_fills_carry_no_flag_names_none(slipped):
+    assert slipped.trades.loc[0, "flags"] == []
 
 
 def test_the_trade_list_carries_them_in_its_own_names(slipped):

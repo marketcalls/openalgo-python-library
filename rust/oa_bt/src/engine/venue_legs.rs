@@ -53,6 +53,7 @@ use crate::rms::{ExitReason, RiskEvent, RiskEventName, RiskScope};
 use super::error::KernelError;
 use super::event::{Event, EventStamp};
 use super::kernel::Engine;
+use super::rearm::StopAsk;
 use super::venue::SendAt;
 use super::venue_owner::closing_side;
 use super::venue_roles::{EngineExit, OrderRole, RiskExitReason};
@@ -339,7 +340,7 @@ impl Engine {
             (StopEnd::Canceled { requested: true } | StopEnd::MarginRejected, _) => return Ok(()),
             (StopEnd::Canceled { requested: false }, false) => {
                 self.renew_leg_stop(key, true);
-                return self.sync_leg_stop(at, key);
+                return self.sync_leg_stop(at, key, StopAsk::Kernel);
             }
             (StopEnd::Canceled { requested: false }, true) => RiskExitReason::Unprotected,
             (StopEnd::Rejected, _) => RiskExitReason::StopRejected,

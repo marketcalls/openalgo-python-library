@@ -152,7 +152,10 @@ class Result(AnalysisMethods, ExportMethods):
         count until the venue reports those orders ended, so the two can read smaller than
         the prices the trade went through, never larger. `slippage_rupees` is what
         slippage cost its fills (`fills`), NaN when a fill had none modelled; it is
-        already in the gross P&L."""
+        already in the gross P&L. `flags`, last, names every flag the trade's fills carry
+        (`fills`): "filled_at_last_close" for an exit at a last close, and in a live session
+        "price_unverified" for a fill whose price the broker did not report (the contract
+        note holds it) and "missed_day" for one made on a day no session ran."""
         frame = self._table("trades", None)
         frame.insert(1, "entry_time", ist_times(frame["entry_ts"]))
         frame.insert(2, "exit_time", ist_times(frame["exit_ts"]))
@@ -164,6 +167,8 @@ class Result(AnalysisMethods, ExportMethods):
         multipliers = _result_excursion.instrument_multipliers(self._manifest)
         for name, values in _result_excursion.excursion_columns(frame, multipliers).items():
             frame[name] = values
+        # Added after the excursion columns, so every earlier column keeps its place.
+        frame["flags"] = frame.pop("flags")
         return frame
 
     @property

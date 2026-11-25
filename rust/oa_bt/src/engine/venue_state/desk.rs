@@ -50,14 +50,14 @@ pub(super) struct SavedDesk {
 }
 
 /// The names of `flags` (`FillFlags::names`).
-fn write_flags(flags: FillFlags) -> StateValue {
+pub(super) fn write_flags(flags: FillFlags) -> StateValue {
     list(flags.names(), StateValue::from)
 }
 
 /// The flags `write_flags` wrote.
 ///
 /// Errors: `Malformed` for a name that is no flag's.
-fn read_flags(read: &Read<'_>) -> Result<FillFlags, LiveStateError> {
+pub(super) fn read_flags(read: &Read<'_>) -> Result<FillFlags, LiveStateError> {
     let mut flags = FillFlags::NONE;
     for name in read.items()? {
         flags = flags.with(name.parsed(FillFlags::from_name)?);
