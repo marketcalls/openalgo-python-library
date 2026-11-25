@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 import pytest
-from carry_samples import DAY1, DAY2, CncKept, FutKept, carried_world, held, on, to_day
+from carry_samples import DAY1, DAY2, FUTURE, CncKept, FutKept, carried_world, held, on, to_day
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, calls, gtts
 from session_samples import alerts
@@ -92,7 +92,7 @@ def test_the_funds_check_sets_the_cash_against_the_capital_less_what_the_carry_h
     # margin, 20 percent of 65 x 120.00 = 1,560.00 rupees; the capital of the two
     # strategies, 2,00,000.00 rupees, less 6,560.00 leaves 1,93,440.00 to find.
     world = carried_world(
-        make_fake_openalgo, monkeypatch, tmp_path, [CncKept, FutKept], future=True
+        make_fake_openalgo, monkeypatch, tmp_path, [CncKept, FutKept], future=FUTURE
     )
 
     tuesday(world, [CncKept, FutKept])

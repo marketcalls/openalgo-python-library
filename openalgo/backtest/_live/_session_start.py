@@ -7,7 +7,7 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
 4. The alerts, on their own client, shared by every thread.
 5. `ping` names the broker (the default account name); the account and server locks.
 6. The day's logs under the account's folder; what the session continues from earlier
-   days read from the journal (`_carry_start`: a capital other than a carry's refused).
+   days read from the journal (`_carry_open`: what it cannot continue is refused).
 7. The preflight. Started before the open, one that fails only on the broker's login runs
    again every `LOGIN_RETRY_EVERY_S` (its alert test reported again, not sent), with an
    ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The guard's banner line is
@@ -50,7 +50,8 @@ from ..calendar import default_calendar
 from ..errors import LiveError
 from ..strategy import Strategy
 from ._alerts_logs import SessionLogs, configure_session_logs
-from ._carry_start import CarryAtStart, open_carry, preflight_terms
+from ._carry_open import open_carry
+from ._carry_start import CarryAtStart, preflight_terms
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
 from ._preflight_carry import refuse_kept
 from ._preflight_lock import live_root

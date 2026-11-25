@@ -309,6 +309,17 @@ class FakeOpenAlgo:
             for book in self._venue.books.values():
                 book.end_day()
 
+    def settle_contract(self, symbol: str, exchange: str) -> None:
+        """The exchange settles an expired contract between two days, in both books: its
+        positions leave the position book and its active GTTs end ("deleted"), as a
+        broker ends the GTTs of a contract that no longer trades."""
+        with self._venue.lock:
+            for book in self._venue.books.values():
+                book.positions.drop(symbol, exchange)
+                for gtt in book.gtts.values():
+                    if (gtt.symbol, gtt.exchange) == (symbol, exchange) and gtt.active:
+                        gtt.status = "deleted"
+
     # -- GTT orders ---------------------------------------------------------
 
     def refuse_next_gtt(self, reason: str, *, call: str = "placegttorder") -> None:

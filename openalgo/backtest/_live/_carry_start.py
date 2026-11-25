@@ -25,7 +25,6 @@ Days are IST trading days, amounts rupees, quantities signed whole units.
 from __future__ import annotations
 
 import datetime as dt
-import pathlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -34,8 +33,8 @@ from .._futures_contracts import last_day
 from ..reference import Instrument
 from ._journal_carry import DayClose
 from ._preflight_carry import CarriedPosition, carried_positions, held_rupees
-from ._preflight_plan import InstrumentFacts, refused
-from ._types import Mode, Now
+from ._preflight_plan import InstrumentFacts
+from ._types import Mode
 from .journal import Journal
 
 #: The keys of a day-close record the session adds beside the kernel's carried state
@@ -144,23 +143,6 @@ def expired_instruments(
     return expired
 
 
-def open_carry(
-    spec: Any, *, path: pathlib.Path, account: str, broker: str, mode: Mode, now: Now
-) -> CarryAtStart:
-    """Read the carry of the session `spec` (a `plan.SessionSpec`) from the journal at
-    `path` of `account` at `broker`, in the ledger of `mode`, on a handle opened for the
-    read and closed after it (module docstring), and refuse a start whose capital is not
-    a carried strategy's. Raises PreflightError for such a start, JournalError when the
-    journal cannot be read, and LiveError for a record that cannot be read."""
-    names = [each.name for each in spec.strategies]
-    with Journal.open(path, account=account, broker=broker, mode=mode, now=now) as journal:
-        carry = read_carry(journal, names, spec.day, mode)
-    refusals = capital_refusals(carry, {each.name: each.capital for each in spec.strategies})
-    if refusals:
-        raise refused(tuple(refusals))
-    return carry
-
-
 def preflight_terms(carry: CarryAtStart, spec: Any) -> dict[str, Any]:
     """The preflight's terms of a carry (`PreflightPlan.carried` and `expired`): each
     carried position on a contract still trading with the rupees it holds
@@ -260,7 +242,6 @@ __all__ = [
     "carried_references",
     "expired_instruments",
     "gtt_seqs",
-    "open_carry",
     "preflight_terms",
     "read_carry",
 ]

@@ -67,6 +67,7 @@ def restore_carried(session: Any, trader: Trader, carried: Carried) -> None:
     session.event("carried", strategy=trader.name, day=str(record.day), gtts=len(ids["gtts"]))
     for index in ids["expired"]:
         words = expired_words(trader, carried, int(index))
+        trader.settled = True
         session.warn(words)
         session.alert(AlertKind.SESSION, words)
     seqs = gtt_seqs(record)

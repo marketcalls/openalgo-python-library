@@ -74,6 +74,11 @@ class Positions:
             position.average_price,
         )
 
+    def drop(self, symbol: str, exchange: str) -> None:
+        """Remove every row of one instrument (the exchange settled its contract)."""
+        for key in [key for key in self._rows if key[:2] == (symbol, exchange)]:
+            del self._rows[key]
+
     def rows(self) -> list[Position]:
         """Every position, flat ones included (a broker lists the day's closed rows)."""
         return list(self._rows.values())
