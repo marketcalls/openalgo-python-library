@@ -22,17 +22,17 @@ session's own fills on the leg had not settled (`_own_fills`) is never a referen
 
 **What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT takes its
 leg's latest reference, and the baseline the journal keeps for it (its reference moved by
-the session's own fills since, `_gtt_followed`) is noted whenever it changes, so a later
-day judges it too; a resting row that shows another trigger or other units than the
-journal's is posted once as OTHER_TERMS and stays followed; an unknown status is taken as
-resting, with an ERROR alert once per GTT (3.1 asks for a WARN; the alerts have no such
-kind); ended without firing (cancelled, deleted, disabled), expired or rejected after
-placement, the GTT ends in the journal and its outcome is posted (the session places it
-again, 3.4); fired or gone, its leg is in flight (IN_FLIGHT posted) while its child is
-looked for. A GTT taken as gone that a later read shows resting (a book that left it out
-of a read) rests again: RESTING is posted and nothing fired. A GTT whose row cannot be read
-is not judged by that read. A GTT with a call of the order worker pending is the call's to
-judge (`hold`), and still takes its leg's reference when a read shows it resting.
+the session's own fills since, `_gtt_followed`) is noted whenever it changes; a resting
+row that shows another trigger or other units than the journal's is posted once as
+OTHER_TERMS and stays followed; an unknown status is taken as resting, with an ERROR alert
+once per GTT (3.1 asks for a WARN; the alerts have no such kind); ended without firing
+(cancelled, deleted, disabled), expired or rejected after placement, the GTT ends in the
+journal and its outcome is posted (the session places it again, 3.4); fired or gone, its
+leg is in flight (IN_FLIGHT posted) while its child is looked for. A GTT taken as gone
+that a later read shows resting (a book that left it out of a read) rests again: RESTING
+is posted and nothing fired. A GTT whose row cannot be read is not judged by that read. A
+GTT with a call of the order worker pending is the call's to judge (`hold`), and still
+takes its leg's reference when a read shows it resting.
 
 **The child** (3.2, 3.3; `_gtt_child`): the sandbox's book names it; otherwise the order
 book is read every `CHILD_READ_EVERY_S` for `CHILD_SEARCH_S`: one candidate is the child
@@ -41,10 +41,10 @@ read once more (still resting: RESTING), then the leg's units read with it again
 GTT's reference say (`_gtt_units.judge`) whether it fired with the child missed
 (CHILD_MISSED, priced from the trade book or at the GTT's limit, flagged), ended outside
 the session (ENDED_OUTSIDE), or cannot be told (MISMATCH). A GTT with no reference (no
-settled read of its leg made when it could not have fired, on any day) is a MISMATCH. A
-read made while the session's own fills on the leg had not settled, or whose units could
-not be read, judges nothing: the book is read again every `CHILD_READ_EVERY_S` until a
-read is settled (the newest own fill on the leg is `_own_fills.POSITION_BOOK_LAG_S` old
+settled read of its leg made by this process when it could not have fired) is a MISMATCH.
+A read made while the session's own fills on the leg had not settled, or whose units
+could not be read, judges nothing: the book is read again every `CHILD_READ_EVERY_S` until
+a read is settled (the newest own fill on the leg is `_own_fills.POSITION_BOOK_LAG_S` old
 and no own order works on it), for at most `_gtt_reads.UNITS_WAIT_S` after the later of
 when the GTT went and that newest fill (a fill that comes during the wait moves the bound
 with it); still not settled then (an own order still working on the leg, own fills coming
