@@ -143,25 +143,33 @@ class GttFollower:
         ]
         return max(changes, default=gtt.recorded_ns)
 
-    def reference(self, leg: LegKey, units: int, own_units: int, read_ns: int) -> None:
-        """A settled read of `leg` the session made at `read_ns` (UTC ns): `units` at the
-        broker, `own_units` filled by the session's own orders on the leg then, as the
-        order path counts them (`_own_fills.OwnFills.units`). It is the leg's latest
-        reference unless one read later is held (module docstring).
+    def reference(self, leg: LegKey, units: int, read_ns: int) -> bool:
+        """Take the session's read of `leg` made at `read_ns` (UTC ns), `units` at the
+        broker, as the leg's reference when the leg is settled for it
+        (`_own_fills.OwnFills.settled` at `read_ns`: no own order on the leg works now, and
+        no own fill on it was heard from `POSITION_BOOK_LAG_S` before the read until now);
+        the session's own units on the leg then are the order path's count now
+        (`OwnFills.units`). It is the leg's latest reference unless one read later is held
+        (module docstring). True when it was taken; a read that is not settled is ignored
+        (False): it never becomes a reference. Raises JournalError when the unbound intents
+        cannot be read.
 
         For unit N3b: the session gives its start read of the position book and holdings
-        (`_broker_units`, made before any order of its own, so `own_units` 0) for each leg
-        it may hold a GTT on, and may give its later reads of a leg, each made while the
-        leg was settled (`OwnFills.settled`, judged just before the read, as
-        `GttReader.gtt_book` does) with `own_units` counted at that moment; a read made
-        while it was not settled is never given. It calls this on the worker's thread
-        (through the worker's queue, as `ReadGtts` reaches `read_now`). Without a
-        reference from before its place, a GTT has none until a settled read shows it
-        resting (the GTT parts' reads: after its calls, and every `GTT_BOOK_EVERY_S` while
-        the market is open): until then its cancel once gone from the book is
-        CANCEL_REFUSED and the GTT gone a MISMATCH, and an unanswered place with none from
-        before it is UNRESOLVED."""
-        self._references.take(leg, units, own_units, read_ns)
+        (`_broker_units`), made after `OrderPath.restore` at every start (a same-day
+        restart included: the day's own fills the order path took back are counted), for
+        each leg it may hold a GTT on, and every later settled position-book read of the
+        reconciler; it gives each at once after the read, on the worker's thread (through
+        the worker's queue, as `ReadGtts` reaches `read_now`), before an order of its own
+        on the leg is sent. Without a reference from before its place, a GTT has none
+        until a settled read shows it resting (the GTT parts' reads: after its calls, and
+        every `GTT_BOOK_EVERY_S` while the market is open): until then its cancel once
+        gone from the book is CANCEL_REFUSED and the GTT gone a MISMATCH, and an
+        unanswered place with none from before it is UNRESOLVED."""
+        own = self._reader.own
+        if not own.settled(leg, read_ns):
+            return False
+        self._references.take(leg, units, own.units(leg), read_ns)
+        return True
 
     def placing(self, seq: int, leg: LegKey) -> None:
         """GTT `seq`'s place on `leg` is about to be sent: the leg's latest reference is

@@ -110,6 +110,31 @@ def test_the_own_fills_are_settled_only_once_the_books_can_show_them(orders, unb
     assert own_fills(orders, *unbound).settled(LEG) is settled
 
 
+@pytest.mark.parametrize(
+    ("heard_s_ago", "read_s_ago", "settled"),
+    [
+        (100.0, 100.0 - POSITION_BOOK_LAG_S, True),
+        (100.0, 100.0 - POSITION_BOOK_LAG_S + 1.0, False),
+        (100.0, 120.0, False),
+        (10.0, -POSITION_BOOK_LAG_S, False),
+    ],
+    ids=[
+        "read the lag after the fill",
+        "read within the lag of the fill",
+        "read before the fill",
+        "a read time after now is taken as now",
+    ],
+)
+def test_a_read_made_earlier_is_settled_only_when_its_time_was_the_lag_after_the_newest_fill(
+    heard_s_ago, read_s_ago, settled
+):
+    orders = [(intent(), word(heard_s_ago=heard_s_ago))]
+
+    read_ns = NOW_NS - round(read_s_ago * NS)
+
+    assert own_fills(orders).settled(LEG, read_ns) is settled
+
+
 def test_the_newest_own_fill_is_when_the_last_word_with_fills_on_the_leg_was_heard():
     orders = [
         (intent(number=1), word(filled=5, heard_s_ago=50.0)),

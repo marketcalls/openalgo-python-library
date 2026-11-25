@@ -75,19 +75,22 @@ class OwnFills:
                 filled += word.filled_quantity if intent.action == "BUY" else -word.filled_quantity
         return filled
 
-    def settled(self, leg: LegKey) -> bool:
+    def settled(self, leg: LegKey, read_ns: int | None = None) -> bool:
         """Whether `leg`'s units are settled: the broker's books can be taken to show every
         own fill on it (module docstring). No order of the session's own on the leg is
         without its terminal word, and its newest own fill is at least
-        `POSITION_BOOK_LAG_S` old. Raises JournalError when the unbound intents cannot be
-        read."""
+        `POSITION_BOOK_LAG_S` old: now, or for a read made earlier, at `read_ns` (UTC ns).
+        Then no own fill was heard since that read either, so `units` counts now what the
+        session's own orders had filled when it was made. Raises JournalError when the
+        unbound intents cannot be read."""
         if any(_on(intent, leg) for intent in self._journal.unbound()):
             return False
         if any(word is None or not word.status.terminal for _, word in self._of(leg)):
             return False
         newest = self.newest_fill_ns(leg)
-        lag_ns = round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
-        return newest is None or self._now() - newest >= lag_ns
+        now = self._now()
+        at_ns = now if read_ns is None else min(read_ns, now)
+        return newest is None or at_ns - newest >= round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
 
     def newest_fill_ns(self, leg: LegKey) -> int | None:
         """When the order path heard the newest word with fills of an order on `leg` (UTC

@@ -211,6 +211,68 @@ def test_a_stop_with_no_reference_takes_one_from_a_settled_read_that_shows_it_re
         assert sign in answer.message
 
 
+# ----- R6-1: the session's reads given as references (`GttFollower.reference`) -------------
+
+
+@PRODUCTS
+@SHAPES
+def test_a_start_read_after_a_same_day_restart_counts_the_own_fills_the_order_path_took_back(
+    rig, broker, history, product
+):
+    # The session's own entry bought 10 SBIN; 40 s later the worker restarts on the same day,
+    # the order path takes the entry back, and the session gives its start read of 10.
+    rig.run(rig.own_entry(UNITS, product=product))
+    rig.step_for(POSITION_BOOK_LAG_S + 10.0)
+    rig.restart()
+    rig.messages()
+    rig.start_read(UNITS, product)
+    # A new own entry buys 10 more, and the stop for the 20 is placed at once.
+    rig.run(rig.own_entry(UNITS, product=product))
+    (answer,) = answers(rig.send(rig.gtt(units=2 * UNITS, product=product)))
+    rig.step_for(4.0)
+    fire(broker, hidden_reads=NEVER)
+    broker.faults.gateway_error("cancelgttorder", status=502)
+
+    news = rig.send(cancel(rig, answer.seq, product)) + rig.step_for(LONG_ENOUGH_S, every_s=2.0)
+
+    # Against the start read's 10 (the day's own 10 counted in it) moved by the new entry's
+    # 10, the settled 0 is the stop's fall of 20: a CANCELLED would sell a second time.
+    (answer,) = answers(news)
+    assert answer.kind is GttAnswerKind.CANCEL_REFUSED
+    assert ("it fired" if history else "the position moved by its units") in answer.message
+    assert broker.position("SBIN", "NSE") == 0
+
+
+@pytest.mark.parametrize("history", [False], ids=["active only"])
+@PRODUCTS
+def test_a_read_given_before_the_sessions_own_entry_settled_is_no_reference(rig, product):
+    rig.run(rig.own_entry(UNITS, product=product))
+
+    taken = rig.start_read(UNITS, product)
+    seq = placed(rig, product)
+    rig.step_for(4.0)
+    news = rig.send(cancel(rig, seq, product)) + rig.step_for(LONG_ENOUGH_S, every_s=2.0)
+
+    # The position book may not show the entry yet: the read is ignored, so the stop has no
+    # reference and its cancel, once it is gone from the book, is never confirmed.
+    (answer,) = answers(news)
+    assert (taken, answer.kind) == (False, GttAnswerKind.CANCEL_REFUSED)
+    assert NO_REFERENCE in answer.message
+
+
+@PRODUCTS
+def test_a_read_given_after_an_own_fill_heard_since_it_was_made_is_no_reference(rig, product):
+    read_ns = rig.clock.now()
+    rig.run(rig.own_entry(UNITS, product=product))
+    rig.step_for(POSITION_BOOK_LAG_S + 10.0)
+
+    # The session read 0 units before its entry filled, and gives that read once the entry
+    # has settled: the 10 the order path counts now are not in it.
+    taken = rig.start_read(0, product, read_ns=read_ns)
+
+    assert taken is False
+
+
 # ----- M2: a move seen before the leg settled, then stale position books (P8) --------------
 
 

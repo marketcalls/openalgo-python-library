@@ -157,12 +157,13 @@ class GttRig(WorkerRig):
             seq=seq,
         )
 
-    def start_read(self, units: int, product: str = "CNC") -> None:
-        """The session's start read of SBIN's leg in `product`: `units` at the broker and
-        none filled by the session's own orders yet, given to the GTT follower as a
-        reference of the leg, as unit N3b's session gives it (`GttFollower.reference`)."""
+    def start_read(self, units: int, product: str = "CNC", *, read_ns: int | None = None) -> bool:
+        """The session's start read of SBIN's leg in `product`: `units` at the broker, read
+        now or at `read_ns` (UTC ns), given to the GTT follower as unit N3b's session gives
+        it (`GttFollower.reference`). True when the follower took it as a reference."""
         follower = self.worker._started.gtts.follower
-        follower.reference(("SBIN", "NSE", product), units, 0, self.clock.now())
+        at_ns = self.clock.now() if read_ns is None else read_ns
+        return follower.reference(("SBIN", "NSE", product), units, at_ns)
 
     def own_entry(self, units: int = UNITS, product: str = "CNC") -> PlaceRequest:
         """The session's own entry of the leg, as the venue map sends a strategy's entry:
