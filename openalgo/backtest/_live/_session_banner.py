@@ -157,25 +157,17 @@ def positional_lines(spec: Any, mode: Mode) -> list[str]:
     if not spec.gtt_legs:
         return []
     held = [POSITIONAL_STOPS_LINE] if spec.positional else []
-    rearm = [each.name for each in spec.strategies if each.name not in _gtt_names(spec)]
-    rearm = [name for name in rearm if _overnight_name(spec, name)]
+    rearm = [
+        each.name
+        for each in spec.strategies
+        if each.product in OVERNIGHT_PRODUCTS and not each.stop_gtt
+    ]
     if rearm:
         held.append(REARM_STOPS_LINE.format(names=", ".join(rearm)))
     sandbox = [SANDBOX_GTT_LINE] if mode is Mode.SANDBOX else []
     on_stop = spec.arguments.on_stop
     ctrl_c = ON_STOP_REARM_LINE if rearm and on_stop is None else ON_STOP_LINES[on_stop]
     return [*held, *sandbox, ctrl_c]
-
-
-def _gtt_names(spec: Any) -> set[str]:
-    """The names of the strategies whose stop is a GTT (`SessionSpec.positional`)."""
-    return {name for name, *_ in spec.positional}
-
-
-def _overnight_name(spec: Any, name: str) -> bool:
-    """Whether strategy `name` holds CNC or NRML positions (`SessionSpec.gtt_legs` names
-    their legs)."""
-    return any(each.name == name and each.product in OVERNIGHT_PRODUCTS for each in spec.strategies)
 
 
 def daily_limit_words(risk: Mapping[str, Any]) -> str:

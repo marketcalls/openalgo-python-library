@@ -30,6 +30,7 @@ from typing import Any
 
 from .._calendar_convert import format_ist
 from .._engine import call
+from ._plan_catch_up import INSTRUMENT
 from ._plan_daily import decides_before_open, decision_bars
 from ._session_saved import save
 
@@ -88,7 +89,8 @@ def decide_before_open(session: Any) -> None:
 def _bars(trader: Any, last_decided_ns: int | None) -> list[tuple]:
     """`trader`'s bars of its interval closing after `last_decided_ns`, as the kernel takes
     them."""
-    return decision_bars(trader.part.context.store(trader.symbol), last_decided_ns)
+    store = trader.part.context.store(trader.symbol)
+    return decision_bars(store, last_decided_ns, INSTRUMENT)
 
 
 def _day(close_ns: int) -> str:

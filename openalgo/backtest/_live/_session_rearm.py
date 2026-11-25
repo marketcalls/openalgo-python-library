@@ -14,9 +14,11 @@ the next start, and the user is told so at every start and every close (decision
   open, or not placed), then the trading days since the leg's last close on which no
   session ran (`_preflight_carry.missed_days`). Each is a warning of the session: printed
   in the banner and kept in `SessionResult.warnings`.
-- **While the market is closed** (`market_closed`) the leg's units are uncovered for
-  `_stops_cover.MARKET_CLOSED` in the result's unprotected table, not an unguarded
-  position: `protect` answers `waits_for_open` before the open, which is no alert.
+- **Before its day stop is placed** a leg with a stop level counts as guarded
+  (`rearm_guarded`), never as a position opened with no stop; while the market is closed
+  (`market_closed`) its units are uncovered for `_stops_cover.MARKET_CLOSED` in the
+  result's unprotected table: `protect` answers `waits_for_open` before the open, which is
+  no alert.
 - **At every close** (`warn_at_close`, the session's end, a Ctrl+C, an error): one alert
   listing each carried leg with its units and stop level, as without a stop at the broker
   until the next start, then the sentence; the same lines in `SessionResult.warnings` and

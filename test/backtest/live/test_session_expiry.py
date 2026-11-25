@@ -141,6 +141,9 @@ def test_an_option_held_into_its_last_trading_day_exits_at_the_square_off_gtt_ca
     # Flat after the exit, the strategy buys again: refused at submission, nothing sent.
     assert outcome.plans["OptionHold"].strategy.refused == ["contract_expiring"]
     assert len([o for o in world.orders() if o.action == "BUY"]) == 1
+    # The result says why, in the backtest's words of the rule.
+    (told,) = [w for w in result.warnings if "contract_expiring" in w]
+    assert "trade the next contract from then on" in told
 
 
 def test_an_index_future_on_its_last_trading_day_is_left_to_the_exchange_at_the_close(

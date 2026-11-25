@@ -76,6 +76,16 @@ def test_a_cnc_strategy_on_a_broker_without_gtt_runs_with_rearm_daily(
         ("SELL", "SL-M", 10, "CNC", 497.0),
     ]
     assert calls(world, "placegttorder", "modifygttorder", "cancelgttorder") == []
+    assert (
+        'CNC and NRML with positional_stops="rearm_daily" (CncHold): each position\'s stop is '
+        "a day stop order at the broker, placed at each session's open and ended by its close; "
+        "its targets are held by the session while it runs"
+    ) in world.lines
+    assert (
+        "Ctrl+C: exits the MIS positions and keeps the CNC and NRML positions open with their "
+        "stops at the broker, a rearm_daily day stop until the close only (on_stop default; "
+        "on_stop='flatten' exits them all)"
+    ) in world.lines
 
 
 def test_a_live_start_with_rearm_daily_on_a_broker_with_gtt_says_gtts_would_protect(

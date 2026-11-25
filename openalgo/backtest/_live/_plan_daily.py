@@ -33,6 +33,7 @@ import pandas as pd
 from .._layout import BAR_COLUMNS, parse_interval
 from .._settings import RunPlan
 from .._timeframes import _check_interval
+from .._warm_up_history import empty_base
 from ..calendar import Calendar
 from ..data import load_bars
 from ..errors import NoDataError
@@ -85,7 +86,7 @@ def recent_bars(
             now=read_ns,
         )
     except NoDataError:
-        return pd.DataFrame({name: np.array([]) for name in COLUMNS})
+        return empty_base()
     return result.bars
 
 
@@ -161,11 +162,12 @@ class DailySeries:
 
 
 def decision_bars(
-    store: Any, last_decided_ns: int | None
+    store: Any, last_decided_ns: int | None, instrument: int
 ) -> list[tuple[int, int, int, float, float, float, float, float]]:
     """The strategy's bars in `store` (its interval's) closing after `last_decided_ns` (UTC
-    nanoseconds; every bar when None), as `Engine.pre_open_decision` takes them: (instrument
-    0, ts_open, ts_close, open, high, low, close, volume)."""
+    nanoseconds; every bar when None), as `Engine.pre_open_decision` takes them for the
+    instrument registered at `instrument`: (instrument, ts_open, ts_close, open, high, low,
+    close, volume)."""
     opens, closes = store.column("ts_open"), store.column("ts_close")
     fields = [store.column(name) for name in PRICES]
     bars = []
@@ -173,7 +175,7 @@ def decision_bars(
         if last_decided_ns is not None and int(closed) <= last_decided_ns:
             continue
         values = tuple(float(field[index]) for field in fields)
-        bars.append((0, int(opens[index]), int(closed), *values))
+        bars.append((instrument, int(opens[index]), int(closed), *values))
     return bars
 
 
