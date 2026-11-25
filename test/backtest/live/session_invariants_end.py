@@ -9,7 +9,9 @@ state as the close stopped it (`Closing`; as it stands, for a run that crashed).
    (18-multi-strategy I1).
 5. **Protected.** Each position the fake holds on the side of a leg that wants a stop is
    covered by the session's working stops of that leg's own strategy (18-multi-strategy
-   I7: per member), confirmed working by its stops supervisor,
+   I7: per member), and by its active GTTs at the fake for a CNC or NRML leg
+   (20-positional-live 2: a positional leg's stop is a GTT, `gtt_stops`), confirmed working
+   by its stops supervisor,
    unless the test leaves the leg unprotected by a row 7.1 lists or a decided end (then
    named: a row of `open_positions` with no confirmed stop and an ERROR alert naming the
    strategy). 2 is asserted once more here, over what works at the end.
@@ -29,6 +31,7 @@ Quantities are signed units, prices rupees, times UTC nanoseconds.
 from __future__ import annotations
 
 from collections.abc import Mapping, Set
+from typing import Any
 
 from session_invariants_changes import STOP_TYPES, Instrument, SaleRoom
 from session_trace import (
@@ -54,6 +57,17 @@ def closing_now(run: Run) -> dict[str, Closing]:
         if closing is not None:
             found[trader.name] = closing
     return found
+
+
+def gtt_stops(fake: Any, mode: Any) -> dict[tuple[str, Instrument], int]:
+    """The units of the active GTTs at the fake's book of `mode`, by strategy and
+    instrument: a CNC or NRML leg's stop (module docstring, 5)."""
+    held: dict[tuple[str, Instrument], int] = {}
+    for gtt in fake.gtts(mode):
+        if gtt.active:
+            key = (gtt.strategy, (mode, gtt.symbol, gtt.exchange))
+            held[key] = held.get(key, 0) + gtt.quantity
+    return held
 
 
 def working_at_the_end(own: list[OrderChange]) -> list[OrderChange]:
@@ -118,6 +132,7 @@ def at_the_end(
     *,
     kept_named: Set[str] = frozenset(),
     oversold_used: Set[str] = frozenset(),
+    gtt_stops: Mapping[tuple[str, Instrument], int] | None = None,
 ) -> None:
     """2 once more and 5 (module docstring), and the legs a decided end oversold; a leg
     the test leaves unprotected must need it (the fake holds units on its side at the
@@ -153,6 +168,7 @@ def at_the_end(
         # instrument covers that member's units, never this one's.
         own = [o for o in exits if o.strategy == leg.strategy]
         stops = sum(o.remaining for o in own if o.price_type in STOP_TYPES)
+        stops += (gtt_stops or {}).get((leg.strategy, instrument), 0)
         needed = min(held, abs(round(leg.units)))
         assert min(stops, leg.stop_covers) >= needed, (
             f"7.1: {leg.strategy} ends with {position} units of {leg.symbol} at the fake, "

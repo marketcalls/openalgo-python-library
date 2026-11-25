@@ -6,7 +6,9 @@ safe corrections; it never exits a position and never fires the kill switch).
 **Schedule** (5.1): when a read is due, and the reads the session asks for, are
 `_reconcile_schedule`'s. An instrument several strategies of the session share in one
 product is compared as one group (`_reconcile_groups`, 18-multi-strategy 4.6); each leg's
-broker units are its product's (`_broker_units`).
+broker units are its product's (`_broker_units`), a CNC leg's judged one-sided: the user's
+own units beyond the strategy's are reported once (a SESSION alert) and never a mismatch
+(20-positional-live 7.2).
 
 **In flight** (`_reconcile_steps.in_flight`; a GTT fired or gone and not resolved holds its
 leg in flight too, `gtts`). A read compares a leg only when it was out of
@@ -45,11 +47,13 @@ quantities signed units, prices rupees. Used by the loop only.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from typing import Any
 
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
+from ._broker_units import own_units, strategy_units
 from ._group_rules import GroupFigure
 from ._groups import GroupKey
 from ._gtt_flight import GttFlight
@@ -78,6 +82,7 @@ from ._reconcile_schedule import (
 )
 from ._reconcile_steps import attribute, in_flight, order_findings, own_orders
 from ._session_trader import Trader
+from ._types import AlertKind
 from ._worker_queue import StreamGap
 from .inbox import Books, PositionRows
 
@@ -98,6 +103,7 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         self.guard = ExitGuard(session)
         #: The legs a GTT holds in flight until the GTT follower resolves it (`_gtt_flight`).
         self.gtts = GttFlight()
+        self._own_reported: set[str] = set()
         self._adopted: dict[str, int] = {}
         self._orphans: set[str] = set()
         # By strategy: its shared instrument's group as the last comparison judged it.
@@ -265,6 +271,12 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
             self._noted(trader, FILL_DURING_READ, books.units, 0)
             return False
         engine = round(trader.open_units())
+        own_held = own_units(trader.product, engine, books.units)
+        if own_held:
+            self._own_held(trader, own_held)
+        books = dataclasses.replace(
+            books, units=strategy_units(trader.product, engine, books.units)
+        )
         findings, polls = order_findings(self._session, trader, books, own)
         kind = Kind.UNREADABLE
         if books.units is not None and books.trades is not None:
@@ -283,6 +295,20 @@ class Reconciler(EndQueries, GroupComparison, ReadSchedule):
         if kind is not Kind.UNREADABLE:
             self.guard.read(trader.name, message.started_ns)
         return polls
+
+    def _own_held(self, trader: Trader, units: int) -> None:
+        """The user's own units beyond a CNC strategy's (`_broker_units`, 20-positional-live
+        7.2): reported once per strategy as information, never a mismatch."""
+        if trader.name in self._own_reported:
+            return
+        self._own_reported.add(trader.name)
+        self._session.event("own_holdings", strategy=trader.name, units=units)
+        self._session.alert(
+            AlertKind.SESSION,
+            f"{trader.name}: the account holds {units} units of {trader.symbol} "
+            f"{trader.exchange} ({trader.product}) beyond the strategy's: they are your own, "
+            "and the session never sells them or covers them with its stop",
+        )
 
     def _noted(self, trader: Trader, found: str, broker_units: int | None, findings: int) -> None:
         """A comparison's event: what it found of the leg, both figures, the findings."""

@@ -25,7 +25,7 @@ each of them, not only the first. The checks, by name:
   candles the live bars are checked against (`intervals`, D27);
 - `capital`, `max_daily_loss`: given and positive (both mandatory for `bt.live`), and
   `account_max_daily_loss` positive when given;
-- `product`: MIS, the only product of this release (Tier 1);
+- `product`: MIS, CNC or NRML, each strategy's (CNC and NRML carried overnight);
 - `trading_day:<EXCHANGE>`: the exchange trades today and its session has not closed
   (the package calendar); a warning after the day's MIS entry cut-off, and when the
   calendar does not confirm the day;
@@ -40,6 +40,9 @@ each of them, not only the first. The checks, by name:
   header of one HEAD request to the server's root (`_preflight_clock`); it fails only
   when a clock is certainly off, and warns when it cannot tell, as for a server on this
   computer;
+- `gtt`: for a session with a CNC or NRML strategy, whether the broker holds GTT orders,
+  read from OpenAlgo's GTT book in LIVE mode, passed with the banner's line in SANDBOX
+  mode, which cannot tell (`_preflight_gtt`, 20-positional-live 5);
 - `alerts`: a test alert delivered; required in LIVE mode, a warning in SANDBOX mode.
   It is sent once a session: a later run while the broker's login is awaited reports
   the first run's check (`PreflightPlan.tested_alerts`).
@@ -67,6 +70,7 @@ from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError
 from ._preflight_calendar import holiday_check
 from ._preflight_clock import clock_check
+from ._preflight_gtt import GTT_STOPS, gtt_check
 from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
 from ._preflight_lock import LOCK_FILE_NAME, AccountLock
 from ._preflight_plan import (
@@ -107,7 +111,7 @@ def check_preflight(
     `openalgo.api` client of which only `ping`, `funds`, `symbol`, `quotes` (once),
     `intervals` and `holidays` (once) are called, and its pooled HTTP client for one
     HEAD request to the server's root (the clock check, not sent to a server on this
-    computer); the plan's
+    computer), and `gttorderbook` (once) for a plan with `gtt`; the plan's
     alert channel sends one test alert once `ping` has succeeded, unless the plan carries
     the alerts check of an earlier run (`tested_alerts`), which is reported again. `now`
     gives the present in UTC nanoseconds, and `calendar` the sessions (the package's
@@ -137,6 +141,10 @@ def check_preflight(
         exchanges = (exchange for _, exchange in plan.instruments)
         holidays, disagrees = holiday_check(client, exchanges, now_ns, calendar)
         checks += [holidays, clock_check(client, now)]
+        if plan.gtt:
+            checks.append(
+                gtt_check(client, mode=plan.mode, broker=server.broker, positional_stops=GTT_STOPS)
+            )
     if plan.tested_alerts is not None:
         checks.append(plan.tested_alerts)
     elif plan.alerts is None or server.broker is not None:

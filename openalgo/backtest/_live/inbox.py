@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._bars_candle import Row
-from ._gtt_types import GttNews
+from ._gtt_types import GttBookSeen, GttNews
 from ._guard_breach import ModeBreach
 from ._inbox_raw import RawOrderUpdate, RawUpdates
 from ._journal_reads import JournalSession
@@ -304,6 +304,7 @@ Message = (
     | Books
     | PositionRows
     | GttNews
+    | GttBookSeen
     | WorkerFailed
     | Candles
     | Quote

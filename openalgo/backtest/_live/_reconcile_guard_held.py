@@ -27,6 +27,10 @@ the engine and is never sent. Should the kernel refuse the adoption, the withdra
 is held again (`put_back`) and the stop stays as it was. A stop whose cancel was not held
 is cut by the kernel's own fit too.
 
+A held GTT call of a CNC or NRML leg (`_reconcile_guard_gtt`) is kept apart from the
+orders, named by its GTT in the alert and the event stream, and released in order once the
+leg is neither guarded nor awaiting a read, when its kernel GTT still waits for it.
+
 Quantities are units, times UTC nanoseconds. Used by the loop only.
 """
 
@@ -36,8 +40,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from .._engine import call
+from ._gtt_types import GttAction, GttRequest
 from ._order_state import ENTRY_PURPOSES
-from ._reconcile_held import held_words
+from ._reconcile_guard_gtt import gtt_awaited
+from ._reconcile_held import held_gtt_words, held_words
 from ._types import AlertKind, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest
 from .inbox import NotSent, NotSentReason
@@ -56,13 +62,16 @@ class HeldRequests:
 
     def __init__(self) -> None:
         self._held: dict[str, list[Any]] = {}
+        # The GTT calls held, by strategy, apart from the orders' requests.
+        self._held_gtts: dict[str, list[GttRequest]] = {}
         self._alerted: set[tuple[str, int]] = set()
+        self._alerted_gtts: set[tuple[str, int]] = set()
         # The stop cancels the reconciler sends itself, by strategy and kernel order.
         self._allowed: set[tuple[str, int]] = set()
 
     def holds_back(self, name: str) -> bool:
         """True while the guard holds a request of strategy `name`."""
-        return bool(self._held.get(name))
+        return bool(self._held.get(name)) or bool(self._held_gtts.get(name))
 
     def allow_cancel(self, name: str, kernel_order: int) -> None:
         """The reconciler cancels strategy `name`'s stop itself (the broker holds the other
@@ -142,11 +151,25 @@ class HeldRequests:
         held = self._held.get(name, [])
         return frozenset(r.kernel_order for r in held if isinstance(r, CancelRequest))
 
+    def holds_gtt_cancel(self, name: str) -> bool:
+        """True while the guard holds the cancel of a stop GTT of strategy `name`: it rests
+        at the broker, and the exit that waits for its answer was never sent."""
+        return any(request.action is GttAction.CANCEL for request in self._held_gtts.get(name, []))
+
     def left(self) -> list[Any]:
         """Every request still held (the session's close reports them)."""
-        return [request for held in self._held.values() for request in held]
+        orders = [request for held in self._held.values() for request in held]
+        return orders + [request for held in self._held_gtts.values() for request in held]
+
+    def _alert_held(self, name: str) -> None:
+        """Alert each request held of strategy `name`, now that its leg is guarded."""
+        for request in [*self._held.get(name, []), *self._held_gtts.get(name, [])]:
+            self._alert(request)
 
     def _hold(self, request: Any) -> None:
+        if isinstance(request, GttRequest):
+            self._hold_gtt(request)
+            return
         name = request.intent.strategy
         self._held.setdefault(name, []).append(request)
         kind = "cancel" if isinstance(request, CancelRequest) else "request"
@@ -156,9 +179,20 @@ class HeldRequests:
         if name in self._broker:
             self._alert(request)
 
+    def _hold_gtt(self, request: GttRequest) -> None:
+        name = request.strategy
+        self._held_gtts.setdefault(name, []).append(request)
+        kind = "cancel" if request.action is GttAction.CANCEL else "request"
+        self._session.event("exit_held", strategy=name, gtt=request.gtt_id, held=kind)
+        if name in self._broker:
+            self._alert(request)
+
     def _alert(self, request: Any) -> None:
-        """One ERROR alert per held order of a guarded leg; none once the session has
-        ended, since nothing held goes then ("At the close")."""
+        """One ERROR alert per held order or GTT call of a guarded leg; none once the
+        session has ended, since nothing held goes then ("At the close")."""
+        if isinstance(request, GttRequest):
+            self._alert_gtt(request)
+            return
         intent = request.intent
         key = (intent.strategy, request.kernel_order)
         if key in self._alerted or self._ended:
@@ -166,6 +200,19 @@ class HeldRequests:
         self._alerted.add(key)
         name = intent.strategy
         words = held_words(request, self._broker[name], shared=name in self._hold_all)
+        self._session.alert(AlertKind.ERROR, words)
+
+    def _alert_gtt(self, request: GttRequest) -> None:
+        name = request.strategy
+        key = (name, request.gtt_id)
+        if key in self._alerted_gtts or self._ended:
+            return
+        self._alerted_gtts.add(key)
+        known = self._session.trader_named(name).gtts
+        seen = None if known is None else known.gtt(request.gtt_id)
+        trigger_id = "" if seen is None else seen.trigger_id
+        shared = name in self._hold_all
+        words = held_gtt_words(request, trigger_id, self._broker[name], shared=shared)
         self._session.alert(AlertKind.ERROR, words)
 
     def _release(self, name: str) -> None:
@@ -191,8 +238,25 @@ class HeldRequests:
                 session.news.take(NotSent(request, NotSentReason.REFUSED, why))
         if kept:
             self._held[name] = kept
+        fits += self._release_gtts(trader)
         if fits:
             session.hand_over(fits)
+
+    def _release_gtts(self, trader: Any) -> list[GttRequest]:
+        """The held GTT calls of `trader` whose kernel GTT still waits for them, in order;
+        the others are dropped (module docstring)."""
+        released = []
+        for request in self._held_gtts.pop(trader.name, []):
+            if gtt_awaited(trader, request):
+                released.append(request)
+            else:
+                self._session.event(
+                    "gtt_dropped",
+                    strategy=trader.name,
+                    gtt=request.gtt_id,
+                    held=request.action.value,
+                )
+        return released
 
     def _fits(self, trader: Any, request: Any) -> bool:
         """Whether a held request still fits: its order works in the engine with no change

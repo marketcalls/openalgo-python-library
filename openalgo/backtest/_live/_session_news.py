@@ -22,8 +22,10 @@ other clients' fills) go to `_session_feed`.
   locked) stops its reads. Each fill the kernel takes is told to it too, and the news of
   an orphan it cancels is expected.
 - `GttNews`: to the reconciler's record of the legs a GTT holds in flight
-  (`_gtt_flight`), and an event; what each answer and outcome asks of the kernel is
-  applied by unit N3b of 2.5.0, with the kernel's GTT answer calls.
+  (`_gtt_flight`), an event, then to its strategy's kernel and the session's duties
+  around it (`_session_gtts`).
+- `GttBookSeen`: the close's read of the GTT book, to the carried legs (`_session_carry`),
+  which take each reconciliation read's units too.
 - `GuardLocked`: the session's guard lock (`Session.guard_locked`).
 - `WorkerFailed`: raised as `WorkerFailedError`, which stops the session (3.5).
 
@@ -42,12 +44,14 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
-from ._gtt_types import GttOutcome
+from ._gtt_types import GttBookSeen, GttOutcome
 from ._order_answers import Outcome
 from ._order_state import ENTRY_PURPOSES
 from ._order_throttle import throttled_news
+from ._session_carry import CarriedLegs
 from ._session_feed import MARKET_DATA_HANDLERS
 from ._session_fills import RECONCILE_LOCK, FillNews
+from ._session_gtts import GttNewsHandler
 from ._session_resolved import order_words
 from ._session_trader import Trader
 from ._types import LOGGER_NAME, AlertKind
@@ -92,6 +96,9 @@ class News(FillNews):
         self._session = session
         self._ambiguous_seen: set[str] = set()
         self._throttle_alerted = False
+        self._gtts = GttNewsHandler(session)
+        #: The legs the session carries past its close (`_session_carry`).
+        self.carry = CarriedLegs(session)
 
     def take(self, message: Message) -> None:
         """Handle one message. Raises WorkerFailedError for `WorkerFailed`."""
@@ -240,6 +247,10 @@ class News(FillNews):
 
     def _books(self, message: Books) -> None:
         self._session.reconcile.books(message)
+        self.carry.books(message)
+
+    def _gtt_book_seen(self, message: GttBookSeen) -> None:
+        self.carry.seen(message)
 
     def _gtt_news(self, message: GttNews) -> None:
         news = message.news
@@ -249,6 +260,7 @@ class News(FillNews):
         else:
             fields = {"strategy": news.request.strategy, "seq": news.seq, "answer": news.kind.value}
         self._session.event("gtt", **fields)
+        self._gtts.take(news)
 
     def _guard_locked(self, message: GuardLocked) -> None:
         self._session.guard_locked(message.breach)
@@ -286,6 +298,7 @@ _HANDLERS: Mapping[type, Any] = MappingProxyType(
         PositionRows: News._positions,
         Books: News._books,
         GttNews: News._gtt_news,
+        GttBookSeen: News._gtt_book_seen,
         GuardLocked: News._guard_locked,
         WorkerFailed: News._worker_failed,
     }

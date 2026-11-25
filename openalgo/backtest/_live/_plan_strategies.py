@@ -2,12 +2,15 @@
 (16-session-design 1.1 and 3.1 step 1; decision 5 of its section 10.0; unit 7). Part of
 `plan`.
 
-`strategy_spec` refuses, with NotImplementedError saying what to do, what 2.3.0 does not
-run live: `bt.from_signals` and `bt.from_arrays` strategies, strategies on several
+`strategy_spec` refuses, with NotImplementedError saying what to do, what a live session
+does not run: `bt.from_signals` and `bt.from_arrays` strategies, strategies on several
 symbols or a universe, futures series (an `underlying` with an `expiry`), daily or longer
-intervals, CNC and NRML (they need GTT orders live), and condition strategies
+intervals (unit N5 of 2.5.0 runs them), and condition strategies
 (`entry_when`, `exit_when`, `short_when`, `cover_when`), whose arrays are computed ahead
-over the whole series (decision 5): their rules go in `on_bar`. A strategy on a currency
+over the whole series (decision 5): their rules go in `on_bar`. CNC and NRML run, their
+positions carried overnight with a GTT stop (20-positional-live 1); two of them on one
+symbol and product in one session are refused (`refuse_shared_positional`, decision
+11.6). A strategy on a currency
 derivatives exchange (CDS, BCD) is refused with ConfigError: currency derivatives are
 backtest-only in 2.4.1, as no supervised sandbox session has traded them. It then resolves the
 strategy's settings for today as `bt.backtest` resolves them (`_settings.resolve`: a
@@ -24,7 +27,7 @@ code and parameters every order carries, is read then too (`_version_id`; 18-mul
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,7 +39,7 @@ from .._layout import parse_interval
 from .._manifest import strategy_source_hash
 from .._margin_check import check_margin
 from .._messages import not_supported
-from .._products import MIS
+from .._products import OVERNIGHT_PRODUCTS
 from .._risk_settings import rupees_amount
 from .._series import ist_time
 from .._settings import RunPlan, resolve
@@ -100,7 +103,7 @@ class StrategySpec:
 
 
 def refuse_unsupported(strategy: type[Strategy]) -> None:
-    """Raise NotImplementedError for a strategy class 2.3.0 does not run live (module
+    """Raise NotImplementedError for a strategy class a live session does not run (module
     docstring; condition strategies are found by `probe`), ConfigError for one on a
     currency derivatives exchange (`refuse_currency`) or whose interval cannot be built
     from 1-minute bars."""
@@ -128,16 +131,28 @@ def refuse_unsupported(strategy: type[Strategy]) -> None:
             f"a {strategy.interval} strategy interval in a live session",
             "trade an intraday interval, such as '5m'",
         )
-    # Until positional live trading is built (20-positional-live, unit N3) a strategy trades
-    # the intraday product only: a CNC or NRML one is told to trade it.
-    if strategy.product is not None and strategy.product != MIS:
-        raise not_supported(
-            f"product {strategy.product} in a live session (positions held overnight need "
-            "GTT orders)",
-            f"trade {MIS}: remove product from the class, or set it to '{MIS}'",
-        )
     if strategy.interval:
         _check_interval(strategy.interval, DEFAULT_BASE)
+
+
+def refuse_shared_positional(specs: Sequence[StrategySpec]) -> None:
+    """Raise NotImplementedError when two strategies of a session hold CNC or NRML on one
+    symbol and product (20-positional-live decision 11.6): each carried leg has one stop
+    GTT and one day-close record of its own, which two strategies' positions on one
+    broker line would share. An MIS and a CNC or NRML strategy on one symbol are allowed
+    (different products, two broker lines)."""
+    sharing: dict[tuple[str, str, str], list[str]] = {}
+    for spec in specs:
+        if spec.product in OVERNIGHT_PRODUCTS:
+            sharing.setdefault((spec.exchange, spec.symbol, spec.product), []).append(spec.name)
+    for (exchange, symbol, product), names in sharing.items():
+        if len(names) > 1:
+            raise not_supported(
+                "two CNC or NRML strategies on one symbol and product in a live session "
+                f"({' and '.join(names)} on {exchange}:{symbol} in {product})",
+                "run one of them in the session, or trade the others in MIS (an MIS and a "
+                "CNC or NRML strategy may trade one symbol)",
+            )
 
 
 def refuse_currency(strategy: type[Strategy]) -> None:
@@ -252,6 +267,7 @@ __all__ = [
     "ist_day",
     "probe",
     "refuse_conditions",
+    "refuse_shared_positional",
     "refuse_unsupported",
     "strategy_spec",
 ]

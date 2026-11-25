@@ -53,6 +53,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
+from ._gtt_types import GttRequest
 from ._reconcile_close import NOT_CONFIRMED, NOTHING_TO_CLOSE, Differing, differing
 from ._session_trader import Trader
 from ._stops_orders import LegOrders
@@ -221,17 +222,29 @@ def _moved(before: float, now: float) -> str:
 
 
 def _held_changes(trader: Trader, held: Sequence[Any]) -> list[str]:
-    """The modifies and cancels of `trader`'s orders the exit guard held back (`held` is
-    every request it still holds), in an alert's words."""
+    """The modifies and cancels of `trader`'s orders, and its GTT calls, the exit guard held
+    back (`held` is every request it still holds), in an alert's words."""
     names = [
         f"the {'cancel' if isinstance(request, CancelRequest) else 'modify'} of "
         f"{request.intent.purpose.value.replace('_', ' ')} order "
         f"{trader.order_name(request.kernel_order)}"
         for request in held
-        if request.intent.strategy == trader.name
-        and isinstance(request, ModifyRequest | CancelRequest)
+        if isinstance(request, ModifyRequest | CancelRequest)
+        and request.intent.strategy == trader.name
+    ]
+    names += [
+        f"the {request.action.value} of {_gtt_name(trader, request)}"
+        for request in held
+        if isinstance(request, GttRequest) and request.strategy == trader.name
     ]
     return [f"not sent: {', '.join(names)}"] if names else []
+
+
+def _gtt_name(trader: Trader, request: GttRequest) -> str:
+    """A held GTT call's GTT in an alert's words: its trigger ID once its place answered."""
+    kind = "stop GTT" if request.purpose is Purpose.STOP else "GTT order"
+    known = None if trader.gtts is None else trader.gtts.gtt(request.gtt_id)
+    return f"{kind} {known.trigger_id}" if known is not None and known.trigger_id else kind
 
 
 __all__ = ["CLOSED_DIFFERING", "FLAT_NOW", "AfterLines"]

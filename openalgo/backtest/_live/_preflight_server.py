@@ -70,6 +70,9 @@ class PreflightClient(Protocol):
     def holidays(self, year: int) -> Mapping[str, Any]:
         """The server's answer to `/api/v1/market/holidays` for `year`."""
 
+    def gttorderbook(self, **kwargs: Any) -> Mapping[str, Any]:
+        """The server's answer to `/api/v1/gttorderbook` (a session with a GTT leg)."""
+
 
 @dataclass(frozen=True)
 class ServerFindings:

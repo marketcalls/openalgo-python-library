@@ -46,9 +46,9 @@ def outcome_of(client: FakeOpenAlgo | None = None, **changes) -> PreflightOutcom
 def test_check_preflight_returns_the_failures_run_preflight_raises():
     short = live_funds("50.00")
     with pytest.raises(PreflightError) as raised:
-        run_preflight(FakeOpenAlgo(funds=short), make_plan(product="CNC"), now=lambda: NOW_NS)
+        run_preflight(FakeOpenAlgo(funds=short), make_plan(product="CO"), now=lambda: NOW_NS)
 
-    outcome = outcome_of(FakeOpenAlgo(funds=short), product="CNC")
+    outcome = outcome_of(FakeOpenAlgo(funds=short), product="CO")
 
     assert outcome.failures == raised.value.failures
     assert len(outcome.failures) == 2
@@ -146,7 +146,7 @@ def test_funds_short_of_the_capital_are_not_a_login_failure(client, changes):
 
 
 def test_a_login_failure_with_any_other_failure_does_not_wait():
-    outcome = outcome_of(FakeOpenAlgo(funds=ZERO_FUNDS), product="CNC")
+    outcome = outcome_of(FakeOpenAlgo(funds=ZERO_FUNDS), product="CO")
 
     assert not outcome.waits_for_login
 

@@ -237,7 +237,7 @@ def test_a_held_limit_exit_is_priced_again_from_the_latest_price_when_a_read_agr
 def _deadline_world(asked: str) -> tuple[Any, list[str]]:
     """A stops deadline over one leg whose stop was bound at 0 and never confirmed, whose
     exit the margin gate answers `asked`: the deadline and the alerts it sent."""
-    trader = SimpleNamespace(name="B", symbol="SBIN", exchange="NSE")
+    trader = SimpleNamespace(name="B", symbol="SBIN", exchange="NSE", gtts=None)
     stop = SimpleNamespace(state=Sent.BOUND, bound_ns=0, kernel_order=2, order_id="S2")
     leg = SimpleNamespace(stop=2, orders={2: stop})
     stops = SimpleNamespace(leg=lambda t: leg, protection=SimpleNamespace(holds=lambda t: False))

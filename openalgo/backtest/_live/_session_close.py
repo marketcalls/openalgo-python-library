@@ -166,7 +166,11 @@ def close_session(
         timers = {t.name: tuple(t.part.context.timers.warnings()) for t in session.traders}
         compared = {t.name: strategy_rows(session, t) for t in session.traders}
         slipped = {name: slippage_of(rows) for name, rows in compared.items()}
-        stopped = {trader.name: _stop_engine(trader) for trader in session.traders}
+        # Every end that leaves CNC or NRML legs kept writes their day-close records while
+        # the journal works (20-positional-live 4.1, 10.2): the session's end, a Ctrl+C or a
+        # strategy's error that keeps them by on_stop, a mode breach that sends nothing.
+        carry = session.news.carry.write if journal_works else None
+        stopped = {trader.name: _stop_engine(trader, carry) for trader in session.traders}
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)
         summary = _summary(session, (stopped, slipped), unprotected_s, named)
@@ -351,10 +355,12 @@ def _save_day(session: Session, unprotected_s: float, named: int) -> None:
         session.warn(f"the session's counts of the day were not saved at the close: {error}")
 
 
-def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
+def _stop_engine(trader: Trader, carry: Any = None) -> tuple[Any, tuple[float, float]]:
     """Stop a kernel session where it stands, deliver its last events and call
-    `on_stop` (unless the strategy failed); its `finish()` tables, and its (gross P&L,
-    modelled charges) in rupees."""
+    `on_stop` (unless the strategy failed), then `carry(trader)` writes its day-close
+    record, if any (`_session_carry`, before `finish`, after which the kernel gives no
+    carried state); its `finish()` tables, and its (gross P&L, modelled charges) in
+    rupees."""
     engine, part = trader.engine, trader.part
     _equity, _cash, realized, unrealized, costs, _margin = call(engine.account)
     if not trader.finished:
@@ -370,6 +376,8 @@ def _stop_engine(trader: Trader) -> tuple[Any, tuple[float, float]]:
             except Exception:
                 logger.exception("%s raised in its last callbacks", trader.name)
         logger.info("%s stopped where it stood", trader.name)
+    if carry is not None:
+        carry(trader)
     return call(engine.finish), (realized + unrealized, costs)
 
 

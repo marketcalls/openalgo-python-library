@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import enum
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .._products import OVERNIGHT_PRODUCTS
@@ -197,9 +198,27 @@ class GttNews:
 @dataclass(frozen=True)
 class ReadGtts:
     """Read the GTT book now (the start's read and the close's, 20-positional-live 3.1):
-    the follower judges every GTT it follows."""
+    the follower judges every GTT it follows. With `at_close` the read's findings are
+    posted as `GttBookSeen` too, the units of every GTT leg read with it."""
+
+    at_close: bool = False
 
     priority = Priority.UPKEEP
+
+
+@dataclass(frozen=True)
+class GttBookSeen:
+    """The close's read of the GTT book (`ReadGtts` with `at_close`; 20-positional-live 2,
+    "Day 1, the close"), as the loop takes it: when it began (UTC ns), each resting GTT's
+    triggers (rupees) and units by its broker trigger ID (None for a book that could not
+    be read), and each GTT leg's (symbol, exchange, product) units at the broker read just
+    before it (None where they could not be read), with the legs whose own fills had
+    settled then (`_gtt_reads.BookRead`)."""
+
+    read_ns: int
+    resting: Mapping[str, tuple[tuple[float, ...], int]] | None
+    units: Mapping[tuple[str, str, str], int | None]
+    settled: frozenset[tuple[str, str, str]]
 
 
 @dataclass(frozen=True)
@@ -238,7 +257,7 @@ def _problem(request: GttRequest) -> str:
     if not all(isinstance(x, int | float) and math.isfinite(x) for x in numbers):
         return "its trigger and limit are finite prices"
     if request.trigger_price <= 0 or request.limit_price <= 0:
-        # Every child is a LIMIT order (`_gtt_calls.CHILD_PRICE_TYPE`): a limit of 0 would
+        # Every child is a LIMIT order (`_journal_gtt_rows.CHILD_PRICE_TYPE`): a limit of 0 would
         # sell at any price, or be refused by the broker.
         return "its trigger and limit are above 0 rupees"
     if isinstance(request.quantity, bool) or not isinstance(request.quantity, int):
@@ -258,6 +277,7 @@ __all__ = [
     "GttAction",
     "GttAnswer",
     "GttAnswerKind",
+    "GttBookSeen",
     "GttEvent",
     "GttKey",
     "GttNews",

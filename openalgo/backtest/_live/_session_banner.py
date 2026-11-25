@@ -19,9 +19,11 @@ from .._calendar_convert import format_ist
 from ..calendar import default_calendar
 from ..report._format import indian_digits
 from ._groups import shared_lines
+from ._preflight_gtt import SANDBOX_GTT_LINE
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
 from ._shared_alerts import warning_line
+from ._stops_gtt import overnight
 from ._types import Mode
 
 #: The banner's lines a SESSION alert carries: the mode, the funds and the first
@@ -35,47 +37,46 @@ STOPS_LINE = (
 )
 
 
+#: A CNC or NRML strategy's square-off in its banner line: none (20-positional-live 7.3).
+CARRIED_WORDS = "no square-off: the position is carried overnight"
+#: The banner's line on a CNC or NRML position's stop (20-positional-live 2, P6).
+POSITIONAL_STOPS_LINE = (
+    "CNC and NRML: each position's stop rests at the broker as a SINGLE GTT, kept overnight; "
+    "its targets are held by the session while it runs"
+)
+#: What Ctrl+C does with CNC and NRML positions, by `on_stop` (20-positional-live 10.2).
+ON_STOP_LINES = {
+    None: (
+        "Ctrl+C: exits the MIS positions and keeps the CNC and NRML positions open with "
+        "their GTT stops (on_stop default; on_stop='flatten' exits them all)"
+    ),
+    "flatten": "Ctrl+C: exits every position, CNC and NRML too (on_stop='flatten')",
+    "keep": "Ctrl+C: keeps every position open with its stop at the broker (on_stop='keep')",
+}
+
+
 def banner_lines(session: Any) -> list[str]:
     """The start banner of `session` (a `_session_loop.Session` whose strategies are
     set): the guard's mode line first ("OpenAlgo is in LIVE mode: orders go to
     zerodha"), at a restart the start's number and each resumed leg with its stop, then
     the funds, each strategy's instrument, interval, capital, daily loss limit, entry
     cut-off and square-off, and its daily limits when set (18-multi-strategy 2.5a), each
-    instrument's freeze cap (once), each strategy's version id, a version changed since
-    the day's earlier start and a source not hashed (12.1, `_session_versions`), each
-    instrument several strategies share with its
-    members and the rule on trading by hand (4.11), the rule of broker-held stops
-    (`STOPS_LINE`), the account's limits, the order rate, the cost model, the sandbox's
+    instrument's freeze cap (once; `strategy_lines`), each strategy's version id, a
+    version changed since the day's earlier start and a source not hashed (12.1,
+    `_session_versions`), each instrument several strategies share with its members and
+    the rule on trading by hand (4.11), the rule of broker-held stops
+    (`STOPS_LINE`), with a CNC or NRML strategy how its stop is held and what Ctrl+C does
+    (`positional_lines`), the account's limits, the order rate, the cost model, the sandbox's
     difference, and the warnings, each once with one prefix."""
     parts = session.parts
-    spec, report = parts.spec, parts.report
+    spec = parts.spec
     lines = [parts.banner, *restart_lines(session)]
-    lines.append(f"Funds available: Rs {indian_digits(report.funds_available)}")
-    facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
-    calendar = default_calendar()
-    shown: set[tuple[str, str]] = set()
-    for each, trader in zip(spec.strategies, session.traders, strict=True):
-        times = calendar.intraday_times(each.exchange, spec.day)
-        until = times.entry_until
-        if each.plan.entry_until is not None:
-            until = ist_instant(spec.day, each.plan.entry_until)
-        lines.append(
-            f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
-            f"Rs {indian_digits(each.capital)}, daily loss limit "
-            f"Rs {indian_digits(each.max_daily_loss)}, "
-            f"entries until {_clock(until)} IST, square-off {_clock(trader.square_off_ns)} IST"
-        )
-        limits = daily_limit_words(each.plan.risk)
-        if limits:
-            lines.append(f"{each.name} daily limits: {limits}")
-        if (each.symbol, each.exchange) not in shown:
-            shown.add((each.symbol, each.exchange))
-            fact = facts.get((each.symbol, each.exchange))
-            freeze = None if fact is None else fact.freeze_quantity
-            lines.append(f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}")
+    lines.append(f"Funds available: Rs {indian_digits(parts.report.funds_available)}")
+    lines += strategy_lines(session)
     lines += session.versions.banner_lines()
     lines += shared_lines(session.groups.groups)
     lines.append(STOPS_LINE)
+    lines += positional_lines(spec, parts.mode)
     if spec.arguments.account_max_daily_loss is not None:
         limit = spec.arguments.account_max_daily_loss
         lines.append(f"Account daily loss limit: Rs {indian_digits(limit)}")
@@ -92,6 +93,54 @@ def banner_lines(session: Any) -> list[str]:
         )
     lines += [warning_line(note) for note in session.warnings]
     return lines
+
+
+def strategy_lines(session: Any) -> list[str]:
+    """The banner's lines of each strategy of `session`, in the plan's order: its
+    instrument, interval, capital, daily loss limit, entry cut-off and square-off (none for
+    a CNC or NRML strategy, `CARRIED_WORDS`), its daily limits when set, and its
+    instrument's freeze cap, once per instrument."""
+    spec, report = session.parts.spec, session.parts.report
+    facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
+    calendar = default_calendar()
+    shown: set[tuple[str, str]] = set()
+    lines = []
+    for each, trader in zip(spec.strategies, session.traders, strict=True):
+        times = calendar.intraday_times(each.exchange, spec.day)
+        until = times.entry_until
+        if each.plan.entry_until is not None:
+            until = ist_instant(spec.day, each.plan.entry_until)
+        # A CNC or NRML leg is carried, never squared off (20-positional-live 7.3).
+        square_off = (
+            CARRIED_WORDS if overnight(trader) else f"square-off {_clock(trader.square_off_ns)} IST"
+        )
+        lines.append(
+            f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
+            f"Rs {indian_digits(each.capital)}, daily loss limit "
+            f"Rs {indian_digits(each.max_daily_loss)}, "
+            f"entries until {_clock(until)} IST, {square_off}"
+        )
+        limits = daily_limit_words(each.plan.risk)
+        if limits:
+            lines.append(f"{each.name} daily limits: {limits}")
+        if (each.symbol, each.exchange) not in shown:
+            shown.add((each.symbol, each.exchange))
+            fact = facts.get((each.symbol, each.exchange))
+            freeze = None if fact is None else fact.freeze_quantity
+            lines.append(f"{each.symbol}: freeze quantity {freeze if freeze else 'none'}")
+    return lines
+
+
+def positional_lines(spec: Any, mode: Mode) -> list[str]:
+    """The banner's lines of a session with a CNC or NRML strategy (20-positional-live 2,
+    5 and 10.2): how their stops are held, in `mode` SANDBOX that the live broker's GTT
+    support is checked in LIVE mode only (`SANDBOX_GTT_LINE`), and what Ctrl+C does with
+    their positions by `on_stop` (`ON_STOP_LINES`); none for an MIS-only session, whose
+    banner is as before."""
+    if not spec.gtt_legs:
+        return []
+    sandbox = [SANDBOX_GTT_LINE] if mode is Mode.SANDBOX else []
+    return [POSITIONAL_STOPS_LINE, *sandbox, ON_STOP_LINES[spec.arguments.on_stop]]
 
 
 def daily_limit_words(risk: Mapping[str, Any]) -> str:
@@ -149,9 +198,14 @@ def _clock(ts_ns: int) -> str:
 
 __all__ = [
     "BANNER_ALERT_LINES",
+    "CARRIED_WORDS",
+    "ON_STOP_LINES",
+    "POSITIONAL_STOPS_LINE",
     "STOPS_LINE",
     "account_limit_lines",
     "banner_lines",
     "daily_limit_words",
     "limit_lines",
+    "positional_lines",
+    "strategy_lines",
 ]

@@ -40,6 +40,7 @@ from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertsLike, Now, OrderIntent, OrderUpdate, Purpose
+from ._venue_children import GttChildren
 from ._venue_requests import (
     Applied,
     CancelRequest,
@@ -71,7 +72,7 @@ HELD_REASONS = frozenset({NotSentReason.HELD, NotSentReason.SILENT})
 RACES = frozenset({"order_ended", "not_pending"})
 
 
-class VenueMap(RestoredOrders, Withdrawals):
+class VenueMap(RestoredOrders, Withdrawals, GttChildren):
     """The venue map of `engine` (an `Engine.session`), the session of strategy `strategy`
     (module docstring); a restart saves and rebuilds it (`_venue_saved.RestoredOrders`),
     and the session withdraws what it will not send (`_venue_withdraw.Withdrawals`).

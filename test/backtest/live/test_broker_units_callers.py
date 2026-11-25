@@ -477,9 +477,11 @@ def test_a_start_judges_each_strategy_against_its_own_products_units():
     with pytest.raises(LiveError) as refused:
         judge_start(spec, Journal(), start, SimpleNamespace(send=lambda kind, text: None))
 
-    # Neither has a journal position; each is refused for its own product's units.
+    # Neither has a journal position; each is judged by its own product's units: the MIS
+    # strategy is refused for its 10, while the CNC strategy's 47 are the user's own
+    # holdings, never a refusal (20-positional-live 7.2 and 7.3, the lead's ruling N3b-4).
     assert "show 10 units of SBIN NSE, which SbinDay trades" in str(refused.value)
-    assert "show 47 units of SBIN NSE, which SbinHold trades" in str(refused.value)
+    assert "SbinHold" not in str(refused.value)
 
 
 #: An answer of a book the broker could not give (the server's 500 for an expired login).

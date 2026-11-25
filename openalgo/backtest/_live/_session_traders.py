@@ -1,5 +1,6 @@
 """Each strategy's `Trader` at the start of a live session (16-session-design 3.1 step 11;
-unit 8), split from `_session_start` so each module keeps one job: its venue map, numbered
+unit 8), split from `_session_start` so each module keeps one job: its venue map and its
+GTT map (`_venue_gtts`), numbered
 with the session's request IDs and carrying the strategy's version id onto every intent
 (18-multi-strategy 12.1), its square-off and its exchange's close, its sizing capped
 by the funds available, and the order worker's record of locked entries
@@ -16,6 +17,7 @@ from .._engine import call
 from ..calendar import default_calendar
 from ._session_loop import Session
 from ._session_trader import Trader, ist_instant
+from ._venue_gtts import GttMap
 from .venue_map import VenueMap
 
 
@@ -38,6 +40,14 @@ def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...
             now=session.now,
             version_id=part.spec.version.version_id,
         )
+        gtts = GttMap(
+            part.engine,
+            strategy=part.spec.name,
+            markets=[(item.symbol, item.exchange) for item in part.setup.instruments],
+            product=part.spec.product,
+            request_ids=numbers,
+            now=session.now,
+        )
         times = calendar.intraday_times(part.spec.exchange, day)
         square_off = part.spec.plan.square_off
         square_off_ns = times.square_off if square_off is None else ist_instant(day, square_off)
@@ -51,6 +61,7 @@ def build_traders(session: Session, funds_available: float) -> tuple[Trader, ...
             decision=parts.logs.decision,
             warn=session.warn,
             locked_entries=parts.worker.locked_entries,
+            gtts=gtts,
         )
         call(part.engine.cap_sizing_equity, float(funds_available))
         traders.append(trader)

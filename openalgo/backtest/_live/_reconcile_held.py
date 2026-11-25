@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._gtt_types import GttAction, GttRequest
 from ._order_state import ENTRY_PURPOSES
 from ._types import Purpose
 from ._venue_requests import CancelRequest
@@ -54,4 +55,31 @@ def held_words(request: Any, broker_units: int, *, shared: bool = False) -> str:
     )
 
 
-__all__ = ["held_words"]
+def held_gtt_words(
+    request: GttRequest, trigger_id: str, broker_units: int, *, shared: bool = False
+) -> str:
+    """The ERROR alert of `request`, a GTT call of a CNC or NRML leg the guard holds
+    (`_reconcile_guard_gtt`), whose GTT the broker knows as `trigger_id` ("" before its
+    place was answered), on a guarded leg whose broker holds `broker_units` (signed) by
+    OpenAlgo's books; `shared` as for `held_words`."""
+    kind = "stop GTT" if request.purpose is Purpose.STOP else "GTT order"
+    name = f"{kind} {trigger_id}" if trigger_id else kind
+    leg = f"{request.symbol} {request.exchange}"
+    book = f"OpenAlgo's books show {broker_units} units"
+    if shared:
+        book += f" of {request.symbol} for the strategies sharing it"
+    if request.action is GttAction.CANCEL:
+        return (
+            f"{request.strategy}: the cancel of the {name} of {leg} is held back, so the GTT "
+            f"stays at the broker: {book}, and the exit it makes way for would close more "
+            "than the broker holds. Both wait for the books to agree; check the position in "
+            "OpenAlgo"
+        )
+    return (
+        f"{request.strategy}: the {name} of {leg} ({request.side} {request.quantity}) is held "
+        f"back: {book}, and its child would close more than the broker holds. It is sent "
+        "once the books agree; check the position in OpenAlgo"
+    )
+
+
+__all__ = ["held_gtt_words", "held_words"]

@@ -36,6 +36,7 @@ from ._order_answers import (
 )
 from ._order_book import Resolution, Resolved
 from ._order_check import OrderCheck
+from ._order_children import ChildOrders
 from ._order_follow import OrderFollower
 from ._order_rate import RateBudget
 from ._order_resolve import BROKER_WINDOW_NS, NOT_PLACED_AFTER_NS, UnboundResolver, same_leg
@@ -64,7 +65,7 @@ _MODIFY_REQUIRED = frozenset(
 _MODIFY_OPTIONAL = frozenset({"disclosed_quantity"})
 
 
-class OrderPath(WatchedPath):
+class OrderPath(WatchedPath, ChildOrders):
     """Sends the session's orders through an OpenAlgo client, once each, and follows
     them until they are terminal. Whether OpenAlgo answers, and the probe that asks it,
     are `_order_watch`'s.

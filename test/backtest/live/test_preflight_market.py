@@ -188,12 +188,19 @@ def test_facts_that_cannot_be_used_fail_the_symbol_check(facts, problem):
 # ----- the product -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("product", ["CNC", "NRML", "mis", ""])
-def test_a_product_other_than_mis_fails(product):
+@pytest.mark.parametrize("product", ["MIS", "CNC", "NRML", "CNC, MIS, NRML"])
+def test_mis_cnc_and_nrml_pass_alone_or_together(product):
+    assert check_named(preflight(product=product), "product").ok
+
+
+@pytest.mark.parametrize("product", ["CO", "mis", "", "CNC, BO"])
+def test_a_product_other_than_mis_cnc_or_nrml_fails(product):
     (failure,) = failures_of(product=product)
 
-    assert failure.startswith(f"product {product!r} cannot trade live in this release")
-    assert failure.endswith("set the strategy's product to 'MIS'")
+    assert failure == (
+        f"product {product!r} cannot trade live: a strategy trades MIS (intraday), or CNC "
+        "or NRML (held overnight with a GTT stop); set the strategy's product to one of them"
+    )
 
 
 # ----- the interval ------------------------------------------------------------------

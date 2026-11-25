@@ -151,8 +151,11 @@ REFUSED = {
         "futures series",
     ),
     "daily interval": (variant(interval="D"), {}, "a D strategy interval"),
-    "CNC": (variant(product="CNC"), {}, "product CNC"),
-    "NRML": (variant(product="NRML"), {}, "product NRML"),
+    "two CNC on one symbol": (
+        [variant("HoldA", product="CNC"), variant("HoldB", product="CNC")],
+        {},
+        "two CNC or NRML strategies on one symbol and product",
+    ),
     "two with one name": (
         [variant("Twin"), variant("Twin", symbol="INFY")],
         {},
@@ -179,7 +182,7 @@ UNUSABLE = {
     "data": ({"data": "bars.csv"}, "takes no data=: the session trades on the broker's data"),
     "a clock": ({"now": 0}, "takes no now=: the session runs on the clock"),
     "a session's own seam": ({"threads": False}, "has no argument threads="),
-    "an unknown stop": ({"on_stop": "exit"}, "on_stop takes 'flatten'"),
+    "an unknown stop": ({"on_stop": "exit"}, "on_stop takes None .* .flatten."),
     "no capital": ({"capital": None}, "bt.live needs capital="),
 }
 

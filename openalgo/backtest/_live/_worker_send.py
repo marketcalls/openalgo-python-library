@@ -30,9 +30,8 @@ a request"), split from `worker` so each module keeps one job.
 - A restart's `Settle` makes a restored order's modify or cancel unsettled, so a read
   settles it as an unanswered one (3.6); `CancelOrphan` cancels an order of the journal
   the engine does not hold (5.3), with an ERROR alert when it cannot be cancelled.
-- A `GttRequest` goes to the GTT sender (`_gtt_send`); `ReadGtts` asks the GTT follower
-  for a read of the GTT book, and `BindGttChild` binds a fired GTT's child
-  (`_gtt_follow`; 20-positional-live 3).
+- A `GttRequest`, `ReadGtts` and `BindGttChild` go to the worker's GTT part
+  (`_worker_gtts`; 20-positional-live 3).
 
 Times are UTC nanoseconds. Used by the worker's thread only.
 """
@@ -40,14 +39,15 @@ Times are UTC nanoseconds. Used by the worker's thread only.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
 from ..errors import JournalError, LiveError, ModeChangedError
+from ._gtt_reads import LegKey
 from ._gtt_send import GttSender
-from ._gtt_types import BindGttChild, GttRequest, ReadGtts
+from ._gtt_types import GttAction, GttAnswer, GttAnswerKind, GttNews, GttRequest
 from ._locked_entries import LockedEntries, locked_words
 from ._order_answers import Outcome
 from ._order_check import OrderCheck
@@ -56,6 +56,7 @@ from ._order_state import ENTRY_PURPOSES
 from ._types import LOGGER_NAME, AlertKind, AlertsLike, OrderIntent, Purpose
 from ._venue_requests import CancelRequest, ModifyRequest, PlaceRequest, Priority
 from ._worker_books import BookReads
+from ._worker_gtts import GTT_REQUESTS, WorkerGtts
 from ._worker_news import NewsHandover
 from ._worker_queue import (
     CancelOrphan,
@@ -106,7 +107,9 @@ class Sender:
     puts a message on the loop's inbox, `calling` marks the worker busy for a call that
     may reach the server, `now` gives UTC nanoseconds, and `locked` is the record of the
     strategies whose entries the loop has locked; `read_holdings` is True for a session
-    with a CNC strategy; `gtts` sends the GTT requests and holds the GTT follower."""
+    with a CNC strategy; `gtts` sends the GTT requests and holds the GTT follower, and
+    `gtt_legs` are the (symbol, exchange, product) of the session's CNC and NRML legs, whose
+    units each reconciliation read gives the follower as a reference (`_worker_gtts`)."""
 
     def __init__(
         self,
@@ -126,9 +129,26 @@ class Sender:
         locked: LockedEntries,
         read_holdings: bool,
         gtts: GttSender,
+        gtt_legs: Sequence[LegKey] = (),
     ) -> None:
+        self._gtt_requests = WorkerGtts(
+            gtts,
+            path=path,
+            journal=journal,
+            news=news,
+            stops=stops,
+            post=post,
+            now=now,
+            legs=gtt_legs,
+        )
         self._books = BookReads(
-            client, guard=guard, post=post, calling=calling, now=now, read_holdings=read_holdings
+            client,
+            guard=guard,
+            post=post,
+            calling=calling,
+            now=now,
+            read_holdings=read_holdings,
+            positions_read=self._gtt_requests.reference if gtt_legs else None,
         )
         self._gtts = gtts
         self._path = path
@@ -165,14 +185,23 @@ class Sender:
             self.unsettle(request.change)
         elif isinstance(request, CancelOrphan):
             self._cancel_orphan(request.order_id)
-        elif isinstance(request, GttRequest):
-            self._gtts.execute(request)
-        elif isinstance(request, ReadGtts):
-            self._gtts.follower.read_now()
-        elif isinstance(request, BindGttChild):
-            self._gtts.follower.bind_child(request.seq, request.order_id, request.kernel_order)
+        elif isinstance(request, GTT_REQUESTS):
+            if not self._gtt_entry_locked(request):
+                self._gtt_requests.execute(request)
         else:
             raise LiveError(f"the order worker takes requests, not {request!r}")
+
+    def _gtt_entry_locked(self, request: Any) -> bool:
+        """Whether `request` places a strategy's GTT order (an entry) while its entries are
+        locked: then it is answered refused with why, never sent (`_locked_entries`)."""
+        if not isinstance(request, GttRequest) or request.purpose is not Purpose.ENTRY:
+            return False
+        locks = self._locked.reasons(request.strategy)
+        if request.action is not GttAction.PLACE or not locks:
+            return False
+        answer = GttAnswer(request, GttAnswerKind.REFUSED, message=locked_words(locks))
+        self._post(GttNews(answer))
+        return True
 
     def settle_due(self) -> None:
         """Settle what is due (module docstring). Stops at a guard lock, which the worker

@@ -16,16 +16,12 @@ its place is sent, and the leg's latest again each time a read shows it resting 
 units were read just before that read of the GTT book, and a GTT that fired never rests
 again): `pin`.
 
-**Not a third source: the journal's baseline** (`_gtt_followed`). A GTT taken back from the
-journal on a restart has no reference until a settled read shows it resting (the lead's
-ruling on N3a's review round 6: the baseline is taken back only if it holds, and it does
-not). The baseline is its reference moved by the own fills the earlier process had heard
-when it last noted it, words held for the trade book included, while the restarted order
-path counts the journal's words: a word held at the stop, or one journaled after the last
-note (a process that ended in that step), is counted twice or never, and the journal keeps
-no time or own count with the baseline to tell. An exit that filled while no process ran,
-heard by the restart before the GTT was judged, made a stop that never fired read as fired
-with its child missed.
+**No third source.** A GTT taken back from the journal on a restart has no reference until
+a settled read shows it resting: the journal keeps none (the lead's rulings on N3a's
+review round 6 and N3b-0 (c)). A figure an earlier process noted would be its reference
+moved by the own fills it had heard, while the restarted order path counts the journal's
+words: a word held at the stop, or journaled after the note, would be counted twice or
+never. A reference across days comes from the day-close record (unit N5).
 
 **The judgement** (`judge`): the units the leg would hold had the GTT not fired are its
 reference's, moved by the session's own filled units on the leg since
@@ -108,11 +104,13 @@ class Reference:
 class LegUnits:
     """What a read says of a GTT by its leg's units: the sign, the units the leg would
     hold had the GTT not fired and the units read (both None when the read judges
-    nothing)."""
+    nothing), and for FIRED the terms whose units it moved by (the GTT's, or those of a
+    modify that cannot be told)."""
 
     sign: UnitsSign
     expected: int | None = None
     units: int | None = None
+    terms: GttTerms | None = None
 
 
 class References:
@@ -178,12 +176,11 @@ def judge(
         return LegUnits(UnitsSign.UNSETTLED)
     expected = reference.expected(own)
     if units == expected:
-        sign = UnitsSign.UNCHANGED
-    elif any(units - expected == _signed(each) for each in (terms, also) if each is not None):
-        sign = UnitsSign.FIRED
-    else:
-        sign = UnitsSign.OTHER
-    return LegUnits(sign, expected, units)
+        return LegUnits(UnitsSign.UNCHANGED, expected, units)
+    for each in (terms, also):
+        if each is not None and units - expected == _signed(each):
+            return LegUnits(UnitsSign.FIRED, expected, units, each)
+    return LegUnits(UnitsSign.OTHER, expected, units)
 
 
 def _signed(terms: GttTerms) -> int:

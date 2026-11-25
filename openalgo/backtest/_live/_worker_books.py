@@ -6,7 +6,10 @@ order book after it when asked for (`ReadPositions`, posted as `inbox.PositionRo
 Each answer goes to the mode guard as it comes (the analyzer switch routes the books too);
 once the guard locks nothing more is read and the request is `NotSent(locked)`. A session
 with a CNC strategy reads the holdings right after the position book (`_broker_units`: a
-CNC leg's units are in both). Times are UTC nanoseconds. Used by the worker's thread only.
+CNC leg's units are in both). The position book and holdings of each reconciliation read,
+the start's among them, are handed to `positions_read` as they come (the GTT follower's
+references, `_gtt_follow.GttFollower.reference`). Times are UTC nanoseconds. Used by the
+worker's thread only.
 """
 
 from __future__ import annotations
@@ -35,7 +38,9 @@ class BookReads:
     """The reads (module docstring) through `client` (the orders client), each answer
     checked by `guard`; `post` puts a message on the loop's inbox, `calling` marks the
     worker busy for a call, `now` gives UTC nanoseconds; `read_holdings` is True for a
-    session with a CNC strategy."""
+    session with a CNC strategy; `positions_read(positionbook, holdings, read_ns)` is told
+    each reconciliation read's position book, holdings (None when not read) and the time
+    its read began (UTC ns), before the read is posted."""
 
     def __init__(
         self,
@@ -46,7 +51,9 @@ class BookReads:
         calling: Callable[[], AbstractContextManager[None]],
         now: Callable[[], int],
         read_holdings: bool,
+        positions_read: Callable[[Any, Any, int], None] | None = None,
     ) -> None:
+        self._positions_read = positions_read
         self._client = client
         self._guard = guard
         self._post = post
@@ -73,6 +80,8 @@ class BookReads:
             why = "the mode guard is locked: the books answer from the other mode"
             self._post(NotSent(request, NotSentReason.LOCKED, why))
         elif isinstance(request, ReadBooks):
+            if self._positions_read is not None:
+                self._positions_read(answers["positionbook"], answers.get(_HOLDINGS), started)
             ended = self._now()
             self._post(Books(request.generation, **answers, started_ns=started, ended_ns=ended))
         else:

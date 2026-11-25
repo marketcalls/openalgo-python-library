@@ -93,8 +93,10 @@ def test_the_saved_position_is_the_one_in_the_strategys_product(product, units):
 
 
 def test_only_the_locks_that_last_the_day_are_set_again():
-    # The account's daily profit target locks for the day too (18-multi-strategy 2.5a).
-    assert {"reconciliation", "exit_failed", "account_loss", "account_profit"} == DAY_LOCKS
+    # The account's daily profit target locks for the day too (18-multi-strategy 2.5a), and
+    # so does a stop GTT the broker refused at placement (20-positional-live decision 11.7).
+    expected = {"reconciliation", "exit_failed", "account_loss", "account_profit", "gtt_refused"}
+    assert expected == DAY_LOCKS
 
 
 def test_nothing_saved_reads_as_nothing():

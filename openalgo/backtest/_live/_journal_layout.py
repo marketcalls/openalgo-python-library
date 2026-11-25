@@ -19,8 +19,7 @@ nanoseconds.
   the session placed, written before its place call (its `seq` is that request's number
   in the journal, `request_id` the order worker's), bound to the broker's `trigger_id`,
   with what it is for (`purpose`, a leg's stop or a strategy's entry, a `Purpose` value),
-  its terms, its state and the units its leg would hold had it not fired
-  (`baseline_units`, NULL before: as the GTT follower last noted it); `gtt_states`,
+  its terms and its state; `gtt_states`,
   each state a GTT took and when; `gtt_children`, the child order a fired GTT placed, by
   its broker and kernel order IDs; `day_closes`,
   one record per strategy and trading day of what the next day's session restores;
@@ -48,8 +47,7 @@ _POSITIONAL = (
         trigger_id TEXT, symbol TEXT NOT NULL, exchange TEXT NOT NULL, product TEXT NOT NULL,
         purpose TEXT NOT NULL, side TEXT NOT NULL, trigger_price REAL NOT NULL,
         limit_price REAL NOT NULL, quantity INTEGER NOT NULL, state TEXT NOT NULL,
-        recorded_ns INTEGER NOT NULL, changed_ns INTEGER NOT NULL, baseline_units INTEGER)
-        STRICT""",
+        recorded_ns INTEGER NOT NULL, changed_ns INTEGER NOT NULL) STRICT""",
     "CREATE UNIQUE INDEX gtts_by_trigger ON gtts (ledger, trigger_id)",
     "CREATE INDEX gtts_by_state ON gtts (ledger, state, seq)",
     """CREATE TABLE gtt_states (

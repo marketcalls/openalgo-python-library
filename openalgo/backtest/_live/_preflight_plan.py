@@ -48,6 +48,8 @@ class PreflightPlan:
     is reported again and no second test alert is sent. `contracts` are the session's
     futures and options as the reference tables resolved them, whose expiry is checked
     against OpenAlgo's master contract (`_preflight_expiry`; a list is kept as a tuple).
+    `gtt` is True for a session with a CNC or NRML strategy, whose stops rest at the broker
+    as GTTs: the GTT capability check runs (`_preflight_gtt`).
 
     Raises ConfigError when `instruments` is empty or holds anything but pairs of
     non-blank strings, when neither `interval` nor `intervals` names an interval or
@@ -66,6 +68,7 @@ class PreflightPlan:
     alerts: AlertsLike | None = None
     tested_alerts: Check | None = None
     contracts: tuple[Instrument, ...] = ()
+    gtt: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", _instrument_pairs(self.instruments))
@@ -190,6 +193,12 @@ class PreflightOutcome:
         )
 
 
+def refused(failures: tuple[str, ...]) -> PreflightError:
+    """The PreflightError of a start that `failures` (each a failed check's message)
+    refuse."""
+    return PreflightError(_failed_text(failures), failures)
+
+
 def _failed_text(failures: tuple[str, ...]) -> str:
     count = f"{len(failures)} preflight check{'' if len(failures) == 1 else 's'} failed"
     lines = "\n".join(f"- {message}" for message in failures)
@@ -236,4 +245,5 @@ __all__ = [
     "PreflightPlan",
     "PreflightReport",
     "positive_amount",
+    "refused",
 ]

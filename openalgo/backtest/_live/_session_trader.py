@@ -54,6 +54,7 @@ from ._session_decisions import DecisionNotes
 from ._session_orders import TraderOrders
 from ._session_records import StrategyRecords
 from ._types import LOGGER_NAME, LiveBar, Now
+from ._venue_gtts import GttMap
 from .venue_map import VenueMap
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -103,7 +104,8 @@ class Trader(Bookkeeping, TraderOrders):
     exchange's session close (UTC nanoseconds); `now` the session's clock, `event` the
     event stream's writer, `decision` the decisions file's and `warn` keeps a warning of
     the session; `locked_entries` the order worker's record of the strategies whose
-    entries are locked (`_locked_entries`)."""
+    entries are locked (`_locked_entries`); `gtts` its GTT map (`_venue_gtts`), which a
+    CNC or NRML strategy's GTT commands go through."""
 
     def __init__(
         self,
@@ -117,8 +119,9 @@ class Trader(Bookkeeping, TraderOrders):
         decision: Callable[..., None],
         warn: Callable[[str], None],
         locked_entries: LockedEntries,
+        gtts: GttMap | None = None,
     ) -> None:
-        self.part, self.venue = part, venue
+        self.part, self.venue, self.gtts = part, venue, gtts
         self.locked_entries, self._warn = locked_entries, warn
         self.name, self.symbol = part.spec.name, part.spec.symbol
         self.exchange, self.product = part.spec.exchange, part.spec.product

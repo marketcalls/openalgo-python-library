@@ -65,6 +65,13 @@ class Bookkeeping:
             self.records.unlocked(reason, self._now())
         return lifted
 
+    def kernel_locked(self, reason: str) -> None:
+        """The kernel locked the strategy's entries for `reason` itself (a stop GTT
+        refused, 20-positional-live 3.5): the order worker's record is told, and the
+        result's records note it."""
+        self._share_locks()
+        self.records.locked(reason, self._now())
+
     def _share_locks(self) -> None:
         """Copy the kernel's entry locks of the strategy, just changed, to the order
         worker's record (`_locked_entries`)."""

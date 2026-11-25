@@ -5,10 +5,11 @@ state it took and when, and the child order it placed when it fired.
 A GTT is written before its place call (`record_gtt`), as an intent is, so a restart that
 meets an unanswered place finds what to look for in the GTT book; the place's answer binds
 it to the broker's trigger ID (`bind_gtt`), and the session notes each later state
-(`set_gtt_state`), each modify the broker confirmed (`set_gtt_terms`) and the units its
-leg would hold had it not fired (`set_gtt_baseline`). A GTT lives
+(`set_gtt_state`) and each modify the broker confirmed (`set_gtt_terms`). A GTT lives
 across days: it is recorded on the session's day and read back on any later one, by its
-number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`).
+number (`gtt`), its trigger ID (`gtt_by_trigger`) or while it has not ended (`open_gtts`);
+a strategy's GTTs of one day, ended or not, are what a same-day restart settles its
+restored GTTs by (`day_gtts`).
 A trigger ID is the broker's GTT's, so it is unique in a ledger. A fired GTT's child is
 bound once (`bind_gtt_child`), on the day it fired; an order the session placed itself is
 never one.
@@ -49,6 +50,7 @@ _STATE = "INSERT INTO gtt_states VALUES (?, ?, ?, ?, ?)"
 _BY_SEQ = "SELECT * FROM gtts WHERE ledger = ? AND seq = ?"
 _BY_TRIGGER = "SELECT * FROM gtts WHERE ledger = ? AND trigger_id = ?"
 _OPEN = "SELECT * FROM gtts WHERE ledger = ? AND state NOT IN ({ended}) ORDER BY seq"
+_OF_DAY = "SELECT * FROM gtts WHERE ledger = ? AND strategy = ? AND day = ? ORDER BY seq"
 _ENDED = tuple(state.value for state in GttState if state.terminal)
 _CHILD = "SELECT * FROM gtt_children WHERE ledger = ? AND gtt_seq = ?"
 _CHILD_OF_ORDER = "SELECT * FROM gtt_children WHERE ledger = ? AND day = ? AND order_id = ?"
@@ -182,25 +184,6 @@ class JournalGtts(JournalHandle):
                 ),
             )
 
-    def set_gtt_baseline(self, seq: int, units: int) -> None:
-        """Note `units`, the signed units GTT `seq`'s leg would hold at the broker had it
-        not fired (its reference moved by the session's own fills since, `_gtt_units`;
-        20-positional-live 3.3, 4.3), as the GTT follower last noted it. A restart does not
-        take it back as the GTT's reference (`_gtt_units` says why). Raises JournalError for
-        units that are not a whole number, and a GTT not in the ledger, not bound to a
-        trigger yet or ended."""
-        baseline = whole_number("baseline_units", units)
-        with self._sql("note the GTT's baseline") as sql:
-            gtt = self._gtt(sql, seq)
-            if gtt.trigger_id is None or gtt.state.terminal:
-                raise JournalError(
-                    f"GTT {seq} is {gtt.state.value}: only a GTT the broker holds has a baseline"
-                )
-            sql.execute(
-                "UPDATE gtts SET baseline_units = ? WHERE ledger = ? AND seq = ?",
-                (baseline, self._ledger, seq),
-            )
-
     def gtt(self, seq: int) -> GttBinding | None:
         """GTT `seq` of the ledger, of whatever day, or None."""
         with self._sql("read the GTT") as sql:
@@ -219,6 +202,14 @@ class JournalGtts(JournalHandle):
         query = _OPEN.format(ended=", ".join("?" * len(_ENDED)))
         with self._sql("read the open GTTs") as sql:
             rows = sql.execute(query, (self._ledger, *_ENDED)).fetchall()
+        return [binding_from(row) for row in rows]
+
+    def day_gtts(self, strategy: str, *, day: date | None = None) -> list[GttBinding]:
+        """The GTTs of `strategy` recorded on the day (the session's, or `day`), ended or
+        not, oldest first. Raises JournalError with no `day` before `start_session`."""
+        key = self._day_key(day, "read the day's GTTs")
+        with self._sql("read the day's GTTs") as sql:
+            rows = sql.execute(_OF_DAY, (self._ledger, strategy, key)).fetchall()
         return [binding_from(row) for row in rows]
 
     def refused_days(

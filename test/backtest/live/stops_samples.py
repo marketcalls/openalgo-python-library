@@ -270,11 +270,14 @@ def option_world(
     *,
     trades_until: tuple[int, int] = (15, 12),
     price: float = OPTION_PRICE,
+    analyzer: bool = False,
 ) -> Any:
     """A rig whose fake also trades the option (module docstring) from 14:40:15 to the IST
     time `trades_until`, at `world.option_price` (`price` at first, which a test may
-    change); SBIN does not trade."""
-    world = stop_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=None)
+    change), in the sandbox when `analyzer`; SBIN does not trade."""
+    world = stop_world(
+        make_fake_openalgo, monkeypatch, tmp_path, trades_until=None, analyzer=analyzer
+    )
     fake = world.fake
     fake.add_instrument(
         OPTION,

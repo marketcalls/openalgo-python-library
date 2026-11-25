@@ -44,6 +44,7 @@ from typing import Any
 
 from ._fill_ledger import FillResult
 from ._group_rules import and_join
+from ._gtt_types import GttRequest
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
 from ._session_trader import Trader
@@ -53,6 +54,7 @@ from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
 from ._stops_cover import Windows, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
+from ._stops_gtt import gtt_cover, gtt_guarded, overnight
 from ._stops_held import HeldWords
 from ._stops_held_day import DayHolds
 from ._stops_kernel import cancelling, push_price
@@ -115,8 +117,12 @@ class StopsSupervisor:
         self.prices.observe(trader, self.leg(trader).stop, price, at_ns)
 
     def handed(self, requests: Sequence[Any]) -> None:
-        """Requests handed to the order worker."""
+        """Requests handed to the order worker (a GTT's told to its strategy's GTT map)."""
         for request in requests:
+            if isinstance(request, GttRequest):
+                gtts = self._session.trader_named(request.strategy).gtts
+                if gtts is not None:
+                    gtts.handed(request)
             if isinstance(request, PlaceRequest | ModifyRequest | CancelRequest):
                 self._requests[request.request_id] = request
                 self._legs.setdefault(request.intent.strategy, LegOrders()).handed(request)
@@ -271,9 +277,10 @@ class StopsSupervisor:
             # An entry the order book cannot tell apart: its units count whatever the rules.
             unsure = abs(leg.ambiguous_entry_units())
             key = (trader.name, trader.symbol, trader.exchange)
+            guarded = leg.guarded or (overnight(trader) and gtt_guarded(trader))
             if units == 0 and not leg.unbound_add_units and not unsure:
                 leg.flat()
-            elif not leg.guarded and not unsure:
+            elif not guarded and not unsure:
                 self._warn_unguarded(trader, units)
             else:
                 uncovered = units + leg.unbound_add_units + unsure - self.covered(trader)
@@ -305,7 +312,10 @@ class StopsSupervisor:
         """The units the leg's confirmed stop may still fill at the broker now, by the terms
         the broker confirmed (the venue map's, whatever modify or cancel of it waits), so
         more than the position until a sale by hand is fitted; none once a cancel of it
-        was sent (the broker may have cancelled it already)."""
+        was sent (the broker may have cancelled it already). A CNC or NRML leg's are its
+        confirmed stop GTTs' (`_stops_gtt`)."""
+        if overnight(trader):
+            return gtt_cover(trader)
         leg = self.leg(trader)
         kernel_order = leg.stop
         watched = leg.orders.get(kernel_order) if kernel_order is not None else None

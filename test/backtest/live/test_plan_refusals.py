@@ -101,13 +101,66 @@ def test_bars_from_the_feeds_ticks_are_the_bars_a_session_runs_on():
             "futures series .* name the contract as the strategy's symbol",
         ),
         ({"interval": "D"}, "a D strategy interval .* trade an intraday interval"),
-        ({"product": "CNC"}, "product CNC .* GTT orders.*trade MIS"),
-        ({"product": "NRML"}, "product NRML .* GTT orders.*trade MIS"),
+        (
+            {"interval": "D", "product": "CNC"},
+            "a D strategy interval .* trade an intraday interval",
+        ),
     ],
 )
 def test_a_strategy_a_live_session_does_not_run_is_refused_saying_what_to_do(attributes, words):
     with pytest.raises(NotImplementedError, match=words):
         specify(subclass(**attributes))
+
+
+#: A contract the reference tables cover on the module's day (the futures series
+#: refusal's own example).
+NIFTY_FUTURE = {"symbol": "NIFTY29DEC26FUT", "exchange": "NFO"}
+
+
+@pytest.mark.parametrize(
+    ("attributes", "product"),
+    [({"product": "CNC"}, "CNC"), ({**NIFTY_FUTURE, "product": "NRML"}, "NRML")],
+    ids=["CNC on NSE", "NRML on NFO"],
+)
+def test_a_cnc_or_nrml_strategy_runs_live_in_its_product(attributes, product):
+    spec = specify(subclass(**attributes))
+
+    assert [each.product for each in spec.strategies] == [product]
+    assert spec.product == product
+
+
+@pytest.mark.parametrize(
+    ("product", "attributes"), [("CNC", {}), ("NRML", NIFTY_FUTURE)], ids=["CNC", "NRML"]
+)
+def test_two_positional_strategies_on_one_symbol_and_product_are_refused(product, attributes):
+    first = subclass("HoldA", product=product, **attributes)
+    second = subclass("HoldB", product=product, **attributes)
+    where = f"{attributes.get('exchange', 'NSE')}:{attributes.get('symbol', 'SBIN')}"
+
+    with pytest.raises(NotImplementedError) as refused:
+        specify([first, second])
+
+    assert str(refused.value) == (
+        f"two CNC or NRML strategies on one symbol and product in a live session (HoldA "
+        f"and HoldB on {where} in {product}) is not supported in this version: run one of "
+        "them in the session, or trade the others in MIS (an MIS and a CNC or NRML "
+        "strategy may trade one symbol)"
+    )
+
+
+def test_an_mis_and_a_cnc_strategy_on_one_symbol_run_together():
+    spec = specify([subclass("Intraday"), subclass("Positional", product="CNC")])
+
+    assert [(each.name, each.product) for each in spec.strategies] == [
+        ("Intraday", "MIS"),
+        ("Positional", "CNC"),
+    ]
+
+
+def test_positional_stops_is_not_taken_by_bt_live():
+    # Unit N5 of 2.5.0 takes it; until then a live session holds every stop as a GTT.
+    with pytest.raises(ConfigError, match="bt.live has no argument positional_stops="):
+        specify(subclass(product="CNC"), positional_stops="rearm_daily")
 
 
 def test_the_contract_a_futures_series_refusal_gives_as_an_example_is_a_valid_symbol():
@@ -237,10 +290,15 @@ def test_with_several_strategies_params_are_given_by_strategy_name():
     assert [each.params for each in spec.strategies] == [None, {"length": 20}]
 
 
-@pytest.mark.parametrize("on_stop", ["close", None, "Flatten"])
-def test_on_stop_takes_flatten_or_keep(on_stop):
-    with pytest.raises(ConfigError, match="on_stop takes 'flatten' .* or 'keep'"):
+@pytest.mark.parametrize("on_stop", ["close", "", "Flatten"])
+def test_on_stop_takes_none_flatten_or_keep(on_stop):
+    with pytest.raises(ConfigError, match="on_stop takes None .* 'flatten' .* or 'keep'"):
         specify(on_stop=on_stop)
+
+
+def test_on_stop_is_none_by_default_flatten_mis_and_keep_cnc_and_nrml():
+    assert inspect.signature(bt.live).parameters["on_stop"].default is None
+    assert specify().arguments.on_stop is None
 
 
 def test_the_account_defaults_to_the_broker_name_ping_reports():

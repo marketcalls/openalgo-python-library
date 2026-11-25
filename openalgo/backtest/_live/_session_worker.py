@@ -8,11 +8,14 @@ nanoseconds.
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import logging
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ..calendar import default_calendar
 from ..errors import LiveError
 from ._journal_reads import JournalSession
 from ._shared_alerts import SharedAlerts
@@ -51,14 +54,18 @@ def start_worker(
     orders_per_second: int,
     read_holdings: bool,
     stack: contextlib.ExitStack,
+    gtt_legs: tuple[tuple[str, str, str], ...] = (),
 ) -> StartedWorker:
     """Step 8 (module docstring): the order worker on the `orders` client, posting to the
     loop's `inbox`, its journal handle W opened on `target`, then journal handle L on the
     same file; `threads` False runs the worker's startup inline (the test seam), and
     `read_holdings` has it read the holdings with every book read (a session with a CNC
-    strategy). Both are closed by `stack`. Raises the worker's startup error, LiveError
-    when it is not ready in `WORKER_READY_TIMEOUT_S`, and JournalError when handle L
-    cannot be opened."""
+    strategy). `gtt_legs` are the (symbol, exchange, product) of the CNC and NRML legs:
+    the GTT follower reads the GTT book on the clock while their exchanges' sessions are
+    open on the trading day of `target` (`market_hours`, the lead's ruling N3b-2), and
+    each reconciliation read gives it their units. Both are closed by `stack`. Raises the
+    worker's startup error, LiveError when it is not ready in `WORKER_READY_TIMEOUT_S`,
+    and JournalError when handle L cannot be opened."""
     worker = OrderWorker(
         orders,
         guard=guard,
@@ -69,6 +76,8 @@ def start_worker(
         sleep=sleep,
         orders_per_second=orders_per_second,
         read_holdings=read_holdings,
+        market_open=market_hours({exchange for _, exchange, _ in gtt_legs}, target.day),
+        gtt_legs=gtt_legs,
     )
     stack.callback(worker.close)
     journal_session = _wait_ready(worker, inbox, now=now, threads=threads)
@@ -83,6 +92,17 @@ def start_worker(
         )
     )
     return StartedWorker(worker, journal_session, journal)
+
+
+def market_hours(exchanges: Iterable[str], day: dt.date) -> Callable[[int], bool] | None:
+    """Whether the market of any of `exchanges` is open at an instant (UTC ns) on `day`, by
+    the package calendar's sessions; None for no exchange (no read on the clock)."""
+    calendar = default_calendar()
+    sessions = [calendar.session(exchange, day) for exchange in sorted(exchanges)]
+    spans = [span for span in sessions if span is not None]
+    if not sessions:
+        return None
+    return lambda now_ns: any(opens <= now_ns < closes for opens, closes in spans)
 
 
 def _wait_ready(worker: OrderWorker, inbox: Inbox, *, now: Now, threads: bool) -> JournalSession:

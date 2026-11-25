@@ -20,16 +20,19 @@ differences acted on, and then, before the banner, the protective start phase.
   again by the retry schedule), a leg stop `apply_cancel`, which places it again (R3).
 
 Then: the saved entry locks that last the day (reconciliation, exit failed, the
-account's daily loss) set again, since the kernel restores none (K4); a leg the start
-judged different from the broker locked from the start and, when other orders' trades
-explain the difference, adopted; the exit guard opened for a leg whose broker holds fewer
-units (a leg whose restored engine holds other units than the start judged waits for a
-fresh read instead: `Reconciler.differs_at_start`); each leg with a position given its
-stop again (`protect`, R7: nothing when one works), or, past its square-off, exited
-(`request_exit("square_off")`); the reconciler told what was adopted and which orders are
-the session's own; every restored order polled once (`StreamGap`). The kernel's events
-not delivered before the crash are lost (K4): the strategy's `on_fill`, `on_order` and
-`on_position` never run for them.
+account's daily loss, a stop GTT refused at placement: `_session_saved.DAY_LOCKS`) set
+again, since the kernel restores none (K4); a leg the start judged different from the
+broker locked from the start and, when other orders' trades explain the difference,
+adopted; the exit guard opened for a leg whose broker holds fewer units (a leg whose
+restored engine holds other units than the start judged waits for a fresh read instead:
+`Reconciler.differs_at_start`); a CNC or NRML leg's GTTs taken back by the journal
+(`_session_restore_gtts`); each leg with a position given its stop again (`protect`, R7:
+nothing when one works), or, for an MIS leg past its square-off, exited
+(`request_exit("square_off")`: a CNC or NRML leg is never squared off, it is carried at
+the close, 20-positional-live 7.3); the reconciler told what was adopted and which orders
+are the session's own; every restored order polled once (`StreamGap`). The kernel's
+events not delivered before the crash are lost (K4): the strategy's `on_fill`, `on_order`
+and `on_position` never run for them.
 
 **The protective start phase** (`protect_restored`, 3.1 step 12): the loop turns with no
 feed and no strategy called until every resumed leg is flat, has no stop rule, or its
@@ -52,8 +55,10 @@ from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
 from ._restart_books import LegStart, Restart
 from ._session_records import restored
+from ._session_restore_gtts import restore_gtts
 from ._session_saved import Saved
 from ._session_trader import Trader
+from ._stops_gtt import overnight
 from ._stops_kernel import protect
 from ._stops_report import stop_words
 from ._types import (
@@ -259,14 +264,16 @@ def _place(kernel_order: int, intent: OrderIntent) -> PlaceRequest:
 
 
 def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> None:
-    """The start's difference acted on, then the leg's stop or its square-off."""
+    """The start's difference acted on, then the leg's stop or, for an MIS leg past its
+    square-off, its square-off (a CNC or NRML leg is carried, never squared off)."""
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
         reconcile = session.reconcile
         reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
+    restore_gtts(session, trader)
     units = trader.open_units()
     if units == 0:
         return
-    if session.now() >= trader.square_off_ns:
+    if session.now() >= trader.square_off_ns and not overnight(trader):
         outcome = trader.request_exit(SQUARE_OFF)
         session.event("restart_square_off", strategy=trader.name, outcome=outcome)
     elif not session.reconcile.holds(trader):

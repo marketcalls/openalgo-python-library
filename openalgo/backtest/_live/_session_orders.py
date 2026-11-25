@@ -2,7 +2,8 @@
 design 2.5 E, 2.7, 3.3; unit 8), split from `_session_trader` so each module keeps one
 job.
 
-- **Commands** (`commands`): the kernel's commands as the order worker's requests. A
+- **Commands** (`commands`): the kernel's commands as the order worker's requests, its
+  GTT commands through the strategy's GTT map (`_venue_gtts`), in the kernel's order. A
   placement the kernel cancelled before the loop took it (the safe stop's cancel of an
   entry decided in the same loop step) is withdrawn: it is never sent, and the kernel is
   told it was cancelled (`apply_cancel`). An entry or add placed while the strategy's
@@ -11,6 +12,9 @@ job.
   withdrawn (`_venue_withdraw`), and the worker refuses one it takes meanwhile
   (`_locked_entries`). A resting reversal is refused, never sent, and so is a resting
   order against the open position that its closing room cannot take (`_session_unsent`).
+  A strategy's GTT order (an entry) placed while its entries are locked is refused the
+  same way: the kernel takes it as refused (`apply_gtt_refused`, the order rejected), and
+  the worker answers one it takes meanwhile as refused (`_worker_send`).
 - **Position and working orders**: the kernel's position in units, its working orders,
   those that open or add and those that close, and how an alert names an order.
 - **Exits and cancels** the session asks of the kernel.
@@ -25,16 +29,22 @@ the risk exits' reasons and the position's units at each placement (`reasons`,
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._gtt_types import GttRequest
 from ._plan_catch_up import INSTRUMENT
 from ._session_unsent import to_send
+from ._types import LOGGER_NAME
+from ._venue_gtts import GTT_COMMANDS, GttMap
 from ._venue_requests import OrderRequest
 from ._worker_queue import WithdrawPlace
 from .venue_map import VenueMap
+
+logger = logging.getLogger(LOGGER_NAME)
 
 
 class TraderOrders:
@@ -48,28 +58,32 @@ class TraderOrders:
     engine: Any
     part: Any
     venue: VenueMap
+    #: The strategy's GTT map (None for a trader built with none: it takes no GTT command).
+    gtts: GttMap | None = None
     finished: bool
     reasons: dict[int, str]
     units_at_place: dict[int, int]
     _event: Callable[..., None]
     _warn: Callable[[str], None]
 
-    def commands(self) -> list[OrderRequest | WithdrawPlace]:
+    def commands(self) -> list[OrderRequest | GttRequest | WithdrawPlace]:
         """The kernel's commands since the last call, as the order worker's requests (a
         placement the kernel cancelled before this call withdrawn: module docstring; one
         it cancelled after, or that waits once its entries lock, withdrawn by the worker:
         `WithdrawPlace`); the reason of each risk exit placed is kept (`reasons`), and the
-        position's units at each placement (`units_at_place`)."""
+        position's units at each placement (`units_at_place`). Raises LiveError for a
+        GTT command of a trader built with no GTT map."""
         if self.finished:
             return []
-        requests: list[OrderRequest | WithdrawPlace] = []
+        requests: list[OrderRequest | GttRequest | WithdrawPlace] = []
         commands = call(self.engine.take_commands)
         reversals = self.part.context.resting_reversals
         while commands:
+            orders = [c for c in commands if c.get("command") not in GTT_COMMANDS]
             kept = to_send(
                 self.engine,
                 self.name,
-                commands,
+                orders,
                 event=self._event,
                 reversals=reversals,
                 warn=self._warn,
@@ -81,11 +95,48 @@ class TraderOrders:
                 self.units_at_place[kernel_order] = round(abs(self.open_units()))
                 if command.get("reason"):
                     self.reasons[kernel_order] = str(command["reason"])
-            requests += self.venue.requests(kept)
+            requests += self._in_order(commands, kept)
             # A withdrawal or a refusal ends an order in the kernel, which may free an exit
             # that waited for it: its commands go out in this same call.
-            commands = call(self.engine.take_commands) if len(kept) < len(commands) else []
+            commands = call(self.engine.take_commands) if len(kept) < len(orders) else []
         return requests + self.venue.withdraw_locked()
+
+    def _in_order(
+        self, commands: list[dict[str, Any]], kept: list[dict[str, Any]]
+    ) -> list[OrderRequest | GttRequest | WithdrawPlace]:
+        """The requests of `commands`, in the kernel's order: its GTT commands' through the
+        GTT map, and of its order commands those `to_send` `kept`."""
+        sent = {id(command) for command in kept}
+        made: list[OrderRequest | GttRequest | WithdrawPlace] = []
+        for command in commands:
+            if command.get("command") in GTT_COMMANDS:
+                if self.gtts is None:
+                    raise LiveError(f"{self.name} has no GTT map for the command {command!r}")
+                if not self._gtt_entry_locked(command):
+                    made += self.gtts.requests(command)
+            elif id(command) in sent:
+                made += self.venue.requests([command])
+        return made
+
+    def _gtt_entry_locked(self, command: dict[str, Any]) -> bool:
+        """Whether `command` places a strategy's GTT order (an entry: its `order_id`) while
+        the strategy's entries are locked: then the kernel is told it was refused, so the
+        order ends rejected, and nothing is sent (module docstring)."""
+        if command.get("command") != "place_gtt" or command.get("order_id") is None:
+            return False
+        locks = sorted(call(self.engine.entry_locks))
+        if not locks:
+            return False
+        gtt_id = int(command["gtt_id"])
+        call(self.engine.apply_gtt_refused, gtt_id)
+        logger.warning(
+            "%s: GTT order g%d opens a position while entries are locked (%s): refused, not sent",
+            self.name,
+            gtt_id,
+            ", ".join(locks),
+        )
+        self._event("refused_locked", strategy=self.name, gtt=gtt_id, locks=locks)
+        return True
 
     def open_units(self) -> float:
         """The kernel's position in the strategy's instrument and product, signed units (0

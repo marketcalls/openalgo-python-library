@@ -213,13 +213,15 @@ These are settled. Do not redesign around them without asking.
   stop-limit with the limit 5 percent beyond the trigger for NFO and BFO options (they
   accept no SL-M); the engine holds targets, trailing (by modifying the broker's stop)
   and the daily loss limit on ticks. The plan is PRD 15-phase2-plan.md.
-- **Live sessions, decided 2026-11-16.** What Ctrl+C does with open positions is chosen per
-  run by `bt.live(on_stop="flatten" | "keep")` (default flatten). An unexplained
-  reconciliation mismatch locks entries and alerts, with only safe corrections; it never
-  exits a position. Entries without a stop are allowed in live, with a warning in the start
-  banner and the result. A change of the analyzer switch during a session locks it and
-  alerts with every position and its stop status; nothing more is sent. The session design
-  and its other decisions are PRD 16-session-design.md (section 10.0).
+- **Live sessions, decided 2026-11-16.** What Ctrl+C does with open positions is chosen
+  per run by `bt.live(on_stop="flatten" | "keep")`; the default (None) flattens MIS
+  positions and keeps CNC and NRML positions with their stop GTTs (design 20 decision
+  11.8, 2026-11-24). An unexplained reconciliation mismatch locks entries and alerts,
+  with only safe corrections; it never exits a position. Entries without a stop are
+  allowed in live, with a warning in the start banner and the result. A change of the
+  analyzer switch during a session locks it and alerts with every position and its stop
+  status; nothing more is sent. The session design and its other decisions are PRD
+  16-session-design.md (section 10.0).
 - **Speed targets.** An empty `on_bar` makes at least 300k callbacks per second; an
   array or condition strategy over 1M bars, with charges, slippage and every metric,
   takes at most 2 seconds on a current desktop core (`benchmark/backtest_speed.py`).

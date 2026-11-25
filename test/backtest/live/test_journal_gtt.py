@@ -9,6 +9,8 @@ written.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from journal_samples import (
     DAY,
@@ -187,39 +189,16 @@ def test_a_confirmed_modify_keeps_the_terms_the_broker_holds(path):
         assert journal.gtt_by_trigger("T-901").terms == trailed
 
 
-def test_a_gtts_baseline_is_none_until_one_is_noted(path):
+def test_a_gtts_row_keeps_no_baseline_of_its_legs_units(path):
+    # Nothing reads such a figure back (`_gtt_units`): a reference across days comes from
+    # the day-close record instead (the lead's ruling N3b-0 (c)).
     with started_journal(path) as journal:
-        seq = recorded(journal)
-        journal.bind_gtt(seq, "T-901")
+        journal.bind_gtt(recorded(journal), "T-901")
+        assert not hasattr(journal, "set_gtt_baseline")
+    with sqlite3.connect(path) as sql:
+        columns = [row[1] for row in sql.execute("PRAGMA table_info(gtts)")]
 
-        assert journal.gtt(seq).baseline_units is None
-
-
-def test_a_gtts_baseline_is_the_last_one_noted_and_read_back_on_a_later_day(path):
-    with started_journal(path) as journal:
-        seq = recorded(journal)
-        journal.bind_gtt(seq, "T-901")
-        journal.set_gtt_baseline(seq, 10)
-        journal.set_gtt_baseline(seq, 6)
-    clock = ManualClock(ist_ns(NEXT_DAY, 9))
-    with started_journal(path, day=NEXT_DAY, now=clock) as journal:
-        assert [gtt.baseline_units for gtt in journal.open_gtts()] == [6]
-
-
-@pytest.mark.parametrize(("units", "words"), [(2.5, "whole number"), ("10", "whole number")])
-def test_a_baseline_that_is_not_whole_units_is_refused(path, units, words):
-    with started_journal(path) as journal:
-        seq = recorded(journal)
-        journal.bind_gtt(seq, "T-901")
-        with pytest.raises(JournalError, match=words):
-            journal.set_gtt_baseline(seq, units)
-
-
-def test_a_gtt_not_at_the_broker_has_no_baseline(path):
-    with started_journal(path) as journal:
-        seq = recorded(journal)
-        with pytest.raises(JournalError, match="only a GTT the broker holds has a baseline"):
-            journal.set_gtt_baseline(seq, 10)
+    assert "baseline_units" not in columns
 
 
 def test_a_gtt_not_at_the_broker_is_not_modified(path):
@@ -253,6 +232,23 @@ def test_the_gtts_not_ended_are_read_on_a_later_day_oldest_first(path):
             (carried, DAY),
             (today, NEXT_DAY),
         ]
+
+
+def test_a_strategys_gtts_of_a_day_are_read_ended_or_not_oldest_first(path):
+    with started_journal(path) as journal:
+        earlier = recorded(journal, 1)
+    clock = ManualClock(ist_ns(NEXT_DAY, 9))
+    with started_journal(path, day=NEXT_DAY, now=clock) as journal:
+        cancelled, resting = recorded(journal, 1, 3), recorded(journal, 2, 4)
+        journal.bind_gtt(cancelled, "T-1")
+        journal.set_gtt_state(cancelled, GttState.CANCELLED)
+        other = journal.record_gtt("swing", 1, 5, "SBIN", "NSE", "CNC", STOP, purpose=Purpose.STOP)
+
+        today = [gtt.seq for gtt in journal.day_gtts("ema")]
+        that_day = [gtt.seq for gtt in journal.day_gtts("ema", day=DAY)]
+
+    assert (today, that_day) == ([cancelled, resting], [earlier])
+    assert other not in today
 
 
 def test_a_handle_never_sees_the_other_ledgers_gtts(path):
