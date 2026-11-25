@@ -24,8 +24,9 @@ account's daily loss) set again, since the kernel restores none (K4); a leg the 
 judged different from the broker locked from the start and, when other orders' trades
 explain the difference, adopted; the exit guard opened for a leg whose broker holds fewer
 units (a leg whose restored engine holds other units than the start judged waits for a
-fresh read instead: `Reconciler.differs_at_start`); each leg with a position given its
-stop again (`protect`, R7: nothing when one works), or, past its square-off, exited
+fresh read instead: `Reconciler.differs_at_start`); a CNC or NRML leg's GTTs taken back
+by the journal (`_session_restore_gtts`); each leg with a position given its stop again
+(`protect`, R7: nothing when one works), or, past its square-off, exited
 (`request_exit("square_off")`); the reconciler told what was adopted and which orders are
 the session's own; every restored order polled once (`StreamGap`). The kernel's events
 not delivered before the crash are lost (K4): the strategy's `on_fill`, `on_order` and
@@ -52,6 +53,7 @@ from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
 from ._restart_books import LegStart, Restart
 from ._session_records import restored
+from ._session_restore_gtts import restore_gtts
 from ._session_saved import Saved
 from ._session_trader import Trader
 from ._stops_kernel import protect
@@ -263,6 +265,7 @@ def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> Non
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
         reconcile = session.reconcile
         reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
+    restore_gtts(session, trader)
     units = trader.open_units()
     if units == 0:
         return

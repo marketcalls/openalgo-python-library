@@ -192,15 +192,20 @@ class GttNewsHandler:
             )
 
     def _unresolved(self, trader: Trader, why: str) -> None:
-        """Lock the strategy's entries for the session and alert (module docstring)."""
-        trader.lock(GTT_UNRESOLVED_LOCK)
-        self._session.event("gtt_unresolved", strategy=trader.name, why=why)
-        self._session.alert(
-            AlertKind.ERROR,
-            f"{trader.name}: {why}. Its entries are locked and nothing is exited: check the "
-            f"GTT and order books in OpenAlgo for {trader.symbol} {trader.exchange}, settle "
-            "it by hand, then start the session again",
-        )
+        lock_unresolved(self._session, trader, why)
+
+
+def lock_unresolved(session: Any, trader: Trader, why: str) -> None:
+    """Lock `trader`'s entries for the session and alert why (module docstring "Unresolved");
+    `session` is the `_session_loop.Session`."""
+    trader.lock(GTT_UNRESOLVED_LOCK)
+    session.event("gtt_unresolved", strategy=trader.name, why=why)
+    session.alert(
+        AlertKind.ERROR,
+        f"{trader.name}: {why}. Its entries are locked and nothing is exited: check the "
+        f"GTT and order books in OpenAlgo for {trader.symbol} {trader.exchange}, settle "
+        "it by hand, then start the session again",
+    )
 
 
 def _named(trigger_id: str, purpose: Purpose) -> str:
@@ -209,4 +214,10 @@ def _named(trigger_id: str, purpose: Purpose) -> str:
     return f"{kind} {trigger_id}" if trigger_id else kind
 
 
-__all__ = ["GTT_REFUSED_LOCK", "GTT_UNRESOLVED_LOCK", "MISSED_SOURCE", "GttNewsHandler"]
+__all__ = [
+    "GTT_REFUSED_LOCK",
+    "GTT_UNRESOLVED_LOCK",
+    "MISSED_SOURCE",
+    "GttNewsHandler",
+    "lock_unresolved",
+]

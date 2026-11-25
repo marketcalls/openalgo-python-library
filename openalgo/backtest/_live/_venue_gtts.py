@@ -23,6 +23,12 @@ the style of the venue map's orders (`venue_map`).
   the kernel places the stop again or exits flagged `stop_crossed`; IN_FLIGHT and
   RESTING none; MISMATCH and OTHER_TERMS none: the session locks and alerts.
 
+- **A restart** (`take_back`): each GTT the kernel restores is taken back with the
+  journal's GTT and the broker's trigger ID it is bound to (`_session_restore_gtts`); one
+  whose state the restart cannot tell is unsettled: the kernel's later commands about it
+  are not sent and its findings apply nothing (the session has locked the strategy's
+  entries and alerted).
+
 A result call the kernel refuses (`VenueRefusalError`) is reported in the result
 (`GttHandled.refused`), never swallowed: the session alerts and locks. Quantities are
 whole units, prices rupees, times UTC nanoseconds. Used by the loop only.
@@ -111,8 +117,9 @@ class KernelGtt:
     """What the session knows of one of the kernel's GTTs: what it is for, the journal's
     GTT and the broker's trigger ID once a place was answered, the commands waiting for
     them, the terms last asked for, since when (UTC ns) a stop's place waits for its
-    answer (None once answered), the kernel order of its child once it fired, and whether
-    a cancel of it was handed to the order worker and not answered (`cancel_sent`)."""
+    answer (None once answered), the kernel order of its child once it fired, whether
+    a cancel of it was handed to the order worker and not answered (`cancel_sent`), and
+    whether a restart could not tell where it stands (`unsettled`, module docstring)."""
 
     purpose: Purpose
     asked: GttTerms
@@ -122,6 +129,7 @@ class KernelGtt:
     placing_ns: int | None = None
     child: int | None = None
     cancel_sent: bool = False
+    unsettled: bool = False
 
 
 class GttMap:
@@ -172,13 +180,34 @@ class GttMap:
             if known.placing_ns is not None and known.purpose is Purpose.STOP
         )
 
+    def take_back(
+        self, view: Mapping[str, Any], *, seq: int | None, trigger_id: str, unsettled: bool
+    ) -> None:
+        """Take back at a restart the kernel's GTT `view` (an `Engine.gtt` dict): the
+        journal's GTT `seq` bound to the broker's `trigger_id`, or `unsettled` (module
+        docstring)."""
+        purpose = Purpose.STOP if view["purpose"] == "stop" else Purpose.ENTRY
+        known = KernelGtt(purpose, _terms(view), seq=seq, trigger_id=trigger_id)
+        known.unsettled = unsettled
+        self._gtts[int(view["gtt_id"])] = known
+
     # ----- commands to requests --------------------------------------------------------
 
     def requests(self, command: Mapping[str, Any]) -> list[GttRequest]:
         """The order worker's requests for one of the kernel's GTT commands: none for a
-        modify or cancel that waits for its place's answer (module docstring). Raises
-        LiveError for a command this map cannot send."""
+        modify or cancel that waits for its place's answer, nor for a GTT a restart left
+        unsettled (module docstring). Raises LiveError for a command this map cannot
+        send."""
         kind, gtt_id = command.get("command"), int(command["gtt_id"])
+        unsettled = self._gtts.get(gtt_id)
+        if unsettled is not None and unsettled.unsettled:
+            logger.warning(
+                "%s: kernel GTT g%d was left unsettled by the restart: its %s is not sent",
+                self._strategy,
+                gtt_id,
+                kind,
+            )
+            return []
         if kind == "place_gtt":
             if gtt_id in self._gtts:
                 raise LiveError(f"kernel GTT g{gtt_id} of {self._strategy} is placed twice")
@@ -254,11 +283,12 @@ class GttMap:
 
     def found(self, outcome: GttOutcome) -> GttHandled:
         """Apply a finding of the GTT follower about one of this map's GTTs (module
-        docstring). A finding about a GTT this session never placed (one a restart
-        follows from the journal) changes nothing in the kernel: unit N5 restores those."""
+        docstring). A finding about a GTT this session never placed nor took back (one of
+        an earlier day the follower follows from the journal: unit N5 restores those), or
+        one a restart left unsettled, changes nothing in the kernel."""
         known = self._gtts.get(outcome.gtt_id)
         event, gtt_id = outcome.event, outcome.gtt_id
-        if known is None:
+        if known is None or known.unsettled:
             logger.warning(
                 "%s: GTT %s (%s) is not one this session placed: nothing applied",
                 self._strategy,
