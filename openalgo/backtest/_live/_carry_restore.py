@@ -108,9 +108,11 @@ def settle_place(gtts: GttMap, view: Mapping[str, Any], row: GttBinding) -> list
     """The request that settles a restored GTT whose place the journal shows under way and
     unbound (`row`; the lead's ruling N5a-5): its place, naming the journal's GTT, which the
     order worker settles as an unanswered place before anything is sent (`_gtt_send`). The
-    GTT map takes the kernel's GTT `view` (an `Engine.gtt` dict) as a place handed over;
+    GTT map takes the kernel's GTT `view` (an `Engine.gtt` dict) as a place handed over, on
+    the terms of its modify pending when it has one (a replace's place after its cancel);
     its later commands wait for the answer."""
-    (request,) = gtts.requests({**view, "command": "place_gtt"})
+    terms = view.get("pending") or {}
+    (request,) = gtts.requests({**view, **terms, "command": "place_gtt"})
     return [replace(request, seq=row.seq)]
 
 

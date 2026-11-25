@@ -26,11 +26,12 @@ saved state still waits for (`settle`), by the kernel's state and the journal's 
 - Requested, the journal's not placed (refused by the broker, or never reached it): placed
   again; a second refusal is answered as one (`apply_gtt_refused`: the leg is exited and
   entries locked for the day), and a transient one is placed.
-- Requested, the journal's requested and bound to no trigger ID (its place under way when
-  the crash came: it may rest at the broker, which only a read of the GTT book can tell):
-  settled by the order worker as an unanswered place (`_carry_restore.settle_place`; the
-  lead's ruling N5a-5): one of its shape resting is bound, none with no fall since a
-  reference from before the place is placed again once, anything else is unresolved.
+- Requested, or ModifyPending (a replace's place after its cancel), the journal's
+  requested and bound to no trigger ID (its place under way when the crash came: it may
+  rest at the broker, which only a read of the GTT book can tell): settled by the order
+  worker as an unanswered place (`_carry_restore.settle_place`; the lead's ruling N5a-5):
+  one of its shape resting is bound, none with no fall since a reference from before the
+  place is placed again once, anything else is unresolved.
 - Anything else: unsettled.
 
 "Bound" is a journal's GTT bound to the broker's trigger ID that has not ended (placed,
@@ -104,7 +105,9 @@ def settle(view: Mapping[str, Any], row: GttBinding | None) -> Settled:
     bound = row is not None and row.trigger_id is not None and row.state in _BOUND
     if state == "Requested" and row is None:
         return Settled(Settle.PLACE)
-    if state == "Requested" and row is not None and row.state is GttState.REQUESTED:
+    under_way = row is not None and row.state is GttState.REQUESTED and row.trigger_id is None
+    if state in ("Requested", "ModifyPending") and under_way:
+        # A place, or a replace's place after its cancel, under way: settled (module docstring).
         return Settled(Settle.SETTLE_PLACE)
     if bound and state in ("Requested", "Active") and _same(view, row):
         return Settled(Settle.CONFIRM_PLACE if state == "Requested" else Settle.TAKE_BACK)
