@@ -63,8 +63,10 @@ the reconciler while its GTT's fate is open. The loop's GTT parts (20-positional
 3; unit N3b) are `_venue_gtts` (each strategy's GTT map: the kernel's GTT commands as GTT
 requests, each answer and finding as its kernel call), `_session_gtts` (what the session
 does around each), `_venue_children` and `_order_children` (a fired GTT's child followed
-as an order, in the venue map and on the order path) and `_stops_gtt` (a CNC or NRML
-leg's stop GTT as the stops supervisor sees it); the end of the day is
+as an order, in the venue map and on the order path), `_stops_gtt` (a CNC or NRML
+leg's stop GTT as the stops supervisor sees it), `_reconcile_guard_gtt` (the exit guard's
+rules for a leg's GTT calls) and `_session_restore_gtts` (the GTTs a same-day restart
+takes back); the end of the day is
 `_session_day_end`, the legs carried past the close and their day-close records
 `_session_carry`, and the worker's GTT requests `_worker_gtts`. OpenAlgo's product names
 are `.._products`'.
