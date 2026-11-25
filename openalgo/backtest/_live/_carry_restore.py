@@ -14,9 +14,12 @@ step 11 once the plan's catch-up is done, for a strategy with nothing saved toda
 - **The GTTs** are taken back into the strategy's GTT map by the journal's GTT the record
   binds each to (`_carry_start.BINDINGS_KEY`): one still bound at the broker is followed
   as before; one whose place was under way at the close is settled by the order worker as
-  an unanswered place (`settle_place`, the lead's ruling N5a-5); one the journal ended after
-  the close (cancelled by hand, found by the close's follower) ended outside the session,
-  so the kernel places the leg's stop again; any other is unsettled: entries locked with
+  an unanswered place (`settle_place`, the lead's ruling N5a-5); one the journal ended
+  today (the start's read of the GTT book found it ended: its finding, on its way to the
+  loop, applies it) is taken back as bound; one it ended on an earlier day (after that
+  day's close) ended outside the session, so the kernel places the leg's stop again (as
+  a GTT older than 360 days the broker expires is: 20-positional-live 3.1, "expired");
+  any other is unsettled: entries locked with
   an ERROR alert, never an exit (`_session_restore_gtts`). Each binding is kept with the
   strategy's saved state (`gtt_bindings`), so a restart later today takes them back too.
 
@@ -31,6 +34,7 @@ from typing import Any
 
 from .._engine import call
 from .._futures_contracts import last_day
+from .._series import ist_time
 from ..errors import LiveError
 from ._carry_start import Carried, gtt_seqs
 from ._gtt_types import GttRequest
@@ -82,7 +86,10 @@ def _take_back(session: Any, trader: Trader, gtt_id: int, row: GttBinding | None
     if gtts is None or view is None:
         return []
     bound = row is not None and row.trigger_id is not None and row.state in _BOUND
-    if row is not None and bound:
+    # One the start's read of the GTT book ended today: its finding, on its way to the
+    # loop, applies it through the GTT map.
+    ended_today = row is not None and ist_time(row.changed_ns).date() == session.parts.spec.day
+    if row is not None and (bound or (row.state in _ENDED_UNFIRED and ended_today)):
         gtts.take_back(view, seq=row.seq, trigger_id=row.trigger_id or "", unsettled=False)
         return []
     if row is not None and row.state is GttState.REQUESTED:

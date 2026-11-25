@@ -23,6 +23,7 @@ from typing import Any
 
 from fake_openalgo import BROKER
 from fake_openalgo.clock import ist_ns
+from plan_samples import candles
 from positional_samples import CncHold, gtt_world
 from session_samples import NS, TRADE_EVERY_S
 from stops_samples import STOP_POINTS
@@ -64,20 +65,68 @@ class CncKeptTrail(CncKept):
     }
 
 
+#: A NIFTY future of the scenarios that hold one, NRML: one lot of 65 units, priced as the
+#: stops tests price the option (about 120.00), so its margin is small.
+FUTURE, FUTURE_LOT, FUTURE_PRICE = "NIFTY29DEC26FUT", 65, 120.0
+
+
+class FutKept(bt.Strategy):
+    """Buys one lot of `FUTURE` in NRML at its first decision with a stop 10 points below,
+    the entry kept in `self.state`."""
+
+    symbol, exchange, interval, product = FUTURE, "NFO", "1m", "NRML"
+
+    def on_bar(self, bar):
+        if not self.state.get("bought"):
+            self.state["bought"] = True
+            self.buy(FUTURE_LOT, stop=bt.points(10))
+
+
 def carried_world(
     make_fake_openalgo: Any,
     monkeypatch: Any,
     tmp_path: Any,
     strategy: Any = CncKept,
+    *,
+    future: bool = False,
     **options: Any,
 ) -> Any:
     """A `positional_samples.gtt_world` (its `history` and `analyzer` among `options`)
-    whose day-1 session of `strategy` has run to NSE's close and carried its leg; the
-    outcome is `world.first`."""
+    whose day-1 session of `strategy` (one or a list) has run to NSE's close and carried
+    its legs; the outcome is `world.first`. With `future`, the fake also trades `FUTURE`
+    at `FUTURE_PRICE` every 10 s from the start, as it does SBIN."""
     world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 32), **options)
+    world.future = future
+    if future:
+        _add_future(world)
     world.first = world.run(strategy)
     world.day = DAY1
     return world
+
+
+def _add_future(world: Any) -> None:
+    """The fake's `FUTURE`: its candles of the history days and of today to the start, at
+    a quarter of SBIN's, and its trades every 10 s from the start to 15:32."""
+    fake = world.fake
+    fake.add_instrument(
+        FUTURE,
+        "NFO",
+        lot_size=FUTURE_LOT,
+        tick_size=0.05,
+        instrument_type="FUT",
+        expiry="29-DEC-26",
+    )
+    seeded = candles(today_until=(14, 40))
+    rows = [(t, o / 4, h / 4, low / 4, c / 4, v) for t, o, h, low, c, v in seeded]
+    fake.seed_candles(FUTURE, "NFO", rows)
+    _future_trades(world, on(DAY1, *START), on(DAY1, *TRADES_UNTIL))
+
+
+def _future_trades(world: Any, start_ns: int, end_ns: int) -> None:
+    fake = world.fake
+    fake.trade(FUTURE, "NFO", FUTURE_PRICE, volume=FUTURE_LOT)
+    for instant in range(start_ns + TRADE_EVERY_S * NS, end_ns, TRADE_EVERY_S * NS):
+        world.script.at(instant, lambda: fake.trade(FUTURE, "NFO", FUTURE_PRICE, volume=FUTURE_LOT))
 
 
 def flat_minutes(start_ns: int, end_ns: int, price: float = 500.0) -> list[tuple]:
@@ -105,18 +154,24 @@ def to_day(world: Any, day: dt.date, *, start: tuple[int, int, int] = START) -> 
     world.script.sleep((start_ns - fake.clock.now()) / NS)
     world.script.trade()
     world.script.trades(start_ns + TRADE_EVERY_S * NS, on(day, *TRADES_UNTIL))
+    if getattr(world, "future", False):
+        _future_trades(world, start_ns, on(day, *TRADES_UNTIL))
 
 
 def _next(world: Any, day: dt.date) -> None:
-    """End the fake's day and seed SBIN's flat candles from the last day's start to `day`'s
-    session start."""
+    """End the fake's day and seed flat candles of SBIN (and of `FUTURE`, which the
+    world may trade) from the last day's start to `day`'s session start."""
     fake, calendar = world.fake, default_calendar()
     fake.end_day()
     _, last_close = calendar.session("NSE", world.day)
     opens, _ = calendar.session("NSE", day)
-    candles = flat_minutes(on(world.day, 14, 40), last_close)
-    candles += flat_minutes(opens, on(day, *START[:2]))
-    fake.seed_candles("SBIN", "NSE", candles)
+    priced = [("SBIN", "NSE", 500.0)]
+    if getattr(world, "future", False):
+        priced.append((FUTURE, "NFO", FUTURE_PRICE))
+    for symbol, exchange, price in priced:
+        rows = flat_minutes(on(world.day, 14, 40), last_close, price)
+        rows += flat_minutes(opens, on(day, *START[:2]), price)
+        fake.seed_candles(symbol, exchange, rows)
     world.day = day
 
 
@@ -143,8 +198,12 @@ __all__ = [
     "DAY2",
     "DAY3",
     "DAY4",
+    "FUTURE",
+    "FUTURE_LOT",
+    "FUTURE_PRICE",
     "CncKept",
     "CncKeptTrail",
+    "FutKept",
     "carried_world",
     "flat_minutes",
     "held",
