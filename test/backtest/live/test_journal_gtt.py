@@ -187,7 +187,7 @@ def test_a_confirmed_modify_keeps_the_terms_the_broker_holds(path):
         assert journal.gtt_by_trigger("T-901").terms == trailed
 
 
-def test_a_gtts_baseline_is_none_until_a_read_shows_it_resting_with_its_position(path):
+def test_a_gtts_baseline_is_none_until_one_is_noted(path):
     with started_journal(path) as journal:
         seq = recorded(journal)
         journal.bind_gtt(seq, "T-901")

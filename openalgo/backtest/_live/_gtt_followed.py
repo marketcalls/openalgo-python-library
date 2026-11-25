@@ -6,7 +6,9 @@ row shows and the outcome each is (`ENDINGS`), and the outcome posted to the loo
 **The baseline** (3.3, 4.3) a GTT keeps in the journal is the units its leg would hold had
 it not fired: its reference moved by the session's own fills since (`_gtt_units`). A
 partial exit that sold 5 of 10 while the stop rested leaves a baseline of 5, so the exit
-is never taken for the GTT firing; a later day judges the GTT by it (`Followed.kept`).
+is never taken for the GTT firing. A restart, on that day or a later one, takes it back as
+the GTT's reference until a read shows the GTT resting (`GttFollower.restore`);
+`Followed.kept` is the figure last noted, so an unchanged one is not written again.
 
 Times are UTC nanoseconds, prices rupees, quantities signed whole units.
 """

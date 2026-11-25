@@ -16,8 +16,10 @@ worker for the client's whole timeout. A read that fails changes nothing.
 here, in one place: each leg's latest settled read, from every read of the GTT book the
 GTT parts make (the legs' units are read just before it, `_gtt_reads`) and from the
 session's own reads (`reference`); a GTT's, the leg's latest when its place is sent
-(`placing`) and again at each read that shows it resting. A read made while the session's
-own fills on the leg had not settled (`_own_fills`) is never a reference.
+(`placing`) and again at each read that shows it resting. A GTT taken back from the
+journal on a restart has the baseline the journal kept for it until then (`restore`). A
+read made while the session's own fills on the leg had not settled (`_own_fills`) is
+never a reference.
 
 **What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT takes its
 leg's latest reference, and the baseline the journal keeps for it (its reference moved by
@@ -41,12 +43,13 @@ GTT's reference say (`_gtt_units.judge`) whether it fired with the child missed
 (CHILD_MISSED, priced from the trade book or at the GTT's limit, flagged), ended outside
 the session (ENDED_OUTSIDE), or cannot be told (MISMATCH). A GTT with no reference (no
 settled read of its leg made when it could not have fired, on any day) is a MISMATCH. A
-read made while the session's own fills on the leg had not settled judges nothing: the
-book is read again every `CHILD_READ_EVERY_S` until they settle (the newest own fill on the
-leg is `_own_fills.POSITION_BOOK_LAG_S` old and no own order works on it), for at most
-`_gtt_reads.UNITS_WAIT_S` after the later of when the GTT went and that newest fill (a
-fill that comes during the wait moves the bound with it); still not settled then (an own
-order still working on the leg, or own fills coming one after another), it is a MISMATCH.
+read made while the session's own fills on the leg had not settled, or whose units could
+not be read, judges nothing: the book is read again every `CHILD_READ_EVERY_S` until a
+read is settled (the newest own fill on the leg is `_own_fills.POSITION_BOOK_LAG_S` old
+and no own order works on it), for at most `_gtt_reads.UNITS_WAIT_S` after the later of
+when the GTT went and that newest fill (a fill that comes during the wait moves the bound
+with it); still not settled then (an own order still working on the leg, own fills coming
+one after another, or books that cannot be read), it is a MISMATCH.
 The journal keeps a fired GTT TRIGGERED until the session binds its child (`bind_child`),
 so a restart before that looks for the child again.
 
@@ -147,12 +150,17 @@ class GttFollower:
         reference unless one read later is held (module docstring).
 
         For unit N3b: the session gives its start read of the position book and holdings
-        (before any order of its own, `own_units` 0) for each leg it may hold a GTT on,
-        and its later reads made while the leg had settled (`OwnFills.settled`), on the
-        worker's thread (through the worker's queue, as `ReadGtts`). Without one, a GTT
-        placed before any settled read of its leg has no reference: its cancel once gone
-        from the book is CANCEL_REFUSED, its unanswered place UNRESOLVED, and the GTT gone
-        a MISMATCH."""
+        (`_broker_units`, made before any order of its own, so `own_units` 0) for each leg
+        it may hold a GTT on, and may give its later reads of a leg, each made while the
+        leg was settled (`OwnFills.settled`, judged just before the read, as
+        `GttReader.gtt_book` does) with `own_units` counted at that moment; a read made
+        while it was not settled is never given. It calls this on the worker's thread
+        (through the worker's queue, as `ReadGtts` reaches `read_now`). Without a
+        reference from before its place, a GTT has none until a settled read shows it
+        resting (the GTT parts' reads: after its calls, and every `GTT_BOOK_EVERY_S` while
+        the market is open): until then its cancel once gone from the book is
+        CANCEL_REFUSED and the GTT gone a MISMATCH, and an unanswered place with none from
+        before it is UNRESOLVED."""
         self._references.take(leg, units, own_units, read_ns)
 
     def placing(self, seq: int, leg: LegKey) -> None:

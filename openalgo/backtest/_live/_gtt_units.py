@@ -24,7 +24,7 @@ exactly the GTT's units on its side (a SELL lowers them, a BUY raises them: a lo
 a short's stop and a strategy's GTT entry alike), it FIRED; not moved, UNCHANGED; moved by
 anything else, OTHER. A read that is not settled, or whose units could not be read, judges
 nothing (UNSETTLED); a GTT with no reference cannot be judged (NO_REFERENCE). Each caller
-says what it answers to each.
+says what it answers to each, in the words of `UNTOLD` when the units cannot tell.
 
 Times are UTC nanoseconds, quantities signed whole units.
 """
@@ -35,7 +35,7 @@ import dataclasses
 import enum
 from dataclasses import dataclass
 
-from ._gtt_reads import BookRead, LegKey
+from ._gtt_reads import UNITS_WAIT_S, BookRead, LegKey
 from ._journal_gtt_rows import GttTerms
 
 
@@ -46,13 +46,30 @@ class UnitsSign(enum.Enum):
     FIRED = "fired"
     #: Settled, and as its reference moved by the session's own fills: it did not fire.
     UNCHANGED = "unchanged"
-    #: Settled, and moved by anything else: the units cannot tell.
+    #: Settled, and moved by anything else: not by the GTT's units alone (a gone GTT's
+    #: follower cannot tell; a cancel or a place takes it as no move by the GTT).
     OTHER = "other"
     #: Read while the session's own fills on the leg had not settled, or not read: the
     #: read judges nothing.
     UNSETTLED = "unsettled"
     #: The GTT has no reference: nothing can judge it.
     NO_REFERENCE = "no_reference"
+
+
+#: Why a GTT's leg's units cannot tell whether it fired, by the sign that says so: the
+#: words of the answers and outcomes the GTT parts give for want of a judgement. An
+#: UNSETTLED sign is answered only once the wait for a settled read is over
+#: (`_gtt_reads.BookRead.waited_out`).
+UNTOLD = {
+    UnitsSign.NO_REFERENCE: (
+        "no settled read of its leg's units was made when it could not have fired"
+    ),
+    UnitsSign.UNSETTLED: (
+        f"its leg's units were not settled {UNITS_WAIT_S:g} s after the wait for them began "
+        "and after the session's newest own fill on the leg (an own order still working on "
+        "it, or its books not read)"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -155,4 +172,4 @@ def judge(terms: GttTerms, reference: Reference | None, read: BookRead, leg: Leg
     return LegUnits(sign, expected, units)
 
 
-__all__ = ["LegUnits", "Reference", "References", "UnitsSign", "judge"]
+__all__ = ["UNTOLD", "LegUnits", "Reference", "References", "UnitsSign", "judge"]

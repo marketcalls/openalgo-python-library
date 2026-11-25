@@ -6,22 +6,25 @@ sender (`_gtt_send`) reads the order book after a read of the GTT book whose ver
 (`_gtt_confirm`) is CHILD_CHECK or FIRED_CHECK, and acts on these.
 
 **A cancel** (`child_verdict`). Any order that may be the GTT's child (`_gtt_child`) makes
-it CANCEL_REFUSED: it fired. With none, a GTT a book with history rows shows cancelled is
-CANCELLED. A GTT gone from the book (absent) may have fired just before the cancel,
-whatever the cancel call answered (a broker may accept the cancel of a GTT that has just
-fired and drop its row): it is CANCEL_REFUSED when a settled read shows its leg's units
-moved by its units on its side from its reference (`_gtt_units`), and CANCELLED only when
-`CHILD_READS_OF_A_GONE_GTT` order-book reads, `_gtt_confirm.READ_AGAIN_AFTER_S` apart,
-found no child and the read that decides is settled and shows no such move (its units
-were read after a read that showed the GTT gone). A read made while the session's own
-fills on the leg had not settled (`_own_fills`) judges nothing, whatever its units show:
-the leg is read again until it settles, and still not settled by
-`_gtt_reads.UNITS_WAIT_S` (`BookRead.waited_out`) it is CANCEL_REFUSED; a GTT with no
-reference is CANCEL_REFUSED at once. One case is left: a position book that lags a broker
-fill of the child itself (not the session's own fills, which the wait covers) by more than
-the child reads can still confirm the cancel of a GTT that fired, its child not listed in
-the order book yet; the reconciler then sees the child's fill as an extra fill
-(16-session-design 5.3).
+it CANCEL_REFUSED: it fired. With none, a GTT a book with history rows shows cancelled
+(ENDED) is CANCELLED. A GTT gone from the book (absent) may have fired just before the
+cancel, whatever the cancel call answered (a broker may accept the cancel of a GTT that
+has just fired and drop its row), so its leg's units decide with the order book, against
+the GTT's reference (`_gtt_units`): with no reference it is CANCEL_REFUSED at once; a
+settled read that shows the units moved by its units on its side makes it CANCEL_REFUSED;
+it is CANCELLED only when `CHILD_READS_OF_A_GONE_GTT` order-book reads,
+`_gtt_confirm.READ_AGAIN_AFTER_S` apart, found no child and a settled read shows no such
+move. That read is never the first that showed the GTT gone, so its units were read after
+the GTT went. A read made while the session's own fills on the leg had not settled
+(`_own_fills`), or whose units could not be read, judges nothing, whatever its units
+show: the leg is read again every `READ_AGAIN_AFTER_S` until a read is settled, and with
+none `_gtt_reads.UNITS_WAIT_S` after the later of the first unsettled read and the newest
+own fill on the leg (`BookRead.waited_out`), it is CANCEL_REFUSED.
+
+**The one case left.** A position book that lags a broker fill of the child itself (not
+the session's own fills, which the wait covers) by more than the child reads can still
+confirm the cancel of a GTT that fired, its child not listed in the order book yet; the
+reconciler then sees the child's fill as an extra fill (16-session-design 5.3).
 
 **An unanswered place** (`again_verdict`) is placed again only when the order book holds no
 order of its child's shape placed since it was sent: one there may be its child, the
@@ -35,9 +38,9 @@ from __future__ import annotations
 from ._gtt_book import Seen
 from ._gtt_child import Candidates
 from ._gtt_confirm import WAIT, Pending, Step, Verdict
-from ._gtt_reads import UNITS_WAIT_S, BookRead
+from ._gtt_reads import BookRead
 from ._gtt_types import GttAnswerKind
-from ._gtt_units import UnitsSign
+from ._gtt_units import UNTOLD, UnitsSign
 
 #: Order-book reads that must miss the child of a cancelled GTT gone from the book before
 #: its cancel is confirmed (3.1, 3.2): a broker's order book can list a new order late.
@@ -68,20 +71,12 @@ def child_verdict(
 
 def _cancel_refusal(sign: UnitsSign) -> str:
     """Why the cancel of a GTT gone from the book with no child found is refused, by what
-    its leg's units say (module docstring), or "" when they say nothing fired: FIRED, no
-    reference, or not settled by the end of the wait."""
+    its leg's units say (module docstring), or "" when they show no move by its units:
+    FIRED, no reference, or not settled by the end of the wait."""
     if sign is UnitsSign.FIRED:
         return "it fired: the position moved by its units, its child not in the order book yet"
-    if sign is UnitsSign.NO_REFERENCE:
-        return (
-            "no settled read of its leg's units was made when it could not have fired: "
-            "whether it fired cannot be told"
-        )
-    if sign is UnitsSign.UNSETTLED:
-        return (
-            f"the session's own orders on its leg had not settled {UNITS_WAIT_S:g} s on: "
-            "whether it fired cannot be told"
-        )
+    if sign in UNTOLD:
+        return f"{UNTOLD[sign]}: whether it fired cannot be told"
     return ""
 
 

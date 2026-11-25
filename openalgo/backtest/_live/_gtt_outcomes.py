@@ -12,9 +12,9 @@ a GTT's child (3.2 rule 2: `taken`).
 round 5) is decided by what its leg's units say against its reference (`_gtt_units`):
 fallen (or, for a strategy's GTT entry, risen) by its units, it fired with its child
 missed; unchanged, it ended outside the session; moved by anything else, or with no
-reference, a MISMATCH. A read made while the session's own fills on the leg had not settled
-decides nothing, until the wait for them is over (`_gtt_reads.BookRead.waited_out`): then
-it is a MISMATCH too.
+reference, a MISMATCH. A read made while the session's own fills on the leg had not settled,
+or whose units could not be read, decides nothing until the wait for a settled read is
+over (`_gtt_reads.BookRead.waited_out`): then it is a MISMATCH too.
 
 Prices are rupees, quantities whole units. Used by the worker's thread only.
 """
@@ -27,25 +27,14 @@ from typing import Any
 
 from ._gtt_child import missed_price
 from ._gtt_followed import Followed, outcome_of
-from ._gtt_reads import UNITS_WAIT_S
 from ._gtt_types import PRICE_UNVERIFIED, GttEvent
-from ._gtt_units import LegUnits, References, UnitsSign
+from ._gtt_units import UNTOLD, LegUnits, References, UnitsSign
 from ._journal_gtt_rows import GttState
 from ._types import LOGGER_NAME
 from .inbox import GttNews, Message
 from .journal import Journal
 
 logger = logging.getLogger(LOGGER_NAME)
-
-#: A gone GTT's MISMATCH for want of a reference, and for a leg that did not settle.
-NO_REFERENCE_WORDS = (
-    "no settled read of its leg's units was made when it could not have fired, so whether "
-    "it fired cannot be told"
-)
-UNSETTLED_WORDS = (
-    f"the session's own orders on its leg had not settled {UNITS_WAIT_S:g} s after it went "
-    "and after their newest fill, so whether it fired cannot be told"
-)
 
 
 class GttOutcomes:
@@ -120,13 +109,11 @@ class GttOutcomes:
         elif found.sign is UnitsSign.UNCHANGED:
             note = "gone with no child found and the position unchanged: ended outside the session"
             self.end(followed, GttEvent.ENDED_OUTSIDE, note)
-        elif found.sign is UnitsSign.NO_REFERENCE:
-            self.unresolved(followed, NO_REFERENCE_WORDS)
         elif found.sign is UnitsSign.OTHER:
             words = f"the position went from {found.expected} to {found.units} units"
             self.unresolved(followed, words)
-        elif waited_out:
-            self.unresolved(followed, UNSETTLED_WORDS)
+        elif found.sign is UnitsSign.NO_REFERENCE or waited_out:
+            self.unresolved(followed, f"{UNTOLD[found.sign]}: whether it fired cannot be told")
 
     def _stop(self, seq: int) -> None:
         self._followed.pop(seq, None)
@@ -139,4 +126,4 @@ class GttOutcomes:
         return self._journal.gtt_of_child(order_id) is not None
 
 
-__all__ = ["NO_REFERENCE_WORDS", "UNSETTLED_WORDS", "GttOutcomes"]
+__all__ = ["GttOutcomes"]

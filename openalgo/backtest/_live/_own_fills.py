@@ -22,8 +22,8 @@ difference while an own order works as a lag of the broker's books. Such a read 
 reference of the leg and judges no GTT (`_gtt_units`). Where a GTT's answer rests on its
 leg's units (the cancel of a GTT gone from the book, an unanswered place, a GTT gone with
 no child found), the GTT parts read the leg again until it settles, for at most
-`_gtt_reads.UNITS_WAIT_S`, and then give the answer that can send no second exit or second
-GTT.
+`_gtt_reads.UNITS_WAIT_S` after the later of when the wait began and the newest own fill
+on the leg, and then give the answer that can send no second exit or second GTT.
 
 Times are UTC nanoseconds, quantities signed whole units. Used by the thread that owns the
 order path.
@@ -40,9 +40,10 @@ from ._types import JournalLike, Now, OrderIntent, OrderUpdate
 #: broker's position book may not show it yet (16-session-design F78). Not a broker's
 #: figure: no broker publishes how far its position book lags a fill. 30 s spans three of
 #: the GTT follower's reads on the clock (every 10 s, 20-positional-live 3.1). A read made
-#: within it judges no GTT, so a book that lags an own fill by less cannot make that fill
-#: count wrongly; one that lags it longer still can, and so can a book that lags a fill
-#: that is not the session's own, a fired GTT's child's (`_gtt_checks` states that case).
+#: within it is not settled: it is no reference and judges no GTT, so a book that lags an
+#: own fill by less cannot make that fill count wrongly. One that lags it longer still can,
+#: and so can a book that lags a fill that is not the session's own, a fired GTT's
+#: child's (`_gtt_checks` states that case).
 #: To be measured in the sandbox's overnight holds (20-positional-live V3) and on the
 #: maintainer's broker (V1), and set from what they show.
 POSITION_BOOK_LAG_S = 30.0
