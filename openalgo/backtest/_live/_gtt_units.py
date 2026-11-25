@@ -26,6 +26,14 @@ anything else, OTHER. A read that is not settled, or whose units could not be re
 nothing (UNSETTLED); a GTT with no reference cannot be judged (NO_REFERENCE). Each caller
 says what it answers to each, in the words of `UNTOLD` when the units cannot tell.
 
+**Only UNCHANGED sends more** (the lead's ruling R6-2 on N3a's review round 6: a leg's units
+are never ignored). OTHER may be the GTT firing all the same (its child part filled, or a
+fill beside it), so every caller takes it as "it may have fired": the cancel of a GTT gone
+from the book is CANCEL_REFUSED, an unanswered place is UNRESOLVED, a GTT the follower
+finds gone is a MISMATCH. Only a settled read that shows the units UNCHANGED allows an
+answer that sends something more (a cancel confirmed, a place placed again, a modify's
+replacement placed).
+
 Times are UTC nanoseconds, quantities signed whole units.
 """
 
@@ -46,8 +54,8 @@ class UnitsSign(enum.Enum):
     FIRED = "fired"
     #: Settled, and as its reference moved by the session's own fills: it did not fire.
     UNCHANGED = "unchanged"
-    #: Settled, and moved by anything else: not by the GTT's units alone (a gone GTT's
-    #: follower cannot tell; a cancel or a place takes it as no move by the GTT).
+    #: Settled, and moved by anything else: not by the GTT's units alone, yet it may have
+    #: fired (module docstring), so no caller sends more on it.
     OTHER = "other"
     #: Read while the session's own fills on the leg had not settled, or not read: the
     #: read judges nothing.
@@ -155,21 +163,40 @@ class References:
         self._gtts.pop(seq, None)
 
 
-def judge(terms: GttTerms, reference: Reference | None, read: BookRead, leg: LegKey) -> LegUnits:
+def judge(
+    terms: GttTerms,
+    reference: Reference | None,
+    read: BookRead,
+    leg: LegKey,
+    also: GttTerms | None = None,
+) -> LegUnits:
     """What `read` says by `leg`'s units of a GTT of `terms` whose reference is
-    `reference` (module docstring)."""
+    `reference` (module docstring). A move by the units of `also` counts as FIRED too: the
+    cancel of a modify that cannot be told judges the GTT by its units before the modify
+    and by the modify's, since the broker may hold either."""
     if reference is None:
         return LegUnits(UnitsSign.NO_REFERENCE)
     units, own = read.units.get(leg), read.own.get(leg)
     if leg not in read.settled or units is None or own is None:
         return LegUnits(UnitsSign.UNSETTLED)
     expected = reference.expected(own)
-    signed = terms.quantity if terms.side == "BUY" else -terms.quantity
-    if units - expected == signed:
+    if units == expected:
+        sign = UnitsSign.UNCHANGED
+    elif any(units - expected == _signed(each) for each in (terms, also) if each is not None):
         sign = UnitsSign.FIRED
     else:
-        sign = UnitsSign.UNCHANGED if units == expected else UnitsSign.OTHER
+        sign = UnitsSign.OTHER
     return LegUnits(sign, expected, units)
 
 
-__all__ = ["UNTOLD", "LegUnits", "Reference", "References", "UnitsSign", "judge"]
+def _signed(terms: GttTerms) -> int:
+    """The move a GTT of `terms` makes in its leg's units when it fires and its child fills."""
+    return terms.quantity if terms.side == "BUY" else -terms.quantity
+
+
+def went(found: LegUnits) -> str:
+    """The words for a settled read whose units moved (`found` FIRED or OTHER)."""
+    return f"the position went from {found.expected} to {found.units} units"
+
+
+__all__ = ["UNTOLD", "LegUnits", "Reference", "References", "UnitsSign", "judge", "went"]

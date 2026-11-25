@@ -254,7 +254,7 @@ class GttSender:
         """`_gtt_confirm.judge`, given what the leg's units say of the place's GTT."""
         request = pending.request
         leg = (request.symbol, request.exchange, request.product)
-        fall = self._follower.units_of(pending.seq, leg, request.terms, read).sign
+        fall = self._follower.units_of(pending.seq, leg, request.terms, read)
         return judge(pending, read, self._bound, fall)
 
     def _act(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
@@ -288,14 +288,13 @@ class GttSender:
             self._finish(pending, verdict, read)
 
     def _book_check(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
-        """Read the order book before deciding (an order book not read is read again): a
-        cancelled GTT absent or ended (CHILD_CHECK) is confirmed only when no child of it is
-        in the book (3.1) and, gone from the book, a settled read of its leg's units shows
-        it did not fire (`_gtt_checks.child_verdict`); an unanswered place (FIRED_CHECK) is
-        placed again only when no order of its child's shape was placed since it was sent
-        (`again_verdict`)."""
-        rows = self._reader.order_rows()
-        gtt = self._journal.gtt(pending.seq)
+        """Read the order book before deciding (one not read is read again): a cancelled GTT
+        absent or ended (CHILD_CHECK) is confirmed only when no child of it is in the book
+        (3.1) and, gone from the book, a settled read shows its leg's units unchanged
+        (`_gtt_checks.child_verdict`; a modify's cancel judges the modify's units too); an
+        unanswered place (FIRED_CHECK) is placed again only when no order of its child's
+        shape was placed since it was sent (`again_verdict`)."""
+        rows, gtt = self._reader.order_rows(), self._journal.gtt(pending.seq)
         if rows is None or gtt is None:
             pending.next_ns = self._now() + round(READ_AGAIN_AFTER_S * _NS)
             return
@@ -307,8 +306,9 @@ class GttSender:
         since = self._follower.last_active(pending.seq)
         found = child_candidates(gtt, rows, since_ns=since, taken=taken)
         leg = (gtt.symbol, gtt.exchange, gtt.product)
-        sign = self._follower.units_of(gtt.seq, leg, gtt.terms, read).sign
-        self._act(pending, child_verdict(pending, verdict.seen, found, sign, read), read)
+        also = pending.request.terms if pending.stage is Stage.REPLACE_CANCEL else None
+        units = self._follower.units_of(gtt.seq, leg, gtt.terms, read, also)
+        self._act(pending, child_verdict(pending, verdict.seen, found, units, read), read)
 
     def _finish(self, pending: Pending, verdict: Verdict, read: BookRead) -> None:
         """Answer `pending` as `verdict` says: noted in the journal, answered, then the GTT

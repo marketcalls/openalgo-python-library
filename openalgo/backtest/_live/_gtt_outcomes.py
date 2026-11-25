@@ -28,7 +28,7 @@ from typing import Any
 from ._gtt_child import missed_price
 from ._gtt_followed import Followed, outcome_of
 from ._gtt_types import PRICE_UNVERIFIED, GttEvent
-from ._gtt_units import UNTOLD, LegUnits, References, UnitsSign
+from ._gtt_units import UNTOLD, LegUnits, References, UnitsSign, went
 from ._journal_gtt_rows import GttState
 from ._types import LOGGER_NAME
 from .inbox import GttNews, Message
@@ -110,8 +110,7 @@ class GttOutcomes:
             note = "gone with no child found and the position unchanged: ended outside the session"
             self.end(followed, GttEvent.ENDED_OUTSIDE, note)
         elif found.sign is UnitsSign.OTHER:
-            words = f"the position went from {found.expected} to {found.units} units"
-            self.unresolved(followed, words)
+            self.unresolved(followed, went(found))
         elif found.sign is UnitsSign.NO_REFERENCE or waited_out:
             self.unresolved(followed, f"{UNTOLD[found.sign]}: whether it fired cannot be told")
 

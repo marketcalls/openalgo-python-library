@@ -131,3 +131,21 @@ def test_a_reference_taken_back_from_the_journal_counts_own_fills_from_when_they
 )
 def test_what_a_settled_read_of_a_legs_units_says_of_its_gtt(terms, reference, read, sign):
     assert judge(terms, reference, read, LEG).sign is sign
+
+
+#: The stop cut to the 5 units a partial exit left, as a modify asks.
+CUT = GttTerms("SELL", 790.0, 780.0, 5)
+
+
+@pytest.mark.parametrize(
+    ("units", "sign"),
+    [(5, UnitsSign.UNCHANGED), (0, UnitsSign.FIRED), (-5, UnitsSign.FIRED), (2, UnitsSign.OTHER)],
+    ids=["unchanged", "fallen by the modify's 5", "fallen by the old 10", "fallen by neither"],
+)
+def test_a_cancel_of_a_modify_that_cannot_be_told_takes_a_fall_by_either_units_as_fired(
+    units, sign
+):
+    # The reference read 10 units before the session's own exit sold 5: 5 if nothing fired.
+    read = book_read(units=units, own=-5)
+
+    assert judge(STOP, Reference(10, 0), read, LEG, also=CUT).sign is sign

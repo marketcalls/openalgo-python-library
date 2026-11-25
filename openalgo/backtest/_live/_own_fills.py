@@ -43,7 +43,7 @@ from ._types import JournalLike, Now, OrderIntent, OrderUpdate
 #: within it is not settled: it is no reference and judges no GTT, so a book that lags an
 #: own fill by less cannot make that fill count wrongly. One that lags it longer still can,
 #: and so can a book that lags a fill that is not the session's own, a fired GTT's
-#: child's (`_gtt_checks` states that case).
+#: child's (`_gtt_checks` states both cases).
 #: To be measured in the sandbox's overnight holds (20-positional-live V3) and on the
 #: maintainer's broker (V1), and set from what they show.
 POSITION_BOOK_LAG_S = 30.0

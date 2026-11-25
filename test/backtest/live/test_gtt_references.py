@@ -455,3 +455,113 @@ def test_a_stop_gone_soon_after_an_own_entry_is_judged_against_the_start_read(
     assert [outcome.event for outcome in outcomes(news)] == [GttEvent.IN_FLIGHT, decided]
     if not start_read:
         assert NO_REFERENCE in outcomes(news)[-1].message
+
+
+# ----- R6-2: units moved by another amount are taken as "it may have fired" ----------------
+
+
+def part_filled(broker, hidden_reads):
+    """The stop fires and its child sells 4 of its 10 at once, the 6 left resting at its
+    limit; the order book leaves the child out of its next `hidden_reads` reads."""
+    broker.split_next_fill(4)
+    fire(broker, hidden_reads)
+
+
+@CHILD_LISTED
+@PRODUCTS
+@SHAPES
+def test_the_cancel_of_a_stop_gone_while_its_child_part_filled_is_refused(
+    rig, broker, history, product, hidden_reads
+):
+    bought(broker, product=product)
+    rig.start_read(UNITS, product)
+    seq = placed(rig, product)
+    rig.step_for(4.0)
+    part_filled(broker, hidden_reads)
+    broker.faults.gateway_error("cancelgttorder", status=502)
+
+    news = rig.send(cancel(rig, seq, product)) + rig.step_for(LONG_ENOUGH_S, every_s=2.0)
+
+    # 6 units where 10 were expected: not the stop's 10, but its child part filled may be
+    # why. A CANCELLED would send an exit beside the child's 6 left.
+    (answer,) = answers(news)
+    assert answer.kind is GttAnswerKind.CANCEL_REFUSED
+    assert ("it fired" if history else "the position went from 10 to 6 units") in answer.message
+
+
+@PRODUCTS
+@SHAPES
+def test_an_unanswered_place_whose_child_may_have_part_filled_is_never_placed_again(
+    rig, broker, history, product
+):
+    bought(broker, product=product)
+    rig.start_read(UNITS, product)
+    # The server places it a second after the client gave up; it fires at once, its child
+    # sells 4 of the 10, and the order book never lists the child.
+    broker.faults.late_landing("placegttorder", seconds=1.0)
+    news = rig.send(rig.gtt(product=product))
+    broker.clock.advance(1.0)
+    broker.client().ping()
+    part_filled(broker, hidden_reads=NEVER)
+
+    news += rig.step_for(LONG_ENOUGH_S, every_s=2.0)
+
+    (answer,) = answers(news)
+    assert (answer.kind, answer.seq) == (GttAnswerKind.UNRESOLVED, None)
+    sign = "of its shape has fired" if history else "the position went from 10 to 6 units"
+    assert sign in answer.message
+    assert len(broker.log.calls("placegttorder")) == 1
+
+
+def old_units_until_the_cancel(rig, broker, monkeypatch):
+    """The GTT book shows every GTT for 10 units, its units before the modify, until the
+    worker cancels it to place it again; just before that cancel the stop (now 5 units at
+    the broker) fires, its child is never listed, and the cancel is answered 502 without
+    reaching the broker."""
+    client = rig.orders._client
+    book, cancel_call, stale = client.gttorderbook, client.cancelgttorder, [True]
+
+    def old_units(**fields):
+        answer = book(**fields)
+        if not stale[0]:
+            return answer
+        rows = [
+            {**row, "legs": [{**leg, "quantity": UNITS} for leg in row.get("legs", [])]}
+            for row in answer["data"]
+        ]
+        return {**answer, "data": rows}
+
+    def fired_first(**fields):
+        stale[0] = False
+        fire(broker, hidden_reads=NEVER)
+        broker.faults.gateway_error("cancelgttorder", status=502)
+        return cancel_call(**fields)
+
+    monkeypatch.setattr(client, "gttorderbook", old_units)
+    monkeypatch.setattr(client, "cancelgttorder", fired_first)
+
+
+@PRODUCTS
+@SHAPES
+def test_a_modify_that_cannot_be_told_is_not_placed_again_when_its_stop_fired_for_its_units(
+    rig, broker, monkeypatch, history, product
+):
+    bought(broker, product=product)
+    rig.start_read(UNITS, product)
+    seq = placed(rig, product)
+    rig.run(rig.own_exit(5, product=product))
+    rig.step_for(POSITION_BOOK_LAG_S + 10.0)
+    rig.send(ReadGtts())
+    old_units_until_the_cancel(rig, broker, monkeypatch)
+
+    news = rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5, product=product))
+    news += rig.step_for(LONG_ENOUGH_S, every_s=2.0)
+
+    # The broker applied the cut to 5, but its book showed the old 10: the stop is cancelled
+    # to be placed again. It fired for the modify's 5 first: placed again, a second stop
+    # would rest on the flat leg.
+    (answer,) = answers(news)
+    assert answer.kind is GttAnswerKind.UNRESOLVED
+    assert ("it fired" if history else "the position moved by its units") in answer.message
+    assert [gtt.status for gtt in broker.gtts()] == ["triggered"]
+    assert broker.position("SBIN", "NSE") == 0

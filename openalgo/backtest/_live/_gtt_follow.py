@@ -216,10 +216,12 @@ class GttFollower:
         followed = self._followed.get(seq)
         return None if followed is None else followed.active_ns
 
-    def units_of(self, seq: int, leg: LegKey, terms: GttTerms, read: BookRead) -> LegUnits:
-        """What `leg`'s units in `read` say of GTT `seq` of `terms`, against its reference
-        (`_gtt_units.judge`; 3.3)."""
-        return judge(terms, self._references.of(seq, read.own.get(leg)), read, leg)
+    def units_of(
+        self, seq: int, leg: LegKey, terms: GttTerms, read: BookRead, also: GttTerms | None = None
+    ) -> LegUnits:
+        """What `leg`'s units in `read` say of GTT `seq` of `terms` (or of `also`), against
+        its reference (`_gtt_units.judge`; 3.3)."""
+        return judge(terms, self._references.of(seq, read.own.get(leg)), read, leg, also)
 
     def legs(self) -> set[LegKey]:
         """The legs of the GTTs followed, whose units a GTT book read reads first."""
