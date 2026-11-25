@@ -49,6 +49,7 @@ def live(
     account_max_trades_per_day: int | None = None,
     account_daily_profit_target: float | Distance | None = None,
     max_orders_per_second: int = 8,
+    positional_stops: str | Mapping[str, str] = "gtt",
     **not_live: Any,
 ) -> SessionResult:
     """Trade strategies through OpenAlgo for today, in the mode set inside OpenAlgo, and
@@ -106,6 +107,14 @@ def live(
         session makes in any second, 8 by default (OpenAlgo's limit of 10 less 2 for your
         own orders on the same server; give more for a server set higher). A call beyond it
         waits, stops and exits first; an entry or add that waits 5 s is not sent.
+    positional_stops: how a CNC or NRML position's stop is held, as in `bt.backtest` (one
+        value or a dict by class name). "gtt" (the default): a SINGLE GTT at the broker,
+        kept overnight; a broker without GTT orders refuses the start in LIVE mode.
+        "rearm_daily": a day stop order, as an MIS position's, placed at each session's
+        open (or the position exited at market, flagged "stop_crossed", when the open is
+        already beyond the stop) and ended by the close: nothing protects the position at
+        the broker from the close until the next start, which the start banner, every
+        close's WARN alert, the daily summary and the result's warnings say.
 
     The session ends at the end of the day (the MIS legs flat after their square-off, and
     the CNC and NRML legs carried with their stop GTTs confirmed after the close), on Ctrl+C

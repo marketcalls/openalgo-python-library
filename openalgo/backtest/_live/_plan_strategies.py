@@ -39,8 +39,9 @@ from .._layout import parse_interval
 from .._manifest import strategy_source_hash
 from .._margin_check import check_margin
 from .._messages import not_supported
+from .._positional_exit import MCX, PHYSICAL, positional_exits
 from .._products import OVERNIGHT_PRODUCTS
-from .._risk_settings import rupees_amount
+from .._risk_settings import GTT_STOPS, rupees_amount
 from .._series import ist_time
 from .._settings import RunPlan, resolve
 from .._timeframes import _check_interval
@@ -101,6 +102,19 @@ class StrategySpec:
         broker are read by it (`_broker_units`)."""
         return self.plan.product
 
+    @property
+    def positional_stops(self) -> str:
+        """How the strategy's CNC or NRML stops are held overnight, as its settings
+        resolved `positional_stops`: "gtt" or "rearm_daily" (20-positional-live 6)."""
+        return self.plan.risk["positional_stops"]
+
+    @property
+    def stop_gtt(self) -> bool:
+        """Whether the strategy's leg stop rests at the broker as a SINGLE GTT: a CNC or
+        NRML strategy with `positional_stops="gtt"`. An MIS strategy's stop, and a
+        `"rearm_daily"` one's, is a day stop order."""
+        return self.product in OVERNIGHT_PRODUCTS and self.positional_stops == GTT_STOPS
+
 
 def refuse_unsupported(strategy: type[Strategy]) -> None:
     """Raise NotImplementedError for a strategy class a live session does not run (module
@@ -152,6 +166,32 @@ def refuse_shared_positional(specs: Sequence[StrategySpec]) -> None:
                 f"({' and '.join(names)} on {exchange}:{symbol} in {product})",
                 "run one of them in the session, or trade the others in MIS (an MIS and a "
                 "CNC or NRML strategy may trade one symbol)",
+            )
+
+
+def refuse_no_tender(
+    name: str, product: str, instruments: Sequence[Instrument], calendar: Calendar
+) -> None:
+    """Raise ConfigError for a CNC or NRML strategy on an MCX contract settled by delivery
+    whose tender period the reference table `mcx_contracts` does not give
+    (20-positional-live 9; the lead's ruling N5b-3): the session cannot tell the day to exit
+    the position before MCX marks it for delivery, where a backtest settles it at expiry
+    with a warning. The message names the contract and the table, and how to supply the
+    figure. An MIS strategy on it is squared off each day and runs."""
+    if product not in OVERNIGHT_PRODUCTS:
+        return
+    for instrument, day in zip(
+        instruments, positional_exits(instruments, calendar).days, strict=True
+    ):
+        delivery = instrument.exchange == MCX and instrument.settlement == PHYSICAL
+        if delivery and instrument.kind == "future" and day is None:
+            raise ConfigError(
+                f"{name}: {instrument.symbol} is settled by delivery, and the reference "
+                "table mcx_contracts gives no tender period for it, so a live session cannot "
+                "tell the day to exit a CNC or NRML position on it before MCX marks it for "
+                "delivery. Give its tender_days (the trading days of the tender period, the "
+                "expiry day included) in a user file of the mcx_contracts table, trade it in "
+                "MIS, or trade a contract the table gives a tender period for"
             )
 
 
@@ -210,6 +250,7 @@ def strategy_spec(
     plan = resolve(strategy, dict(arguments))
     limit = _live_daily_loss_limit(name, plan.risk["max_daily_loss"], arguments)
     instruments, _, _ = resolve_instruments(plan, None, calendar)
+    refuse_no_tender(name, plan.product, instruments, calendar)
     check_margin(instruments, plan.product, (plan.start, plan.end))
     needs, measured = probe(strategy, plan, instruments, arguments["params"])
     return StrategySpec(
@@ -267,6 +308,7 @@ __all__ = [
     "ist_day",
     "probe",
     "refuse_conditions",
+    "refuse_no_tender",
     "refuse_shared_positional",
     "refuse_unsupported",
     "strategy_spec",

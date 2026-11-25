@@ -61,6 +61,7 @@ import pandas as pd
 
 from .._calendar_convert import interval_nanos
 from .._products import CNC, OVERNIGHT_PRODUCTS
+from .._risk_settings import GTT_STOPS, REARM_DAILY
 from ..calendar import Calendar, default_calendar
 from ..strategy import Strategy
 from ._bars_candle import candle_bar
@@ -120,14 +121,25 @@ class SessionSpec:
 
     @property
     def positional(self) -> tuple[tuple[str, str, str, str], ...]:
-        """The (name, symbol, exchange, product) of the CNC and NRML strategies, in call
-        order: those a stop GTT refusal kept from an earlier day refuses at start
-        (`_preflight_carry.refuse_kept`)."""
+        """The (name, symbol, exchange, product) of the CNC and NRML strategies whose stop
+        is a GTT, in call order: those a stop GTT refusal kept from an earlier day refuses
+        at start (`_preflight_carry.refuse_kept`); one with `positional_stops="rearm_daily"`
+        places no stop GTT."""
         return tuple(
             (spec.name, spec.symbol, spec.exchange, spec.product)
             for spec in self.strategies
-            if spec.product in OVERNIGHT_PRODUCTS
+            if spec.stop_gtt
         )
+
+    @property
+    def positional_stops(self) -> str:
+        """How the session holds its CNC and NRML stops overnight, for the GTT capability
+        check (`_preflight_gtt`): "rearm_daily" when every CNC and NRML strategy chose it
+        (a broker without GTT orders can run them), else "gtt"."""
+        overnight = [spec for spec in self.strategies if spec.product in OVERNIGHT_PRODUCTS]
+        if overnight and not any(spec.stop_gtt for spec in overnight):
+            return REARM_DAILY
+        return GTT_STOPS
 
     @property
     def capital(self) -> float:

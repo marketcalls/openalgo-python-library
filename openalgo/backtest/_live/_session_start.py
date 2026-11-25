@@ -60,6 +60,7 @@ from ._session_banner import BANNER_ALERT_LINES, banner_lines
 from ._session_figures import DayFigures
 from ._session_loop import Session
 from ._session_parts import SessionParts, StopFlag
+from ._session_rearm import warn_at_start
 from ._session_restore import RESTART_PROTECT_WAIT_S, protect_restored, restore
 from ._session_trader import ist_instant
 from ._session_traders import build_traders
@@ -321,6 +322,7 @@ def _preflight(
         alerts=alerts,
         contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
         gtt=bool(spec.gtt_legs),
+        positional_stops=spec.positional_stops,
     )
     calendar = default_calendar()
     opens = [calendar.session(exchange, spec.day) for _, exchange in spec.instruments]
@@ -354,6 +356,7 @@ def begin_trading(session: Session, source: FeedSource) -> None:
         data.start()
     if any(trader.open_units() for trader in session.traders):
         protect_restored(session, RESTART_PROTECT_WAIT_S)
+    warn_at_start(session)
     lines = banner_lines(session)
     for line in lines:
         session.emit(line)

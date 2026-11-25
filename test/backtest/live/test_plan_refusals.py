@@ -157,12 +157,6 @@ def test_an_mis_and_a_cnc_strategy_on_one_symbol_run_together():
     ]
 
 
-def test_positional_stops_is_not_taken_by_bt_live():
-    # Unit N5 of 2.5.0 takes it; until then a live session holds every stop as a GTT.
-    with pytest.raises(ConfigError, match="bt.live has no argument positional_stops="):
-        specify(subclass(product="CNC"), positional_stops="rearm_daily")
-
-
 def test_the_contract_a_futures_series_refusal_gives_as_an_example_is_a_valid_symbol():
     series = subclass(symbol=None, underlying="NIFTY", expiry="current_month", exchange="NFO")
     with pytest.raises(NotImplementedError) as refused:

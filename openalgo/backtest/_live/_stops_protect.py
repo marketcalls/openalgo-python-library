@@ -39,7 +39,7 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ._margin_reject import HELD_FOR_READ
 from ._session_trader import Trader
-from ._stops_gtt import gtt_cancelling, gtt_cover, gtt_guarded, gtt_waiting, overnight
+from ._stops_gtt import gtt_cancelling, gtt_cover, gtt_guarded, gtt_waiting, stop_gtt
 from ._stops_kernel import PROTECT_PLACED, order_of, protect
 from ._stops_orders import IN_FLIGHT, LegOrders, Sent
 from ._types import LOGGER_NAME, AlertKind
@@ -146,13 +146,13 @@ class Protection:
         return not any(self.acting(trader) for trader in self._session.traders)
 
     def state(self, trader: Trader) -> str:
-        """What the leg is now (module docstring); a CNC or NRML leg's stop is its stop
+        """What the leg is now (module docstring); a leg whose stop is a GTT is judged by its stop
         GTT (`_stops_gtt`)."""
         units = abs(trader.open_units())
         leg = self._stops.leg(trader)
         if units == 0:
             return FLAT
-        if overnight(trader):
+        if stop_gtt(trader):
             gtt = _gtt_state(trader, round(units))
             if gtt is not None:
                 return gtt

@@ -39,6 +39,7 @@ from typing import Any
 import pandas as pd
 
 from .._market import MarketSettings, market_settings
+from .._risk_settings import rearm_warning
 from .._settings import RunPlan
 from .._warm_up_history import RunHistory, empty_base
 from .._warm_up_load import load_history
@@ -179,6 +180,14 @@ def read_today(
     return result.bars, tuple(result.meta.warnings)
 
 
+def _live_warnings(plan: RunPlan) -> tuple[str, ...]:
+    """The warnings of `plan` that hold for a live session: all of them but the backtest's
+    note of `positional_stops="rearm_daily"`, which speaks of a backtest; the session says
+    what the setting leaves unprotected in its own words at every start and close
+    (`_session_rearm`)."""
+    return tuple(note for note in plan.warnings if note != rearm_warning(plan.product))
+
+
 def strategy_setup(
     spec: StrategySpec,
     client: Any,
@@ -212,7 +221,7 @@ def strategy_setup(
         history=history,
         today=today,
         read_ns=present_ns,
-        warnings=(*plan.warnings, *read_notes, *market.warnings, *history.warnings, *notes),
+        warnings=(*_live_warnings(plan), *read_notes, *market.warnings, *history.warnings, *notes),
     )
 
 

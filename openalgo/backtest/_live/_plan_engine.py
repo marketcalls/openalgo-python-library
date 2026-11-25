@@ -30,6 +30,7 @@ from .._context import RunData
 from .._engine import bar_arrays, call, instrument_dict
 from .._layout import NANOS_PER_SECOND
 from .._manifest import strategy_source_hash
+from .._positional_exit import positional_exits
 from .._warm_up_history import empty_base
 from ..calendar import NO_BAR, Calendar
 from ..errors import ConfigError, LiveError
@@ -80,10 +81,15 @@ def check_grid(
 
 
 def session_engine(setup: StrategySetup, calendar: Calendar) -> Any:
-    """The kernel session of one strategy (`Engine.session`), with no bars yet. Raises
-    ConfigError for a config or instrument the kernel refuses, BacktestError for a kernel
-    defect, NotImplementedError for what the kernel does not run."""
-    specs = [instrument_dict(instrument) for instrument in setup.instruments]
+    """The kernel session of one strategy (`Engine.session`), with no bars yet, each
+    instrument with its positional exit day as `bt.backtest` gives it (`_positional_exit`:
+    a stock future, an option or an MCX delivery contract is exited at the square-off of
+    that day, `expiry_exit`; 20-positional-live 9). Raises ConfigError for a config or
+    instrument the kernel refuses, BacktestError for a kernel defect, NotImplementedError
+    for what the kernel does not run."""
+    exits = positional_exits(setup.instruments, calendar).days
+    pairs = zip(setup.instruments, exits, strict=True)
+    specs = [instrument_dict(instrument, day) for instrument, day in pairs]
     arrays = [bar_arrays(empty_base()) for _ in setup.instruments]
     return call(native_attr("Engine").session, calendar._cal, setup.config, specs, arrays)
 

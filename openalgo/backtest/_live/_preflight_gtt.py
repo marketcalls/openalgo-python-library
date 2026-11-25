@@ -28,6 +28,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+# How a position's stop is held overnight: `bt.backtest`'s names, re-exported (one source).
+from .._risk_settings import GTT_STOPS, POSITIONAL_STOPS, REARM_DAILY
 from ..errors import ConfigError
 from ._answers import server_answer
 from ._guard_answers import SUCCESS
@@ -35,11 +37,6 @@ from ._preflight_answers import answer_reason, switch_changed
 from ._preflight_plan import WARNING, Check
 from ._types import Mode, mode_of
 
-#: How a CNC or NRML position's stop is held overnight (20-positional-live 6): a GTT at the
-#: broker (the default), or a day stop placed again at each start.
-GTT_STOPS = "gtt"
-REARM_DAILY = "rearm_daily"
-POSITIONAL_STOPS = (GTT_STOPS, REARM_DAILY)
 #: The name of the check.
 GTT_CHECK = "gtt"
 #: OpenAlgo's answer for a broker that ships no GTT module: its HTTP status, and the words

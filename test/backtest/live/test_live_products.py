@@ -140,6 +140,7 @@ def test_the_preflight_plan_checks_the_product_of_the_sessions_strategies(monkey
         capital=100_000.0,
         max_daily_loss=5_000.0,
         instruments=(),
+        stop_gtt=True,
     )
     spec = SessionSpec(SimpleNamespace(account_max_daily_loss=None), DAY, (strategy,))
     settings = StartSettings(
