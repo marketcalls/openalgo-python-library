@@ -53,6 +53,10 @@ ALL_GTTS = "all"
 #: L1 on N3a's review round 4), counted from the later of when the wait began and the
 #: newest own fill on the leg: the `POSITION_BOOK_LAG_S` that fill takes to settle, and a
 #: child search's `CHILD_SEARCH_S` more for an own order still working on the leg to end.
+#: An own fill heard during the wait moves the bound with it, so that fill is waited for
+#: rather than answered early; the wait still ends, `UNITS_WAIT_S` after the session's
+#: last own fill on the leg, with that same answer (accepted by the lead on N3a's review
+#: round 6).
 UNITS_WAIT_S = POSITION_BOOK_LAG_S + CHILD_SEARCH_S
 
 

@@ -17,9 +17,8 @@ here, in one place: each leg's latest settled read, from every read of the GTT b
 GTT parts make (the legs' units are read just before it, `_gtt_reads`) and from the
 session's own reads (`reference`); a GTT's, the leg's latest when its place is sent
 (`placing`) and again at each read that shows it resting. A GTT taken back from the
-journal on a restart has the baseline the journal kept for it until then (`restore`). A
-read made while the session's own fills on the leg had not settled (`_own_fills`) is
-never a reference.
+journal on a restart has none until such a read (`restore`). A read made while the
+session's own fills on the leg had not settled (`_own_fills`) is never a reference.
 
 **What a read says** (`_gtt_book.Seen`, the table of 3.1): resting, the GTT takes its
 leg's latest reference, and the baseline the journal keeps for it (its reference moved by
@@ -123,14 +122,12 @@ class GttFollower:
         """Follow every GTT of the journal the broker holds that has not ended, and read
         the book at the first step when there is any (20-positional-live 4.2 step 5). Its
         child is looked for from its last change in the journal (it was placed or modified
-        then), and its reference is the baseline the journal kept (`_gtt_units`), until a
-        read shows it resting."""
+        then). It has no reference until a settled read shows it resting: the baseline the
+        journal kept is not taken back as one (`_gtt_units`)."""
         for gtt in self._journal.open_gtts():
             if gtt.trigger_id is not None:
                 active_ns = self._last_change(gtt)
                 self._followed[gtt.seq] = Followed(gtt, gtt.baseline_units, active_ns)
-                if gtt.baseline_units is not None:
-                    self._references.restore(gtt.seq, gtt.baseline_units)
         self._asked = bool(self._followed)
 
     def _last_change(self, gtt: GttBinding) -> int:
@@ -221,7 +218,7 @@ class GttFollower:
     ) -> LegUnits:
         """What `leg`'s units in `read` say of GTT `seq` of `terms` (or of `also`), against
         its reference (`_gtt_units.judge`; 3.3)."""
-        return judge(terms, self._references.of(seq, read.own.get(leg)), read, leg, also)
+        return judge(terms, self._references.of(seq), read, leg, also)
 
     def legs(self) -> set[LegKey]:
         """The legs of the GTTs followed, whose units a GTT book read reads first."""
@@ -325,7 +322,7 @@ class GttFollower:
         """Note in the journal the baseline of `followed`'s GTT (`_gtt_followed`: its
         reference moved by the session's own fills on its leg up to `own`, what they have
         filled by now; None: not known) when it changed."""
-        reference = self._references.of(followed.gtt.seq, own)
+        reference = self._references.of(followed.gtt.seq)
         if reference is None or own is None:
             return
         baseline = reference.expected(own)

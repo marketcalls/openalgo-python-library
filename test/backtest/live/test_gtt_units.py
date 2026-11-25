@@ -68,7 +68,7 @@ def test_a_gtts_reference_is_its_legs_latest_when_pinned_and_later_reads_leave_i
 
     references.take(LEG, 10, 10, read_ns=200 * NS)
 
-    pinned, latest = references.of(1, own=10), references.latest(LEG)
+    pinned, latest = references.of(1), references.latest(LEG)
 
     assert (pinned, latest) == (Reference(0, 0), Reference(10, 10))
 
@@ -79,19 +79,7 @@ def test_a_gtt_pinned_while_its_leg_has_no_reference_has_none():
 
     references.pin(1, LEG)
 
-    assert references.of(1, own=0) is None
-
-
-def test_a_reference_taken_back_from_the_journal_counts_own_fills_from_when_they_are_known():
-    references = References()
-    references.restore(1, 10)
-
-    # The order path counts 3 units of its own on the leg when the GTT is first judged; an
-    # exit sells 5 more later.
-    first = references.of(1, own=3)
-    later = references.of(1, own=-2)
-
-    assert (first.expected(3), later.expected(-2)) == (10, 5)
+    assert references.of(1) is None
 
 
 @pytest.mark.parametrize(

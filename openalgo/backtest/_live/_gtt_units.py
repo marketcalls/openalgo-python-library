@@ -6,16 +6,26 @@ GTT follower (`_gtt_follow`) keeps the references, and it and the GTT sender
 **A reference** of a leg is a settled read of its broker units (`_own_fills.OwnFills.
 settled`: the broker's books can be taken to show every fill of the session's own on it)
 with what the session's own orders had filled on it then. A read that is not settled is
-never a reference. `References` keeps the latest per leg (`take`), from the GTT parts' own
-reads (each read of the GTT book reads the legs' units first, `_gtt_reads`) and from the
-session's (`GttFollower.reference`).
+never a reference. `References` keeps the latest per leg (`take`), from two sources: the
+GTT parts' own reads (each read of the GTT book reads the legs' units first,
+`_gtt_reads`), and the session's (`GttFollower.reference`: its start read and the
+reconciler's settled reads).
 
 **A GTT's reference** is one made when it could not yet have fired: the leg's latest when
 its place is sent, and the leg's latest again each time a read shows it resting (its leg's
 units were read just before that read of the GTT book, and a GTT that fired never rests
-again): `pin`. A GTT taken back from the journal on a restart has the units the journal
-kept for it (`restore`): they are net of every own fill the earlier process heard, so the
-own fills they are moved by count from the first time this process knows them (`of`).
+again): `pin`.
+
+**Not a third source: the journal's baseline** (`_gtt_followed`). A GTT taken back from the
+journal on a restart has no reference until a settled read shows it resting (the lead's
+ruling on N3a's review round 6: the baseline is taken back only if it holds, and it does
+not). The baseline is its reference moved by the own fills the earlier process had heard
+when it last noted it, words held for the trade book included, while the restarted order
+path counts the journal's words: a word held at the stop, or one journaled after the last
+note (a process that ended in that step), is counted twice or never, and the journal keeps
+no time or own count with the baseline to tell. An exit that filled while no process ran,
+heard by the restart before the GTT was judged, made a stop that never fired read as fired
+with its child missed.
 
 **The judgement** (`judge`): the units the leg would hold had the GTT not fired are its
 reference's, moved by the session's own filled units on the leg since
@@ -39,7 +49,6 @@ Times are UTC nanoseconds, quantities signed whole units.
 
 from __future__ import annotations
 
-import dataclasses
 import enum
 from dataclasses import dataclass
 
@@ -83,17 +92,16 @@ UNTOLD = {
 @dataclass(frozen=True)
 class Reference:
     """A settled read of a leg's broker units, `units`, with `own`, what the session's
-    own orders had filled on the leg then (None for a reference taken back from the
-    journal, until this process knows them)."""
+    own orders had filled on the leg then."""
 
     units: int
-    own: int | None
+    own: int
 
     def expected(self, own: int) -> int:
         """The leg's units had nothing but the session's own orders moved them since: the
         reference's, moved by what those orders filled from then to `own`, what they have
         filled by now."""
-        return self.units if self.own is None else self.units + own - self.own
+        return self.units + own - self.own
 
 
 @dataclass(frozen=True)
@@ -143,20 +151,9 @@ class References:
         if latest is not None:
             self._gtts[seq] = latest
 
-    def restore(self, seq: int, units: int) -> None:
-        """GTT `seq`'s reference taken back from the journal: the `units` it kept, net of
-        every own fill the earlier process heard (module docstring)."""
-        self._gtts[seq] = Reference(units, None)
-
-    def of(self, seq: int, own: int | None) -> Reference | None:
-        """GTT `seq`'s reference, or None; `own` is what the session's own orders have
-        filled on its leg now (None: not known), the own units a reference taken back from
-        the journal is moved from."""
-        reference = self._gtts.get(seq)
-        if reference is not None and reference.own is None and own is not None:
-            reference = dataclasses.replace(reference, own=own)
-            self._gtts[seq] = reference
-        return reference
+    def of(self, seq: int) -> Reference | None:
+        """GTT `seq`'s reference, or None."""
+        return self._gtts.get(seq)
 
     def drop(self, seq: int) -> None:
         """Forget GTT `seq`'s reference."""

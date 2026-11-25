@@ -452,7 +452,7 @@ def test_a_gtt_first_seen_gone_with_no_reference_cannot_be_told(make_fake_openal
     restarted.worker.close()
 
 
-def test_a_restart_judges_a_gtt_gone_unseen_by_the_baseline_the_journal_kept(
+def test_a_restart_does_not_judge_a_gtt_gone_unseen_by_the_baseline_the_journal_kept(
     make_fake_openalgo, tmp_path
 ):
     fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
@@ -466,13 +466,55 @@ def test_a_restart_judges_a_gtt_gone_unseen_by_the_baseline_the_journal_kept(
 
     news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
 
-    # The day-1 baseline (10) against the units now (0): it fired with its child missed,
-    # priced at the child's limit and flagged (20-positional-live 3.3, 4.3).
-    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.CHILD_MISSED]
-    missed = outcomes(news)[-1]
-    assert (missed.units, missed.price, missed.flags) == (UNITS, LIMIT, (PRICE_UNVERIFIED,))
+    # The day-1 baseline is not a reference (`_gtt_units`), and no read of this process
+    # showed the stop resting: whether it fired cannot be told, and the journal keeps it
+    # triggered for the user to settle.
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
+    assert "no settled read of its leg's units" in outcomes(news)[-1].message
     with restarted.journal() as journal:
-        assert journal.gtt(seq).state is GttState.FIRED
+        assert journal.gtt(seq).state is GttState.TRIGGERED
+    restarted.worker.close()
+
+
+@SHAPES
+def test_a_restart_takes_a_gtts_reference_from_its_first_settled_read_that_shows_it_resting(
+    make_fake_openalgo, tmp_path, history
+):
+    fake, rig, _ = world(make_fake_openalgo, tmp_path, history=history)
+    rig.worker.close()
+    restarted = GttRig(fake, tmp_path)
+    restarted.step_for(2.0, every_s=2.0)
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+
+    news = restarted.send(ReadGtts()) + until_settled(restarted)
+
+    # The restart's first read showed the stop resting with the leg's 10 settled: gone with
+    # the 10 unchanged, it ended outside the session.
+    expected = [GttEvent.ENDED_OUTSIDE] if history else [GttEvent.IN_FLIGHT, GttEvent.ENDED_OUTSIDE]
+    assert events(news) == expected
+    restarted.worker.close()
+
+
+def test_a_restart_never_takes_an_own_exit_that_filled_while_no_session_ran_for_its_stop(
+    make_fake_openalgo, tmp_path
+):
+    fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
+    # The stop is cut to 5 and the session's exit sells the other 5; the exit fills at the
+    # broker, but its word never reaches the session before the worker stops.
+    rig.send(rig.gtt(GttAction.MODIFY, seq=seq, units=5))
+    fake.faults.hold_order_updates()
+    rig.run(rig.own_exit(5))
+    rig.worker.close()
+    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
+    restarted = GttRig(fake, tmp_path)
+
+    news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
+
+    # The restart hears the exit's fill. Against the baseline of 10 the earlier process
+    # kept, the 5 the books show would read as the stop's 5 sold with its child missed: a
+    # sale that never happened. Nothing judges the gone stop instead.
+    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.MISMATCH]
+    assert fake.position("SBIN", "NSE") == 5
     restarted.worker.close()
 
 
@@ -550,21 +592,16 @@ def test_a_gtt_that_fired_after_a_partial_exit_fired_with_its_child_missed(
     rig.worker.close()
 
 
-def test_the_baseline_a_partial_exit_moved_is_kept_for_a_restart(make_fake_openalgo, tmp_path):
+def test_the_baseline_a_partial_exit_moved_is_noted_in_the_journal(make_fake_openalgo, tmp_path):
     fake, rig, seq = world(make_fake_openalgo, tmp_path, history=False)
     partly_exited(rig, seq, 5)
+
     # The worker takes the exit's fill at its next step, with no read of the GTT book.
     rig.worker.step()
-    rig.worker.close()
-    fake.set_gtt_status(FIRST_TRIGGER, "cancelled")
-    restarted = GttRig(fake, tmp_path)
 
-    news = restarted.step_for(2.0, every_s=2.0) + until_settled(restarted)
-
-    assert events(news) == [GttEvent.IN_FLIGHT, GttEvent.ENDED_OUTSIDE]
-    with restarted.journal() as journal:
+    with rig.journal() as journal:
         assert journal.gtt(seq).baseline_units == 5
-    restarted.worker.close()
+    rig.worker.close()
 
 
 def test_the_child_is_looked_for_for_60_seconds_before_the_units_decide(

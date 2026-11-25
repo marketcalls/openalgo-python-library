@@ -109,7 +109,7 @@ class GttBinding:
     recorded and last changed; and the signed units its leg would hold at the broker had
     it not fired, as the GTT follower last noted them (`baseline_units`, None before any:
     its reference moved by the session's own fills since, `_gtt_units`; 20-positional-live
-    3.3, what a GTT gone later is judged by, across days too)."""
+    3.3; a restart does not take it back as the GTT's reference)."""
 
     seq: int
     day: date
