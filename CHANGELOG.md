@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New refusal kinds `unknown_gtt`, `gtt_state` and `gtt_resting`.
   - Not built in a live session: a GTT order against the position held, modifying a GTT order (cancel it and place a new one), and renewing a strategy GTT order after 360 days (the broker's expiry ends it, where a backtest renews it).
   - Live differs from a backtest in one case: a resting CNC sale (LIMIT, SL or SL-M) beside the position's stop GTT, or beyond what the other sales leave, is refused `exit_cover`, as a reduce-only exit beside an MIS stop already is, because both could sell the same units at the broker. A backtest fills such a sale when its price comes before the stop. Use `target=` for this exit.
+- The live layer's side of positional trading, used by `bt.live` from a later unit of 2.5.0: a live session sends a position's stop GTT and a strategy's GTT entry through OpenAlgo's GTT calls (SINGLE GTTs only, the trigger in `triggerprice_sl` when it is below the price and in `triggerprice_tg` when above), confirms every call against the GTT book, reads the GTT book every 10 seconds while the market is open and a GTT rests, and finds the order a fired GTT placed.
+  - When the session cannot be sure whether a GTT fired, it answers in the way that never sends a second exit or a second GTT: the cancel is refused, an unanswered place is not placed again, and a GTT gone from the book with no explanation locks the strategy's entries with an ERROR alert for the user to settle. A position's units are judged only on a position book read made once the session's own fills on it have settled (the engine assumes the position book shows them within 30 seconds).
+  - While a GTT's outcome is open, the reconciliation waits for it instead of reporting the change in the position as a foreign fill.
 
 ### Changed
 
