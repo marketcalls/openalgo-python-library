@@ -218,8 +218,10 @@ def backtest(
         engine was started before the open on every trading day a position was held, as
         bt.live with this setting needs. Any other value raises ConfigError.
     roll: sessions before expiry at which a futures position rolls to the next contract
-        (1, the session before the last trading day; 0 rolls on it), or None to hold it
-        to expiry: an index future then settles there in cash (see `Result.settlements`);
+        (1, the session before the last trading day; 0 rolls on it; an MCX delivery
+        contract counts them back from the trading day before its tender period, where
+        the reference table gives that period), or None to hold it to expiry: an index
+        future then settles there in cash (see `Result.settlements`);
         a future the exchange settles by delivery (a stock future, an MCX delivery
         contract) is sold or bought back at the square-off time of its last trading day
         (an MCX one of the trading day before its tender period, where the reference

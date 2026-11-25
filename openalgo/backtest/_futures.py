@@ -16,7 +16,11 @@ for each underlying:
   before the expiry of the nearest contract still traded, which is when a position
   rolls; with `roll=None` at the session after that contract's last trading day, a
   position being settled at expiry instead. The kernel computes both sessions
-  (`futures_roll_session_day`, `futures_session_after`), so the rule has one source;
+  (`futures_roll_session_day`, `futures_session_after`), so the rule has one source.
+  A contract whose positional exit day comes before its last trading day (an MCX
+  delivery contract, exited the trading day before its tender period, `_positional_exit`)
+  rolls N sessions before that exit day instead, so the position rolls rather than being
+  exited flat with the roll still to come;
 - the series the kernel receives: the contracts of the rank in trading order, each with
   the session it hands over on, and the dates each contract's bars are loaded for (from
   the run's start, or the session it takes over on, to its last trading day; with
@@ -40,6 +44,7 @@ from ._engine import call
 from ._futures_contracts import Contract, check_given, listed_contracts, record_expiries
 from ._messages import counted, not_supported
 from ._native import native
+from ._positional_exit import exit_day
 from .errors import ConfigError, ReferenceDataError
 from .reference import Instrument, SymbolError, parse_symbol
 
@@ -197,18 +202,36 @@ def _move_day(day: dt.date, roll: int | None, exchange: str, calendar: Any) -> d
     return from_day(number)
 
 
+def _held_to(contract: Contract, calendar: Any) -> dt.date:
+    """The last session a position on `contract` is held to: its positional exit day
+    (`_positional_exit`) when that comes before its last trading day, as an MCX delivery
+    contract's does, else its last trading day. A contract the reference tables list is
+    never an MCX one (their expiry rules are weekdays of NFO and BFO series), so it is held
+    to its last trading day."""
+    if contract.instrument is None:
+        return contract.last_day
+    day, _ = exit_day(contract.instrument, calendar)
+    return contract.last_day if day is None else min(day, contract.last_day)
+
+
 def _select(
     name: str, contracts: list[Contract], rank: int, roll: int | None, plan: Any, calendar: Any
 ) -> list[tuple[Contract, dt.date | None]]:
     """The contracts of the rank over the run and the session each hands over on.
 
-    The rank moves past the nearest contract still traded (the anchor) on its move day.
-    A contract expiring before the run starts is never the anchor. When no contract
+    The rank moves past the nearest contract still traded (the anchor) on its move day:
+    with `roll=N` counted back from the last session it is held to (`_held_to`). A
+    contract expiring before the run starts is never the anchor. When no contract
     follows the one held, the series ends with it if the anchor's move day is after the
     run (the run ends before the hand-over could need the next contract)."""
+    moves: dict[int, dt.date] = {}
 
     def move(j: int) -> dt.date:
-        return _move_day(contracts[j].last_day, roll, plan.exchange, calendar)
+        # Worked out once a contract: a delivery contract's exit day reads the tables.
+        if j not in moves:
+            held_to = contracts[j].last_day if roll is None else _held_to(contracts[j], calendar)
+            moves[j] = _move_day(held_to, roll, plan.exchange, calendar)
+        return moves[j]
 
     def missing() -> ReferenceDataError:
         return ReferenceDataError(
@@ -299,9 +322,12 @@ def _warnings(series: list[SeriesPlan], roll: int | None) -> tuple[str, ...]:
     if not physical:
         return ()
     return (
-        f"{', '.join(physical)}: held to expiry (roll=None) these futures are settled in cash "
-        "at the last close; the exchange settles them by physical delivery, which is not "
-        "modelled",
+        f"{', '.join(physical)}: the exchange settles these futures by delivery, so held to "
+        "expiry (roll=None) each is sold or bought back at the square-off time of its "
+        "positional exit day (its last trading day; for an MCX contract, the trading day "
+        "before its tender period), exit reason expiry_exit, instead of being settled; one "
+        "the reference tables give no tender period for is settled at expiry in cash, with "
+        "its own warning",
     )
 
 
