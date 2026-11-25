@@ -1,20 +1,22 @@
 """A GTT's leg's units judged only against a reference (`_live/_gtt_units.py`, the GTT
-sender and follower; the lead's rulings M1 to M4 on N3a's review round 5,
-20-positional-live 3.1 and 3.3): a settled read of the leg's units made when the GTT could
-not yet have fired, moved by the session's own fills since. A read made while the
-session's own fills on the leg had not settled judges nothing, and with no reference the
-answer is the one that can send no second exit and no second GTT: the cancel of a GTT gone
-from the book is refused, an unanswered place is never placed again, a gone GTT is a
-mismatch.
+sender and follower; the lead's rulings M1 to M4 on N3a's review round 5 and R6-1, R6-2 on
+round 6, 20-positional-live 3.1 and 3.3): a settled read of the leg's units made when the
+GTT could not yet have fired, moved by the session's own fills since. A read made while the
+session's own fills on the leg had not settled judges nothing, and with no reference, or
+units moved by another amount than the GTT's, the answer is the one that can send no
+second exit and no second GTT: the cancel of a GTT gone from the book is refused, an
+unanswered place is never placed again, a gone GTT is a mismatch.
 
-The scenarios are the review's probes, each over both shapes of a broker's GTT book (one
+The scenarios are the reviews' probes, each over both shapes of a broker's GTT book (one
 that keeps the GTTs that ended, one that lists the active ones only) and both positional
 products: a stop placed at once after the session's own entry, fired with its child
-listed late or never, then cancelled; a move seen before the leg settled, then position
-books that answer as before it; a position book that lags the session's own exit; an
-unanswered place that landed late and fired while the position book lagged the entry.
-Where a test says so, the session's start read (`GttRig.start_read`, as unit N3b's session
-gives it) is the reference from before the entry.
+listed late or never, then cancelled; the session's reads given as references, after a
+same-day restart too; a move seen before the leg settled, then position books that answer
+as before it; a position book that lags the session's own exit; an unanswered place that
+landed late and fired while the position book lagged the entry; a child part filled; a
+modify that cannot be told whose stop fired. Where a test says so, the session's start
+read (`GttRig.start_read`, as unit N3b's session gives it) is the reference from before
+the entry.
 
 The worker runs on the fake OpenAlgo (`gtt_samples`): SBIN at 800.00, a long leg's stop
 sells 10 at a trigger of 790.00 with a child limit of 780.00; a trade at 789.00 fires it
@@ -147,38 +149,67 @@ def test_the_cancel_of_a_stop_with_no_reference_that_did_not_fire_is_judged_by_t
         assert NO_REFERENCE in answer.message
 
 
-@pytest.mark.parametrize(
-    ("hidden_reads", "kind"),
-    [
-        (None, GttAnswerKind.CANCELLED),
-        (LATE, GttAnswerKind.CANCEL_REFUSED),
-        (NEVER, GttAnswerKind.CANCEL_REFUSED),
-    ],
-    ids=["nothing fired", "it fired, its child listed late", "it fired, its child never listed"],
-)
-@PRODUCTS
-@SHAPES
-def test_a_cancel_4_s_after_an_own_entry_is_judged_once_the_leg_settles_against_the_start_read(
-    rig, broker, history, product, hidden_reads, kind
-):
+def cancel_4_s_after_an_own_entry(rig, broker, product, hidden_reads):
+    """The session's start read holds no SBIN; its own entry buys 10 and the stop is placed
+    at once. 4 s later the stop fires (unless `hidden_reads` is None), the order book
+    leaving its child out of `hidden_reads` reads, and the session cancels it, the cancel
+    answered 502 when it fired. The answers before the entry settles (within
+    `POSITION_BOOK_LAG_S` of its fill) and after."""
     rig.start_read(0, product)
     seq = stop_right_after_an_own_entry(rig, product)
     rig.step_for(4.0)
     if hidden_reads is not None:
         fire(broker, hidden_reads)
         broker.faults.gateway_error("cancelgttorder", status=502)
-
     early = answers(rig.send(cancel(rig, seq, product)))
     early += answers(rig.step_for(POSITION_BOOK_LAG_S - 6.0, every_s=2.0))
-    later = answers(rig.step_for(LONG_ENOUGH_S, every_s=2.0))
+    return early, answers(rig.step_for(LONG_ENOUGH_S, every_s=2.0))
+
+
+@pytest.mark.parametrize(
+    ("history", "hidden_reads", "kind"),
+    [
+        (True, None, GttAnswerKind.CANCELLED),
+        (True, LATE, GttAnswerKind.CANCEL_REFUSED),
+        (True, NEVER, GttAnswerKind.CANCEL_REFUSED),
+        (False, LATE, GttAnswerKind.CANCEL_REFUSED),
+    ],
+    ids=[
+        "history rows, nothing fired",
+        "history rows, it fired, its child listed late",
+        "history rows, it fired, its child never listed",
+        "active only, it fired, its child listed late",
+    ],
+)
+@PRODUCTS
+def test_a_cancel_4_s_after_an_own_entry_is_answered_by_its_row_or_its_child_before_the_leg_settles(
+    rig, broker, product, hidden_reads, kind
+):
+    early, later = cancel_4_s_after_an_own_entry(rig, broker, product, hidden_reads)
 
     # A book with history rows shows the stop cancelled or fired at once, and a child the
-    # order book lists answers as soon as it is found. Otherwise the stop is simply gone:
-    # the entry's fill is waited for until it settles (30 s after it was heard), then the
-    # units against the start read's 0 moved by the entry's 10 say whether it fired.
-    (answer,) = early + later
-    assert answer.kind is kind
-    assert len(early) == (1 if history or hidden_reads == LATE else 0)
+    # order book lists answers as soon as it is found: neither waits for the entry's units.
+    (answer,) = early
+    assert (answer.kind, later) == (kind, [])
+
+
+@pytest.mark.parametrize(
+    ("hidden_reads", "kind"),
+    [(None, GttAnswerKind.CANCELLED), (NEVER, GttAnswerKind.CANCEL_REFUSED)],
+    ids=["nothing fired", "it fired, its child never listed"],
+)
+@pytest.mark.parametrize("history", [False], ids=["active only"])
+@PRODUCTS
+def test_a_cancel_4_s_after_an_own_entry_of_a_stop_gone_waits_for_the_leg_to_settle(
+    rig, broker, product, hidden_reads, kind
+):
+    early, later = cancel_4_s_after_an_own_entry(rig, broker, product, hidden_reads)
+
+    # The stop is simply gone and no child is listed: the entry's fill is waited for until it
+    # settles (30 s after it was heard), then the units against the start read's 0 moved by
+    # the entry's 10 say whether it fired.
+    (answer,) = later
+    assert (early, answer.kind) == ([], kind)
 
 
 @pytest.mark.parametrize(
