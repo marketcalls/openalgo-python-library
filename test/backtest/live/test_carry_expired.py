@@ -1,10 +1,12 @@
 """A position carried on a contract whose last trading day has passed, at the start of a later
 day, on the fake OpenAlgo (20-positional-live 9 and 4.2 step 4; the lead's rulings N5a-1 and
-N5a-3, review round 1 of unit N5a): an index future is settled by the exchange, so the
-start ends its stop GTT in the journal, names the settlement (a SESSION alert and a warning
-of the result) and starts the strategy flat on the contract it trades now, never looking
-the expired one up; the close writes its flat day-close record, so the settlement is named
-once. A strategy moved to another contract while its carried one still trades is refused
+N5a-3, review rounds 1 and 2 of unit N5a): an index future is settled by the exchange in
+cash, so the start ends its stop GTT in the journal, names the settlement (a SESSION alert
+and a warning of the result, which say that no result counts its profit or loss after its
+last close) and starts the strategy flat on the contract it trades now, never looking the
+expired one up; the close writes its flat day-close record, so the settlement is named
+once. A contract settled by delivery is named so, asking the operator to check the
+account. A strategy moved to another contract while its carried one still trades is refused
 before anything is sent, saying what to do.
 
 On Monday 2026-11-16 `NovemberKept` buys one lot of 65 units of November's NIFTY future
@@ -18,6 +20,7 @@ session starts at 14:40:05 IST and is stopped at 14:46.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 import pytest
@@ -43,6 +46,7 @@ from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, MODES, calls
 from session_samples import alerts
 
+from openalgo.backtest._live import _carry_contracts as carry_contracts
 from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest.errors import PreflightError
 
@@ -96,12 +100,18 @@ def november_carried(make_fake_openalgo, monkeypatch, tmp_path, **options):
     return world
 
 
-#: The words of the settlement, worked by hand from the scenario.
-SETTLED = (
-    f"NovemberKept: 65 {NOVEMBER_FUTURE} NFO (NRML) carried from {DAY1} expired on "
-    f"{LAST_DAY}: the exchange settled it (its last close in the journal 120.00, of {DAY1}; "
-    f"the contract note holds the settlement price), so it starts flat on {FUTURE} NFO"
-)
+def settled_words(how):
+    """The words of the settlement, worked by hand from the scenario, settled `how`."""
+    return (
+        f"NovemberKept: 65 {NOVEMBER_FUTURE} NFO (NRML) carried from {DAY1} expired on "
+        f"{LAST_DAY}: the exchange settled it {how} (its last close in the journal 120.00, of "
+        f"{DAY1}; the contract note holds the settlement price, and no result counts its "
+        f"profit or loss after that close), so it starts flat on {FUTURE} NFO"
+    )
+
+
+#: The words of the index future's settlement in cash.
+SETTLED = settled_words("in cash")
 
 
 @MODES
@@ -127,6 +137,36 @@ def test_a_carried_index_future_past_its_last_day_is_named_settled_and_the_start
     with journal_of(world) as journal:
         assert journal.gtt_by_trigger(trigger_id).state.terminal
     assert not alerts(caplog, "error")
+
+
+class DeliveryTables:
+    """The package's reference tables, with November's future settled by delivery (as a
+    stock future is): the scenario's contract stands in for one."""
+
+    def __init__(self, tables):
+        self._tables = tables
+
+    def instrument(self, symbol, exchange, day):
+        found = self._tables.instrument(symbol, exchange, day)
+        if symbol != NOVEMBER_FUTURE:
+            return found
+        return dataclasses.replace(found, settlement="physical")
+
+
+def test_a_carried_contract_settled_by_delivery_asks_to_check_the_account(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    world = november_carried(make_fake_openalgo, monkeypatch, tmp_path)
+    tables = DeliveryTables(carry_contracts.default_tables())
+    monkeypatch.setattr(carry_contracts, "default_tables", lambda: tables)
+
+    outcome = wednesday(world)
+
+    delivered = settled_words(
+        "by delivery: check the account for the shares or the obligation it left"
+    )
+    assert delivered in outcome.warnings
+    assert f"{world.fake.mode.name} (NovemberKept): {delivered}" in alerts(caplog, "session")
 
 
 def test_the_close_writes_a_flat_record_so_the_settled_contract_is_not_carried_again(

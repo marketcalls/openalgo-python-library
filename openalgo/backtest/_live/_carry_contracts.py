@@ -6,15 +6,19 @@ A strategy's day-close record names the contracts it carries positions on. When 
 session's strategy of that name trades another contract:
 
 - **Every carried contract has expired** (its last trading day, from the reference tables
-  as of the record's day, is before today): the exchange settled it (an index future, or
-  an MCX contract settled in cash). The strategy starts flat on the contract it trades
-  now: its carry is dropped, so nothing of the expired contract is looked up in today's
-  master contract, restored or traded; its journal GTTs on the expired contracts are
-  ended (the broker ends a GTT of a contract that no longer trades); and the settlement
-  is named (`CarryAtStart.expired`): a SESSION alert and a warning of the result say the
-  contract, its units, its last trading day and its last close the journal holds (the
-  record's, of the day it was carried from: the contract note holds the settlement
-  price). The close writes the strategy's flat day-close record, so it is named once.
+  as of the record's day, is before today): the exchange settled it, in cash (an index
+  future: the tables' `settlement` "cash") or by delivery (a stock future or option, or a
+  contract the tables do not call cash-settled: the operator checks the account for the
+  delivery). The strategy starts flat on the contract it trades now: its carry is
+  dropped, so nothing of the expired contract is looked up in today's master contract,
+  restored or traded; its journal GTTs on the expired contracts are ended (the broker
+  ends a GTT of a contract that no longer trades); and the settlement is named
+  (`CarryAtStart.expired`): a SESSION alert and a warning of the result say the contract,
+  its units, its last trading day, how it settled and its last close the journal holds
+  (the record's, of the day it was carried from: the contract note holds the settlement
+  price). No exit of it is recorded, so no result counts its profit or loss after that
+  close, and the words say so. The close writes the strategy's flat day-close record, so
+  it is named once.
 - **A carried contract still trades**: what the strategy carries continues only on its
   own contract (the engine's restore refuses other instruments), so the start is refused
   (PreflightError) saying so, and what to do.
@@ -42,6 +46,9 @@ from ._journal_gtt_rows import GttState
 from ._preflight_carry import CarriedPosition
 from .journal import Journal
 
+#: The reference tables' `settlement` of a contract the exchange settles in cash
+#: (`reference/data/settlement.csv`).
+CASH_SETTLED = "cash"
 #: What a start refused for a strategy moved off a contract it carries asks of the
 #: operator.
 START_ON_ITS_OWN = (
@@ -70,29 +77,32 @@ def settle_expired(
         if not elsewhere:
             continue
         ended = {p: _last_day(p, carried) for p in elsewhere}
-        trading = [p for p, last in ended.items() if last is None or last >= carry.day]
+        trading = [p for p, (last, _) in ended.items() if last is None or last >= carry.day]
         if trading:
             refusals.append(_moved(spec, carried, trading[0]))
             continue
         _end_gtts(journal, spec.name, {(p.symbol, p.exchange) for p in elsewhere}, carry.day)
         del kept[spec.name]
-        expired[spec.name] = "; ".join(_settled(spec, carried, p, ended[p]) for p in elsewhere)
+        expired[spec.name] = "; ".join(_settled(spec, carried, p, *ended[p]) for p in elsewhere)
     return replace(carry, carried=kept, expired=expired), refusals
 
 
-def _last_day(position: CarriedPosition, carried: Carried) -> dt.date | None:
-    """The last trading day of a carried position's contract, from the reference tables
-    as of the day it was carried from; None for a cash instrument, or one the tables do
-    not resolve (the operator's own terms: taken as still trading)."""
+def _last_day(position: CarriedPosition, carried: Carried) -> tuple[dt.date | None, str]:
+    """(the last trading day of a carried position's contract, its settlement), from the
+    reference tables as of the day it was carried from; (None, "") for a cash
+    instrument, or one the tables do not resolve (the operator's own terms: taken as
+    still trading)."""
     if position.exchange in CASH_EXCHANGES:
-        return None
+        return None, ""
     try:
         instrument = default_tables().instrument(
             position.symbol, position.exchange, carried.record.day
         )
     except (ConfigError, ReferenceDataError):
-        return None
-    return None if instrument.expiry is None else last_day(instrument)
+        return None, ""
+    if instrument.expiry is None:
+        return None, ""
+    return last_day(instrument), instrument.settlement
 
 
 def _end_gtts(journal: Journal, name: str, contracts: set[tuple[str, str]], day: dt.date) -> None:
@@ -105,14 +115,23 @@ def _end_gtts(journal: Journal, name: str, contracts: set[tuple[str, str]], day:
             journal.set_gtt_state(gtt.seq, state, note=note)
 
 
-def _settled(spec: Any, carried: Carried, position: CarriedPosition, last: dt.date) -> str:
-    """The words of a carried position the exchange settled (module docstring)."""
+def _settled(
+    spec: Any, carried: Carried, position: CarriedPosition, last: dt.date, settlement: str
+) -> str:
+    """The words of a carried position the exchange settled (module docstring), by its
+    tables' `settlement`."""
+    how = (
+        "in cash"
+        if settlement == CASH_SETTLED
+        else "by delivery: check the account for the shares or the obligation it left"
+    )
     return (
         f"{spec.name}: {position.units:g} {position.symbol} {position.exchange} "
         f"({position.product}) carried from {carried.record.day} expired on {last}: the "
-        f"exchange settled it (its last close in the journal {_last_close(carried, position)}, "
-        f"of {carried.record.day}; the contract note holds the settlement price), so it starts "
-        f"flat on {spec.symbol} {spec.exchange}"
+        f"exchange settled it {how} (its last close in the journal "
+        f"{_last_close(carried, position)}, of {carried.record.day}; the contract note holds "
+        "the settlement price, and no result counts its profit or loss after that close), so "
+        f"it starts flat on {spec.symbol} {spec.exchange}"
     )
 
 
@@ -138,4 +157,4 @@ def _moved(spec: Any, carried: Carried, position: CarriedPosition) -> str:
     )
 
 
-__all__ = ["START_ON_ITS_OWN", "settle_expired"]
+__all__ = ["CASH_SETTLED", "START_ON_ITS_OWN", "settle_expired"]
