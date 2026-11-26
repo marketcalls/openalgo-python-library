@@ -17,6 +17,7 @@
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open, the day's entries the trade caps count |
 //! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back, their last slice's ticks and the flags of their fills so far), the day's CNC buys |
+//! | `last_closes` | each instrument's last close so far (rupees), read only when the state rebuilds a session that stopped without its close (`stopped`) |
 //!
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and
@@ -65,7 +66,9 @@
 //! futures series are refused in a session). The GTTs keep their ids: the restored
 //! session's book of GTTs is empty before the restore and takes them all back.
 //!
-//! The state the next trading day's session takes is `carried_state` (`carry`).
+//! The state the next trading day's session takes is `carried_state` (`carry`). A session
+//! of an earlier day that stopped without its close gives it too, rebuilt from its last
+//! saved state (`stopped`).
 
 mod book;
 mod carry;
@@ -81,6 +84,7 @@ mod orders;
 mod requests;
 mod risk;
 mod standing;
+mod stopped;
 mod value;
 
 pub use carry::CarriedIds;
@@ -120,7 +124,8 @@ use value::{list, map, Read};
 /// layout 6 the GTTs and what the session follows of them, and an engine exit's fill flags
 /// (design 20-positional-live 4.1), and then, before layout 6 was released, the flags of
 /// each open trade's fills (`book`), read as absent (no flag) from a layout 6 state
-/// written without them.
+/// written without them, and each instrument's last close (`stopped`), read as absent (no
+/// close) from one written without it.
 pub const LIVE_STATE_LAYOUT: i64 = 6;
 
 /// A saved state read whole, before any of it is applied.
@@ -196,6 +201,7 @@ impl Engine {
                 }),
             ),
             ("session_buys", list(&self.session_buys.bought, write_buy)),
+            ("last_closes", self.write_last_closes()),
         ])
     }
 
@@ -223,6 +229,12 @@ impl Engine {
     /// Read the whole state (module docs), applying nothing.
     fn read_saved(&self, read: &Read<'_>) -> Result<Saved, LiveStateError> {
         self.check_session(read)?;
+        self.read_parts(read)
+    }
+
+    /// Read the parts of a state whose session was checked (`check_session`, or the
+    /// checks of a stopped session's, `stopped`), applying nothing.
+    fn read_parts(&self, read: &Read<'_>) -> Result<Saved, LiveStateError> {
         let count = self.instruments.len();
         let saved_orders = read.items_of("orders")?;
         let (orders, ids) = read_orders(&saved_orders, self.book.next_id(), count)?;

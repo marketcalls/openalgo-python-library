@@ -242,6 +242,23 @@ impl NativeEngine {
         live_state::restore_carried_state(py, self.engine_mut()?, state)
     }
 
+    /// Restore the last saved state of a session of an earlier day that stopped without
+    /// its close, into a session built for that day, standing where the save stood;
+    /// `today` is the day number of the session that carries it on, `unsent` the GTTs
+    /// whose waiting request never reached the venue; `{saved id: new id}` of the restored
+    /// working orders (`live_state`).
+    #[pyo3(signature = (state, today, unsent))]
+    fn restore_stopped_state<'py>(
+        &mut self,
+        py: Python<'py>,
+        state: &Bound<'py, PyAny>,
+        today: i32,
+        unsent: Vec<u64>,
+    ) -> PyResult<Dict<'py>> {
+        let unsent: Vec<GttId> = unsent.into_iter().map(GttId).collect();
+        live_state::restore_stopped_state(py, self.engine_mut()?, state, today, &unsent)
+    }
+
     /// Record that the venue confirmed a GTT's place; the stamp (`gtts`).
     fn apply_gtt_placed(&mut self, py: Python<'_>, gtt_id: u64) -> PyResult<StampTuple> {
         venue::recorded(py, self.engine_mut()?.apply_gtt_placed(GttId(gtt_id)))

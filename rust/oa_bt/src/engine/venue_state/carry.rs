@@ -21,6 +21,14 @@
 //! to the close. It still rests at the broker, so the next day's session follows it and
 //! asks its cancellation at once (`Engine::loose_stop_gtts`).
 //!
+//! A GTT request the venue had not answered when the session stopped is carried on the
+//! terms asked: a place's GTT as it was asked for, and a GTT whose modification waits on
+//! the modification's terms (the next start's GTT book read settles either). A command the
+//! adapter never took (`take_commands`) never reached the venue, and is dropped: a GTT
+//! whose place it is is not carried (its leg is carried without a stop GTT, and `protect`
+//! places one in the next session), and a GTT whose modification or cancellation it is is
+//! carried on the terms that rest.
+//!
 //! Not carried, as a backtest's next session does not see them either: the orders that
 //! expired at the close and everything the venue was asked of them, the exits, the
 //! targets fired, the entry locks (`gtt_refused` included: a refusal kept across starts is
@@ -62,7 +70,7 @@
 //! state is refused, `MissedExpiryExit` (`carry_expired`). Reading, checking and applying
 //! it is `carry_restore`.
 
-use crate::exec::{Gtt, GttId, GttPurpose, InstrumentId, OrderId};
+use crate::exec::{Gtt, GttId, GttPurpose, GttStatus, InstrumentId, OrderId};
 use crate::portfolio::PositionKey;
 use crate::rms::TradingStateCause;
 
@@ -70,6 +78,7 @@ use super::super::error::KernelError;
 use super::super::excursion_hold::Hold;
 use super::super::kernel::{Engine, Phase};
 use super::super::output::OpenTrade;
+use super::super::venue::VenueCommand;
 use super::super::venue_error::VenueError;
 use super::book::{write_account, write_open_trade, write_position};
 use super::error::LiveStateError;
@@ -119,15 +128,16 @@ impl Engine {
             .into());
         }
         let book = &self.book;
-        let orders = book
-            .working()
-            .filter(|order| self.resting_gtt_of(order.id).is_some());
+        let orders = book.working().filter(|order| {
+            self.resting_gtt_of(order.id)
+                .is_some_and(|gtt| !self.place_not_handed_out(gtt))
+        });
         let gtts = self
             .gtts
             .book
             .gtts()
             .iter()
-            .filter(|gtt| gtt.status.at_venue());
+            .filter(|gtt| gtt.status.at_venue() && !self.place_not_handed_out(gtt.id));
         let open = self.portfolio.positions().iter().filter(|p| !p.is_flat());
         let gtt_legs = self.venue.gtts.legs.iter().filter(|leg| {
             let held = self.portfolio.position(leg.key);
@@ -168,7 +178,7 @@ impl Engine {
 
     /// Each instrument's last close (module docs), by registration index; an instrument
     /// with none is left out.
-    fn write_last_closes(&self) -> StateValue {
+    pub(super) fn write_last_closes(&self) -> StateValue {
         let closes = self
             .last_close
             .iter()
@@ -191,10 +201,43 @@ impl Engine {
         })
     }
 
-    /// A GTT at the venue as it is carried: `write_gtt`'s fields and `to_cancel` (module
-    /// docs).
+    /// True when GTT `gtt`'s place is among the commands the adapter has not taken: it
+    /// never reached the venue, so it is not carried (module docs).
+    fn place_not_handed_out(&self, gtt: GttId) -> bool {
+        self.venue
+            .commands
+            .iter()
+            .any(|command| matches!(command, VenueCommand::PlaceGtt { gtt: id, .. } if *id == gtt))
+    }
+
+    /// The terms GTT `gtt` is carried on (module docs): a modification sent and not
+    /// answered, the terms asked; one the adapter has not taken, the terms that rest.
+    fn carried_terms(&self, gtt: &Gtt) -> Gtt {
+        let not_taken = self.venue.commands.iter().any(
+            |command| matches!(command, VenueCommand::ModifyGtt { gtt: id, .. } if *id == gtt.id),
+        );
+        let asked = self
+            .venue
+            .gtts
+            .follows
+            .iter()
+            .find(|follow| follow.gtt == gtt.id)
+            .and_then(|follow| follow.pending);
+        match asked {
+            Some(terms) if gtt.status == GttStatus::ModifyPending && !not_taken => Gtt {
+                side: terms.side,
+                quantity_units: terms.units,
+                leg: terms.leg(gtt.leg.role),
+                ..gtt.clone()
+            },
+            _ => gtt.clone(),
+        }
+    }
+
+    /// A GTT at the venue as it is carried: `write_gtt`'s fields, on the terms it is
+    /// carried on (`carried_terms`), and `to_cancel` (module docs).
     fn write_carried_gtt(&self, gtt: &Gtt) -> StateValue {
-        let mut written = write_gtt(&self.book, gtt);
+        let mut written = write_gtt(&self.book, &self.carried_terms(gtt));
         if let StateValue::Map(entries) = &mut written {
             entries.push(("to_cancel".to_string(), self.carried_to_cancel(gtt).into()));
         }
