@@ -20,6 +20,7 @@ import logging
 import pytest
 from daily_samples import (
     OPEN,
+    SESSIONS,
     UNITS,
     Recorded,
     WeeklyRecorded,
@@ -101,15 +102,29 @@ def test_a_daily_bar_is_decided_once_across_two_starts_the_same_morning(
 ):
     # 13.3 "a daily bar decided once across two restarts": the first start decides
     # Friday's bar before the open and is stopped (Ctrl+C) at 09:08, before its order
-    # goes; the second start finds the bar decided and decides nothing.
+    # goes; the stop says it cancelled the order, and the second start finds the bar
+    # decided, says so and decides nothing.
     world = daily_world(make_fake_openalgo, monkeypatch, tmp_path)
     world.stop_at(ist(9, 8))
-    world.run(Recorded)
+    first = world.run(Recorded)
 
     restart(world, Recorded, stop_ns=ist(9, 30))
 
     assert [bar_close for _, bar_close, _ in Recorded.decided] == [close_of(FRIDAY)]
     assert buys(world) == []
+    cancelled = (
+        "Recorded: the stop before the open cancels the orders of its decision on its D bar "
+        "closing on 2026-11-13 (BUY 10 MARKET): they never went to the broker, and that bar "
+        "is not decided again today"
+    )
+    assert f"Warning: {cancelled}" in world.lines
+    result = session_result(first)
+    assert cancelled in result.warnings
+    assert f"Warning     : {cancelled}" in result.summary_text().splitlines()
+    assert (
+        "Warning: Recorded: its D bar closing on 2026-11-13 was decided by an earlier start "
+        "today and is not decided again today"
+    ) in world.lines
 
 
 def test_a_start_after_the_open_sends_the_decision_at_once_flagged_late_decision(
@@ -159,6 +174,81 @@ def test_a_weekly_strategy_decides_the_week_whose_last_session_has_closed(
     # The week of Monday 2026-11-09: from that Monday's open to Friday's close.
     assert WeeklyRecorded.decided == [(open_of(MONDAY_BEFORE), close_of(FRIDAY), 1)]
     assert buys(world) == [("MARKET", UNITS, "CNC", "complete")]
+
+
+@MODES
+def test_a_daily_strategy_whose_last_daily_candle_is_missing_decides_nothing(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # The broker has not served Friday's candle: the bar due at Monday's open is Friday's,
+    # so Thursday's is not decided in its place, at an open a backtest never fills it at.
+    world = daily_world(
+        make_fake_openalgo,
+        monkeypatch,
+        tmp_path,
+        analyzer=analyzer,
+        sessions=(MONDAY_BEFORE, WEDNESDAY, THURSDAY),
+    )
+    world.stop_at(ist(9, 30))
+
+    world.run(Recorded)
+
+    assert Recorded.decided == []
+    assert buys(world) == []
+    assert (
+        "Warning: Recorded: the broker has not served the daily candle of 2026-11-13 (the "
+        "last session) yet, so its D bar closing on 2026-11-13 is not decided now, nor an older "
+        "bar in its place; start again once the broker serves it to decide that bar (after "
+        "the open its orders are flagged late_decision)"
+    ) in world.lines
+    with journal(world) as kept:
+        assert kept.decided_bar("Recorded") is None
+
+
+@MODES
+def test_a_weekly_strategy_first_started_in_the_middle_of_a_week_decides_nothing(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # Friday 2026-11-13: the week of 2026-11-02 closed at Sunday 2026-11-08's session and
+    # was due at Monday 2026-11-09's open; this week has not closed.
+    weeks = tuple(dt.date(2026, 11, day) for day in (2, 3, 4, 5, 6, 8)) + SESSIONS[:-1]
+    world = daily_world(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, day=FRIDAY, sessions=weeks
+    )
+    world.stop_at(ist(9, 30, day=FRIDAY))
+
+    world.run(WeeklyRecorded)
+
+    assert WeeklyRecorded.decided == []
+    assert buys(world) == []
+    assert (
+        "Warning: WeeklyRecorded: its W bar closing on 2026-11-08 was due at the open of "
+        "2026-11-09, not this one: it feeds its indicators only and is not decided; the next "
+        "is decided at the first start after its period's last session"
+    ) in world.lines
+    with journal(world) as kept:
+        assert kept.decided_bar("WeeklyRecorded") is None
+
+
+def test_a_strategy_raising_at_its_decision_before_the_open_stops_the_session_safely(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # As an exception of the strategy's code in the loop does (16-session-design 3.5): an
+    # ERROR alert, then the safe stop by on_stop, and the exception raised again.
+    class RaisesBeforeOpen(Recorded):
+        def on_bar(self, bar):
+            raise RuntimeError("the strategy's own error")
+
+    world = daily_world(make_fake_openalgo, monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match="the strategy's own error"):
+        world.run(RaisesBeforeOpen)
+
+    assert alerts(caplog, "error") == [
+        "LIVE (RaisesBeforeOpen): RaisesBeforeOpen raised RuntimeError: the strategy's own "
+        "error. The session stops safely"
+    ]
+    assert buys(world) == []
 
 
 def test_a_daily_strategy_in_mis_is_refused():

@@ -67,7 +67,7 @@ from ..strategy import Strategy
 from ._bars_candle import candle_bar
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
-from ._plan_daily import DAILY, DailySeries, decides_before_open, joined
+from ._plan_daily import DAILY, DailySeries, daily_candles, decides_before_open
 from ._plan_engine import bind_strategy, check_grid, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
@@ -262,7 +262,7 @@ def _strategy_plan(
     check_grid(setup.config, spec.exchange, spec.plan.start, calendar, series)
     bars: Any = series
     if setup.recent is not None:
-        bars = DailySeries(spec.symbol, spec.exchange, joined(history, setup.recent), calendar)
+        bars = DailySeries(spec.symbol, spec.exchange, daily_candles(setup, spec.symbol), calendar)
     strategy, context = bind_strategy(spec, setup, engine, bars, calendar, saved)
     return StrategyPlan(spec, setup, engine, series, strategy, context, calendar)
 

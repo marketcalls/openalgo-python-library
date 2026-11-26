@@ -346,9 +346,9 @@ def _preflight(
 
 
 def begin_trading(session: Session, source: FeedSource) -> None:
-    """Steps 12 to 15 (module docstring). Raises SessionStopped on a stop requested
-    during the countdown or the feed's connect, and LiveError when the feed does not
-    connect in time."""
+    """Steps 12 to 15 (module docstring). Raises SessionStopped on a stop requested during
+    the countdown or the feed's connect, LiveError when the feed does not connect in time,
+    and StrategyFailed for a strategy's exception at its decision before the open."""
     parts = session.parts
     data = DataWorker(parts.clients.data, parts.inbox, day=parts.spec.day, now=session.now)
     session.data = data

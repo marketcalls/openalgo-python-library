@@ -18,11 +18,16 @@ import datetime as dt
 import logging
 
 import pytest
+from expiry_samples import FUTURE, FUTURE_DAY, LOT, OPTION, OPTION_DAY, expiry_world
+from expiry_samples import ist as ist_on
 from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import MODES, CncHold, calls, gtt_world
 from rearm_samples import OPEN, RearmHold, rearm_world
+from restart_samples import restart
 from session_samples import alerts, ist
+from test_session_expiry import FutureHold, OptionHold
+from test_session_positional_carry import HoldAndRest
 
 from openalgo.backtest._live._journal_carry import DayClose
 from openalgo.backtest._live._preflight_gtt import REARM_DAILY_SENTENCE
@@ -146,6 +151,27 @@ def test_a_gap_through_the_stop_at_the_open_exits_flagged_stop_crossed(
     assert trade.exit_time == dt.datetime(2026, 11, 16, 9, 15, tzinfo=trade.exit_time.tzinfo)
 
 
+def test_a_mode_switch_with_a_carried_leg_says_to_check_its_stop_and_sends_nothing(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # 20-positional-live 10.4: no MIS square-off closes a CNC leg, so the alert does not
+    # say one does; nothing is sent after the switch, the day stop at the open neither.
+    world = rearm_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.trace.waive("books agree", "the switch shows the sandbox's book, which holds none")
+    world.script.at(ist(9, 10), lambda: world.fake.set_analyzer(True))
+    world.stop_at(ist(9, 30))
+
+    world.run(RearmHold, **REARM)
+
+    assert (
+        "LIVE (RearmHold): OpenAlgo's mode changed: the session sends nothing more. Positions "
+        "as last known: RearmHold SBIN NSE 10 units, no stop at the broker. CNC and NRML "
+        "positions stay open overnight, so check each one's stop at the broker; stop the "
+        "session with Ctrl+C"
+    ) in alerts(caplog, "error")
+    assert world.fake.orders(Mode.LIVE) == []
+
+
 @MODES
 def test_the_close_warns_of_each_carried_leg_without_a_stop_until_the_next_start(
     make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
@@ -170,6 +196,120 @@ def test_the_close_warns_of_each_carried_leg_without_a_stop_until_the_next_start
     # The day stop's end at the close is the design's, no ERROR.
     assert alerts(caplog, "error") == []
     assert [o.status for o in world.orders()] == ["complete", "cancelled"]
+
+
+@MODES
+def test_a_resting_gtt_order_of_the_strategy_does_not_hold_up_the_close_of_a_rearm_daily_leg(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # HoldAndRest rests a GTT buy of 5 at 490.00 overnight by design: only the leg's day
+    # stop ends at the close, so the session ends there, the leg named as left by design.
+    world = gtt_world(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, trades_until=(15, 40)
+    )
+
+    outcome = world.run(HoldAndRest, **REARM)
+
+    assert outcome.stopped_by == "session_end"
+    assert outcome.ended_ns < ist(15, 31)
+    assert alerts(caplog, "error") == []
+    assert (
+        "HoldAndRest SBIN NSE 10 units: no stop at the broker until your next start, which "
+        'places its day stop at the open (positional_stops="rearm_daily")'
+    ) in world.lines
+    assert [(g.action, g.quantity, g.status) for g in world.fake.gtts()] == [("BUY", 5, "active")]
+
+
+def test_a_ctrl_c_before_the_close_says_the_day_stop_works_until_the_close(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # Ctrl+C at 14:46 keeps the CNC leg (on_stop's default) with its day SL-M working: the
+    # close's WARNING says it protects the leg until the close, and nothing after.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(14, 46))
+
+    outcome = world.run(CncHold, **REARM)
+
+    line = (
+        "CncHold 10 SBIN NSE (CNC), stop 497.00: its day stop works at the broker until the "
+        "close, then no stop until your next start"
+    )
+    assert f'LIVE (CncHold): WARNING: positional_stops="rearm_daily": {line}. {SENTENCE}' in (
+        alerts(caplog, "session")
+    )
+    assert line in session_result(outcome).warnings
+
+
+class CncHoldOnce(CncHold):
+    """CncHold that buys only once in the day, across restarts (its `self.state`)."""
+
+    def on_bar(self, bar):
+        if not self.state.get("bought"):
+            self.state["bought"] = True
+            self.buy(self.qty, **type(self).rules)
+
+
+def test_a_restart_of_the_day_says_the_carried_legs_day_stop_is_placed(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(14, 46))
+    world.run(CncHoldOnce, **REARM)
+
+    restart(world, CncHoldOnce, stop_ns=ist(14, 50), **REARM)
+
+    assert (
+        "Warning: CncHoldOnce 10 SBIN NSE (CNC), stop 497.00: its day stop is placed at the broker"
+    ) in world.lines
+    # The restart places no second stop: the day SL-M of the first start still works.
+    assert live_orders(world) == [
+        ("BUY", "MARKET", 10, "CNC", 0.0),
+        ("SELL", "SL-M", 10, "CNC", 497.0),
+    ]
+
+
+def test_a_carried_leg_is_uncovered_while_the_market_is_closed_in_the_unprotected_table(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = rearm_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(9, 30))
+
+    outcome = world.run(RearmHold, **REARM)
+
+    closed, sent = outcome.unprotected
+    reason = "no day stop while the market is closed"
+    assert (closed.strategy, closed.units, closed.reason) == ("RearmHold", 10, reason)
+    # From the start at 09:05:00 to the open at 09:15:00; then the day stop is sent at the
+    # open and uncovered until the broker confirms it, the loop's next turn.
+    assert (closed.seconds(outcome.ended_ns), closed.to_ns) == (600.0, OPEN)
+    assert (sent.from_ns, sent.reason) == (OPEN, "stop unconfirmed")
+
+
+@pytest.mark.parametrize(
+    ("strategy", "symbol", "day", "stop"),
+    [
+        (OptionHold, OPTION, OPTION_DAY, ("SL", 110.0, 104.5)),
+        (FutureHold, FUTURE, FUTURE_DAY, ("SL-M", 70.0, 0.0)),
+    ],
+    ids=["option", "future"],
+)
+def test_a_rearm_daily_nrml_leg_on_nfo_gets_the_day_stop_of_its_segment(
+    make_fake_openalgo, monkeypatch, tmp_path, strategy, symbol, day, stop
+):
+    # 16-session-design 4.1: an option takes no SL-M, so its day stop is a stop-limit 5
+    # percent beyond the trigger (110.00 x 0.95 = 104.50); a future's is an SL-M. Bought
+    # at 120.00, a stop 10 points (the option) or 50 (the future) below.
+    world = expiry_world(
+        make_fake_openalgo, monkeypatch, tmp_path, symbol=symbol, day=day, start=(14, 0, 5)
+    )
+    world.stop_at(ist_on(day, 14, 5))
+
+    world.run(strategy, positional_stops="rearm_daily", capital=100_000, max_daily_loss=5_000)
+
+    (placed,) = [o for o in world.orders() if o.action == "SELL"]
+    terms = (placed.price_type, placed.quantity, placed.product)
+    assert (*terms, placed.trigger_price, placed.price) == (stop[0], LOT, "NRML", *stop[1:])
+    assert world.fake.gtts() == []
 
 
 def test_a_kept_gtt_refusal_does_not_refuse_a_strategy_that_chose_rearm_daily(

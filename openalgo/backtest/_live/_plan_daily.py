@@ -101,6 +101,14 @@ def joined(history: pd.DataFrame | None, recent: pd.DataFrame) -> pd.DataFrame:
     return both.reset_index(drop=True)
 
 
+def daily_candles(setup: Any, symbol: str) -> pd.DataFrame:
+    """A daily or longer strategy's daily candles of `symbol` before today, its own bars'
+    source (module docstring): the warm-up's history of its setup (a
+    `_plan_setup.StrategySetup`) and its recent read, `joined`."""
+    kept = setup.history.symbols.get(symbol)
+    return joined(None if kept is None else kept.base, setup.recent)
+
+
 def _layout(frame: pd.DataFrame) -> pd.DataFrame:
     """`frame`'s columns of the bars layout (`BAR_COLUMNS`), its open interest unknown
     (NaN) where it gives none, as resampling takes them."""
@@ -183,6 +191,7 @@ __all__ = [
     "DAILY",
     "RECENT_DAYS",
     "DailySeries",
+    "daily_candles",
     "decides_before_open",
     "decision_bars",
     "history_plan",

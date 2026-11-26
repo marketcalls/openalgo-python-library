@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ._session_expiry import settles_today
-from ._session_rearm import rearm_daily
+from ._session_rearm import day_orders, rearm_daily
 from ._session_trader import Trader
 from ._stops_gtt import gtt_cancelling, gtt_cover, gtt_waiting, overnight
 from ._types import AlertKind
@@ -91,11 +91,12 @@ class DayEnd:
 
     def _closing(self, trader: Trader) -> bool:
         """Whether `trader`'s carried leg is still closing: a `positional_stops="rearm_daily"`
-        leg with an order working (its day stop's end at the close not answered yet,
-        `_session_rearm`), or a future the exchange settles today whose stop GTT rests or
-        is being cancelled (the kernel cancels it at the close, `_session_expiry`)."""
+        leg with a DAY order working (its day stop's end at the close not answered yet; the
+        strategy's own GTT orders rest overnight, `_session_rearm.day_orders`), or a future
+        the exchange settles today whose stop GTT rests or is being cancelled (the kernel
+        cancels it at the close, `_session_expiry`)."""
         if rearm_daily(trader):
-            return bool(trader.working())
+            return bool(day_orders(trader))
         if settles_today(trader, self._session.parts.spec.day):
             return bool(gtt_cover(trader) or gtt_cancelling(trader) or gtt_waiting(trader))
         return False

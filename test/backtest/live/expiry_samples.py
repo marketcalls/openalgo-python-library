@@ -23,6 +23,8 @@ from session_hooks import trace_sessions
 from session_invariants import assert_session_invariants
 from session_samples import NS, TRADE_EVERY_S, Rig, Script
 
+from openalgo.backtest import _market, _positional_exit, reference
+from openalgo.backtest._live import _session_versions
 from openalgo.backtest.calendar import default_calendar
 from openalgo.backtest.data.fetching import HistoryFetcher
 
@@ -37,6 +39,32 @@ OPTION = "NIFTY17NOV2624000CE"
 #: The index future and its last trading day.
 FUTURE_DAY = dt.date(2026, 11, 23)
 FUTURE = "NIFTY23NOV26FUT"
+#: The stock future of the same last trading day (Tuesday 2026-11-24 is a holiday) and its
+#: lot in the test's own reference rows (`stock_future_tables`).
+STOCK_FUTURE = "SBIN23NOV26FUT"
+STOCK_LOT = 750
+#: The test's reference rows of SBIN's derivatives on NFO, by table: the built-in tables
+#: list index underlyings only, and a stock's are a user file's (the tables' docs).
+_STOCK_ROWS = {
+    "underlyings": (
+        "underlying,exchange,valid_from,valid_to,kind,source,status,note",
+        "SBIN,NFO,2019-01-01,,stock,test row,user,",
+    ),
+    "expiry_rules": (
+        "underlying,exchange,series,valid_from,valid_to,weekday,listed_from,source,status,note",
+        "SBIN,NFO,weekly,2019-01-01,,NONE,,test row,user,",
+        "SBIN,NFO,monthly,2025-09-01,,TUE,,test row,user,",
+    ),
+    "lot_sizes": (
+        "underlying,exchange,valid_from,valid_to,expiry_from,expiry_to,lot_size,source,status,note",
+        f"SBIN,NFO,2025-01-01,,,,{STOCK_LOT},test row,user,",
+    ),
+    "freeze_qty": (
+        "underlying,exchange,valid_from,valid_to,freeze_qty_futures,freeze_qty_options,source,"
+        "status,note",
+        "SBIN,NFO,2025-01-01,,15000,15000,test row,user,",
+    ),
+}
 
 
 def ist(day: dt.date, hour: int, minute: int, second: int = 0) -> int:
@@ -60,6 +88,21 @@ def flat_candles(day: dt.date, until_ns: int) -> list[Candle]:
     return rows
 
 
+def stock_future_tables(monkeypatch: Any, folder: Any) -> None:
+    """From now on the reference tables are the built-in ones with `_STOCK_ROWS` as user
+    files written to `folder`: neither `bt.live` nor `bt.backtest` takes reference tables, so
+    every module that reads the default tables is given these (a stock's derivatives cannot
+    be planned on the built-in rows alone)."""
+    files = {}
+    for table, lines in _STOCK_ROWS.items():
+        path = folder / f"{table}.csv"
+        path.write_text("\n".join(lines) + "\n", encoding="ascii")
+        files[table] = path
+    tables = reference.load_tables(user_files=files)
+    for module in (reference, _market, _positional_exit, _session_versions):
+        monkeypatch.setattr(module, "default_tables", lambda: tables)
+
+
 def expiry_world(
     make_fake_openalgo: Any,
     monkeypatch: Any,
@@ -69,9 +112,10 @@ def expiry_world(
     day: dt.date,
     start: tuple[int, int, int],
     analyzer: bool = False,
+    lot: int = LOT,
 ) -> Rig:
     """A rig on `day` started at the IST time `start`, trading `symbol` (module
-    docstring), in the sandbox when `analyzer`."""
+    docstring), its lot `lot` units, in the sandbox when `analyzer`."""
     at = ist(day, *start)
     monkeypatch.setenv("OPENALGO_BT_CACHE", str(tmp_path / "cache"))
     monkeypatch.setattr(HistoryFetcher, "_wait", lambda fetcher, seconds: None)
@@ -81,7 +125,7 @@ def expiry_world(
     fake.add_instrument(
         symbol,
         "NFO",
-        lot_size=LOT,
+        lot_size=lot,
         tick_size=0.05,
         freeze_qty=1800,
         instrument_type="CE" if option else "FUT",
@@ -97,7 +141,7 @@ def expiry_world(
     world.price = PRICE
 
     def trade() -> None:
-        fake.trade(symbol, "NFO", world.price, volume=LOT)
+        fake.trade(symbol, "NFO", world.price, volume=lot)
 
     trade()
     for instant in range(at + TRADE_EVERY_S * NS, ist(day, 15, 31), TRADE_EVERY_S * NS):
@@ -112,7 +156,10 @@ __all__ = [
     "OPTION",
     "OPTION_DAY",
     "PRICE",
+    "STOCK_FUTURE",
+    "STOCK_LOT",
     "expiry_world",
     "flat_candles",
     "ist",
+    "stock_future_tables",
 ]

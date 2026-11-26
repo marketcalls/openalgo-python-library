@@ -25,8 +25,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ._session_expiry import SETTLES_WORDS, settles_today
-from ._session_rearm import rearm_daily
+from ._session_expiry import settles_today, settles_words
+from ._session_rearm import day_orders, rearm_daily
 from ._session_trader import Trader
 from ._stops_gtt import overnight
 from ._stops_report import left_open, leg_words, protected
@@ -52,7 +52,7 @@ def left_open_lines(session: Any, *, every_leg: bool) -> None:
         bare = settles or _rearm_bare(session, trader)
         note = left_open(session.stops, trader)
         if bare:
-            note = SETTLES_WORDS if settles else REARM_LEFT_OPEN
+            note = settles_words(trader) if settles else REARM_LEFT_OPEN
         line = f"{leg_words(trader, units)}: {note}"
         session.emit(line)
         if not bare and _must_act(session, trader, every_leg=every_leg):
@@ -62,9 +62,10 @@ def left_open_lines(session: Any, *, every_leg: bool) -> None:
 
 
 def _rearm_bare(session: Any, trader: Trader) -> bool:
-    """Whether `trader` is a rearm_daily leg with no stop at the broker and nothing working
-    toward it (module docstring)."""
-    if not rearm_daily(trader) or trader.working():
+    """Whether `trader` is a rearm_daily leg with no stop at the broker and no DAY order
+    working toward it (module docstring; the strategy's own GTT orders rest overnight by
+    design, `_session_rearm.day_orders`)."""
+    if not rearm_daily(trader) or day_orders(trader):
         return False
     return session.stops.covered(trader) == 0 and session.stops.broker_units(trader) is None
 

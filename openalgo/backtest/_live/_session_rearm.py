@@ -21,7 +21,9 @@ the next start, and the user is told so at every start and every close (decision
   no alert.
 - **At every close** (`warn_at_close`, the session's end, a Ctrl+C, an error): one alert
   listing each carried leg with its units and stop level, as without a stop at the broker
-  until the next start, then the sentence; the same lines in `SessionResult.warnings` and
+  until the next start, then the sentence (a future the exchange settles today is left
+  out: it is not carried past its expiry, `_session_expiry`); the same lines in
+  `SessionResult.warnings` and
   in the daily summary. `AlertKind` has no WARN kind, so it goes as a SESSION alert whose
   text begins "WARNING:"; the console prints its lines as the session's warnings.
 
@@ -33,10 +35,12 @@ from __future__ import annotations
 from typing import Any
 
 from .._engine import call
+from .._orders import VALIDITIES
 from ..calendar import default_calendar
 from ._plan_catch_up import INSTRUMENT
 from ._preflight_carry import missed_days
 from ._preflight_gtt import REARM_DAILY, REARM_DAILY_SENTENCE
+from ._session_expiry import settles_today
 from ._stops_gtt import overnight, stop_gtt
 from ._types import AlertKind
 
@@ -59,6 +63,18 @@ def rearm_daily(trader: Any) -> bool:
     """Whether `trader` holds CNC or NRML positions with `positional_stops="rearm_daily"`:
     its leg is carried overnight and its stop is a day stop order."""
     return overnight(trader) and not stop_gtt(trader)
+
+
+def day_orders(trader: Any) -> list[int]:
+    """`trader`'s working kernel orders that end with the day (the kernel's DAY validity):
+    its day stop and its exits among them, which the close ends; the strategy's own
+    `validity="gtt"` orders rest at the broker overnight by design, so they hold up neither
+    the session's end nor make a leg less bare at it."""
+    return [
+        kernel_order
+        for kernel_order in trader.working()
+        if call(trader.engine.order, kernel_order)["validity"] == VALIDITIES["day"]
+    ]
 
 
 def market_closed(trader: Any, now_ns: int) -> bool:
@@ -119,7 +135,12 @@ def warn_at_close(session: Any) -> tuple[str, ...]:
     """The close's alert of the rearm_daily legs carried (module docstring), sent once, and
     its lines kept as the session's warnings; returns those lines for the daily summary,
     none when no such leg is open. Read while the kernel sessions run."""
-    legs = [trader for trader in session.traders if rearm_daily(trader) and trader.open_units()]
+    day = session.parts.spec.day
+    legs = [
+        trader
+        for trader in session.traders
+        if rearm_daily(trader) and trader.open_units() and not settles_today(trader, day)
+    ]
     if not legs:
         return ()
     lines = tuple(f"{leg_line(trader)}: {_at_close_words(session, trader)}" for trader in legs)
@@ -182,6 +203,7 @@ __all__ = [
     "NO_STOP_UNTIL_START",
     "STOP_UNTIL_CLOSE",
     "WARNING_PREFIX",
+    "day_orders",
     "leg_line",
     "market_closed",
     "rearm_daily",

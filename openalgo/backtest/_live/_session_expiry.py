@@ -8,7 +8,9 @@ left to the exchange, which settles it at its expiry: the kernel cancels its sto
 the close of its last trading day, and the next start records its exit at that last close
 (`restore_carried_state`'s "expired"). Such a leg is carried with no stop by design: the
 close's read of the GTT book does not judge it (`settles_today`), and its line at the end
-says the exchange settles it (`SETTLES_WORDS`), with no ERROR alert of a missing stop.
+says the exchange settles it (`settles_words`: a stop GTT cancelled, or under
+`positional_stops="rearm_daily"` no stop needed from the close), with no ERROR alert of a
+missing stop and no place in the close's WARNING of rearm_daily legs left without a stop.
 
 Days are IST dates. Used by the loop only.
 """
@@ -19,13 +21,24 @@ from typing import Any
 
 from .._positional_exit import PHYSICAL
 from ._plan_catch_up import INSTRUMENT
-from ._stops_gtt import overnight
+from ._stops_gtt import overnight, stop_gtt
 
-#: The line of a leg the exchange settles today (module docstring).
+#: The line of a leg the exchange settles today (module docstring), its stop a GTT.
 SETTLES_WORDS = (
     "the exchange settles it at its expiry today, so its stop GTT was cancelled at the "
     "close; the next start records its exit at today's last close"
 )
+#: The same, for a leg whose stop is a day stop (`positional_stops="rearm_daily"`), which
+#: the close ends as any day's: no GTT was ever placed.
+SETTLES_DAY_STOP_WORDS = (
+    "the exchange settles it at its expiry today, so it needs no stop from the close; the "
+    "next start records its exit at today's last close"
+)
+
+
+def settles_words(trader: Any) -> str:
+    """The line of `trader`'s leg the exchange settles today, by how its stop is held."""
+    return SETTLES_WORDS if stop_gtt(trader) else SETTLES_DAY_STOP_WORDS
 
 
 def settles_today(trader: Any, day: Any) -> bool:
@@ -38,4 +51,4 @@ def settles_today(trader: Any, day: Any) -> bool:
     return instrument.kind == "future" and instrument.settlement != PHYSICAL and last == day
 
 
-__all__ = ["SETTLES_WORDS", "settles_today"]
+__all__ = ["SETTLES_DAY_STOP_WORDS", "SETTLES_WORDS", "settles_today", "settles_words"]

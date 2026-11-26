@@ -4,8 +4,9 @@
 The market is `session_samples`': SBIN on NSE, the live day Monday 2026-11-16. The broker
 serves 1-minute candles of the four sessions before it (Monday 2026-11-09 to Friday
 2026-11-13, a week whose Tuesday is a holiday; `plan_samples.candles`' seeded walk from
-500.00) and its daily candles made from them (`fake_openalgo.routes_data`). The session
-starts before the open, at 09:05 IST, unless a test says otherwise; SBIN trades 10 units
+500.00) and its daily candles made from them (`fake_openalgo.routes_data`), unless a test
+names another day or other sessions. The session starts before the open, at 09:05 IST,
+unless a test says otherwise; SBIN trades 10 units
 every 10 s from the open at `PRICE` until 15:02. The strategies record each bar `on_bar`
 is given, so a test reads what was decided. Expected values come from the candles and
 the calendar, never from the session's code.
@@ -16,7 +17,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from plan_samples import candles
+from plan_samples import DAY, candles
 from session_samples import ist, rig
 
 import openalgo.backtest as bt
@@ -94,19 +95,28 @@ def daily_world(
     *,
     start: tuple[int, int, int] = START,
     analyzer: bool = False,
+    day: dt.date = DAY,
+    sessions: tuple[dt.date, ...] = SESSIONS,
 ) -> Any:
-    """A rig started at the IST time `start` (module docstring), in the sandbox when
-    `analyzer`; each strategy's record cleared."""
+    """A rig started at the IST time `start` of `day` (module docstring), the broker serving
+    the 1-minute candles of `sessions` only (and the daily candles made from them), in the
+    sandbox when `analyzer`; each strategy's record cleared."""
     for strategy in (Recorded, WeeklyRecorded):
         strategy.decided.clear()
     world = rig(
-        make_fake_openalgo, monkeypatch, tmp_path, start=start, trades_until=None, analyzer=analyzer
+        make_fake_openalgo,
+        monkeypatch,
+        tmp_path,
+        start=start,
+        trades_until=None,
+        analyzer=analyzer,
+        day=day,
+        rows=candles(sessions, today_until=None),
     )
-    world.fake.seed_candles("SBIN", "NSE", candles(SESSIONS, today_until=None))
     world.script.price = lambda now_ns: PRICE
     world.script.trade()
-    first = max(OPEN, ist(*start) + 10 * 10**9)
-    world.script.trades(first, ist(15, 2))
+    first = max(open_of(day), ist(*start, day=day) + 10 * 10**9)
+    world.script.trades(first, ist(15, 2, day=day))
     return world
 
 

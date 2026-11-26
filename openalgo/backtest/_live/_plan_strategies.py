@@ -186,8 +186,10 @@ def refuse_no_tender(
     whose tender period the reference table `mcx_contracts` does not give
     (20-positional-live 9; the lead's ruling N5b-3): the session cannot tell the day to exit
     the position before MCX marks it for delivery, where a backtest settles it at expiry
-    with a warning. The message names the contract and the table, and how to supply the
-    figure. An MIS strategy on it is squared off each day and runs."""
+    with a warning. The message names the contract and the table, and what runs instead: no
+    run takes reference tables of the user's yet (the exit day is read from the built-in
+    ones), so it cannot point to a user file. An MIS strategy on it is squared off each day
+    and runs."""
     if product not in OVERNIGHT_PRODUCTS:
         return
     for instrument, day in zip(
@@ -199,9 +201,8 @@ def refuse_no_tender(
                 f"{name}: {instrument.symbol} is settled by delivery, and the reference "
                 "table mcx_contracts gives no tender period for it, so a live session cannot "
                 "tell the day to exit a CNC or NRML position on it before MCX marks it for "
-                "delivery. Give its tender_days (the trading days of the tender period, the "
-                "expiry day included) in a user file of the mcx_contracts table, trade it in "
-                "MIS, or trade a contract the table gives a tender period for"
+                "delivery. Trade it in MIS, or trade a contract the table gives a tender "
+                "period for"
             )
 
 

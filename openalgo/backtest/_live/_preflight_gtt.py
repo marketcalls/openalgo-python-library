@@ -14,7 +14,9 @@ at every start, never from a list kept in the SDK (OpenAlgo adds GTT to more bro
   (`REARM_DAILY_SENTENCE`); unless the run chose `rearm_daily` already, which holds each
   carried position's stop as a day order placed at each start. Any other answer refuses
   the start: it cannot tell, and says so with the server's message
-  (`_preflight_answers.answer_reason`).
+  (`_preflight_answers.answer_reason`); with `rearm_daily` too, since the session still
+  reads the GTT book for every CNC and NRML leg (`SessionSpec.gtt_legs`), a strategy's own
+  `validity="gtt"` orders among them, and the words say so.
 - **SANDBOX mode**: no call. OpenAlgo answers every GTT call from the sandbox before it
   looks at the broker, so it would succeed for any broker; the check passes with the
   banner line `SANDBOX_GTT_LINE`.
@@ -85,12 +87,18 @@ def gtt_check(client: GttBookClient, *, mode: Mode, broker: str, positional_stop
         return _supported(broker, rearm=rearm)
     if _not_supported(answer):
         return _unsupported(broker, answer_reason(answer), rearm=rearm)
+    why = (
+        f'With positional_stops="{REARM_DAILY}" no stop is a GTT, but the session reads the '
+        "GTT book for its CNC and NRML positions and the strategies' own GTT orders"
+        if rearm
+        else "A CNC or NRML position needs a GTT to keep its stop at the broker overnight"
+    )
     return Check(
         GTT_CHECK,
         False,
         f"the start cannot tell whether {broker} holds GTT orders: OpenAlgo's GTT book "
-        f"answered {answer_reason(answer)}. A CNC or NRML position needs a GTT to keep its "
-        "stop at the broker overnight: check OpenAlgo and the broker's login, then start again",
+        f"answered {answer_reason(answer)}. {why}: check OpenAlgo and the broker's login, "
+        "then start again",
     )
 
 

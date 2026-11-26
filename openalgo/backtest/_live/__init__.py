@@ -72,7 +72,8 @@ takes back); the end of the day is
 `positional_stops="rearm_daily"` (20-positional-live 6; unit N5b) is `_session_rearm`'s (its
 warnings at every start and close), a future the exchange settles on the session's day
 `_session_expiry`'s, and a daily or longer strategy's bars and pre-open decision
-(20-positional-live 8) `_plan_daily`'s and `_session_pre_open`'s. OpenAlgo's product names
+(20-positional-live 8) `_plan_daily`'s and `_session_pre_open`'s, the bar due at a start
+`_pre_open_due`'s. OpenAlgo's product names
 are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module

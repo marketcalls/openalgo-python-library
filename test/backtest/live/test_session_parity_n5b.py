@@ -167,3 +167,43 @@ def test_a_daily_strategy_buys_what_the_backtest_of_its_daily_candles_buys(
     opened = pd.Timestamp(ist(9, 15), tz="UTC").tz_convert(IST)
     assert list(backtest.fills["time"]) == [opened]
     assert [t.floor("min") for t in live["time"]] == [opened]
+
+
+#: The rupees `SizedDaily` buys for.
+VALUE = 20_000
+
+
+class SizedDaily(Recorded):
+    """Recorded sized by value: it buys `VALUE` rupees of SBIN (`bt.size.value`)."""
+
+    decided: list[tuple[int, int, int]] = []
+
+    def on_bar(self, bar):
+        type(self).decided.append((bar.ts_open, bar.ts_close, len(self.close)))
+        if not self.position.qty and not self.orders:
+            self.buy(size=bt.size.value(VALUE))
+
+
+def test_a_daily_strategy_sized_by_value_buys_the_units_its_backtest_buys(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # Both size at the close of the bar they decide, Friday's daily candle: whole shares
+    # of 20,000 rupees at that close, worked out by hand from the candle.
+    SizedDaily.decided.clear()
+    world = daily_world(make_fake_openalgo, monkeypatch, tmp_path)
+    world.stop_at(ist(9, 30))
+    outcome = world.run(SizedDaily)
+
+    backtest = bt.backtest(
+        SizedDaily,
+        data=daily_frame((500.0, 500.0, 500.0, 500.0)),
+        capital=CAPITAL,
+        max_daily_loss=MAX_DAILY_LOSS,
+        start=dt.date(2026, 11, 13),
+        end=DAY,
+    )
+
+    units = int(VALUE // daily_candle(dt.date(2026, 11, 13))[3])
+    live = session_result(outcome).results["SizedDaily"].fills
+    columns = ("side", "quantity_units")
+    assert rows(live, *columns) == rows(backtest.fills, *columns) == [("BUY", units)]

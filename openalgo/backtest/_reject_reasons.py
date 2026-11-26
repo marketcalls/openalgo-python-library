@@ -208,8 +208,9 @@ REASONS = MappingProxyType(
             "option, or of the trading day before an MCX delivery contract's tender period, "
             "and every later day), when the engine exits every position on it before the "
             "exchange settles it; exits are never refused by it",
-            "this is the expiry rule working: trade the next contract from then on, as a "
-            "futures strategy with roll= does",
+            "this is the expiry rule working, the contract being in its last trading minutes "
+            "or past them: trade the next contract by naming it as the strategy's symbol (in "
+            "a backtest, a futures strategy with roll= moves to it for you)",
         ),
         "order_value_limit": (
             "an entry or add was worth more than max_order_value (its units times its "
