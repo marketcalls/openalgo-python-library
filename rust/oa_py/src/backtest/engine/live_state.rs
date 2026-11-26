@@ -18,8 +18,10 @@
 //!   has ended. An order's "sent" is False only for a strategy exit that waits for the
 //!   cancellation of the orders on its position's closing side: nothing of it is at the
 //!   broker, so the restart's order check (16-session-design 3.6) skips it.
-//! - `restore_live_state(state)`: give a saved state to a session built for a restart,
-//!   once, after its catch-up and before any order. Returns `{saved id: new id}` for
+//! - `restore_live_state(state, now=None)`: give a saved state to a session built for a
+//!   restart, once, after its catch-up and before any order; `now` is the present (UTC
+//!   nanoseconds), by which a pre-open decision's orders waiting for the open go at once,
+//!   flagged `late_decision`, once the open has passed. Returns `{saved id: new id}` for
 //!   every restored working order (the saved orders are numbered from o1 again). The live
 //!   layer rebuilds its venue map from these pairs alone: later orders take the next ids,
 //!   which the earlier start may have given to orders that have ended since. The saved
@@ -218,7 +220,8 @@ pub(super) fn live_state(py: Python<'_>, engine: &Engine) -> PyResult<PyObject> 
     to_python(py, &engine.live_state())
 }
 
-/// Restore `state` into `engine`; `{saved id: new id}` of the restored working orders.
+/// Restore `state` into `engine` at the present `now_ns` (UTC nanoseconds) when given;
+/// `{saved id: new id}` of the restored working orders.
 ///
 /// Errors: `NativeEngineInputError` for a value that is not plain data and for a state
 /// refused for what it is; `NativeEngineError` for a session that cannot take one now.
@@ -226,9 +229,14 @@ pub(super) fn restore_live_state<'py>(
     py: Python<'py>,
     engine: &mut Engine,
     state: &Bound<'py, PyAny>,
+    now_ns: Option<i64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let state = from_python(state, "live_state", 0)?;
-    let pairs = engine.restore_live_state(&state).map_err(engine_error)?;
+    let restored = match now_ns {
+        Some(now_ns) => engine.restore_live_state_at(&state, now_ns),
+        None => engine.restore_live_state(&state),
+    };
+    let pairs = restored.map_err(engine_error)?;
     let ids = PyDict::new_bound(py);
     for (saved, new) in pairs {
         ids.set_item(saved.0, new.0)?;

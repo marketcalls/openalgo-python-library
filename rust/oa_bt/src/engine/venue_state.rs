@@ -43,9 +43,11 @@
 //!   order's `sent` is false for a strategy exit that waits for its cancels: nothing of it
 //!   can be at the venue, and the check has no intent to look for.
 //! - **A pre-open decision's orders** that wait for the open go as the restored session
-//!   reaches it; restored after the open (the session stands past its first slice), they
-//!   go at once and are late, as a start after the open sends its decision's: their fills
-//!   are flagged `late_decision` (`pre_open`).
+//!   reaches it; restored after the open (the session stands past its first slice, or
+//!   `restore_live_state_at`'s present is at or after the open), they go at once and are
+//!   late, as a start after the open sends its decision's (`pre_open_decision` tells a
+//!   late start by its slice and its present alike): their fills are flagged
+//!   `late_decision` (`pre_open`).
 //! - **Controls.** The entry locks are not restored: the session keeps those set before
 //!   the restore (the live layer's "starting"), and the saved ones stay readable in the
 //!   state (`desk.entry_locks`) for the live layer to set again those that last the day
@@ -97,6 +99,7 @@ pub use value::StateValue;
 
 use crate::charges::OrderCharges;
 use crate::exec::{FillFlags, GttBook, InstrumentId, OrderId};
+use crate::model::TsNanos;
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
@@ -222,12 +225,37 @@ impl Engine {
         &mut self,
         state: &StateValue,
     ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
+        self.restore_live(state, None)
+    }
+
+    /// `restore_live_state` at `now_ns`, the present (UTC nanoseconds): a restore at or
+    /// after the session's open, even before the catch-up has released a slice of it,
+    /// sends a pre-open decision's waiting orders at once, flagged `late_decision`, as
+    /// `pre_open_decision` decides a start at that present late (module docs).
+    ///
+    /// Errors: those of `restore_live_state`.
+    pub fn restore_live_state_at(
+        &mut self,
+        state: &StateValue,
+        now_ns: TsNanos,
+    ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
+        self.restore_live(state, Some(now_ns))
+    }
+
+    /// `restore_live_state`, at the present `now_ns` when it is known.
+    fn restore_live(
+        &mut self,
+        state: &StateValue,
+        now_ns: Option<TsNanos>,
+    ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
         if !self.is_external() {
             return Err(VenueError::NotExternal.into());
         }
         self.check_restorable()?;
         let saved = self.read_saved(&Read::root(state))?;
-        self.apply_saved(saved)
+        let pairs = self.apply_saved(saved)?;
+        self.late_after_open(now_ns);
+        Ok(pairs)
     }
 
     /// Read the whole state (module docs), applying nothing.
@@ -347,16 +375,22 @@ impl Engine {
             self.charges.resume_trade(trade.key);
         }
         self.record.trades.open = saved.open_trades;
-        self.late_after_open();
         Ok(saved.ids.pairs)
     }
 
     /// A restored pre-open decision's orders that wait for the open, in a session restored
-    /// after its open (it stands past its first slice): they go at once, late, as a start
-    /// after the open sends its decision's (`pre_open`), so their fills are flagged
-    /// `late_decision`.
-    fn late_after_open(&mut self) {
-        if self.standing().0 == 0 {
+    /// after its open: it stands past its first slice, or the present `now_ns` (UTC
+    /// nanoseconds, when known) is at or after the open of the session it stands in. They
+    /// go at once, late, as a start after the open sends its decision's (`pre_open`), so
+    /// their fills are flagged `late_decision`.
+    fn late_after_open(&mut self, now_ns: Option<TsNanos>) {
+        let index = self.standing().0;
+        let open = self
+            .timeline
+            .slice(index)
+            .and_then(|slice| self.session_open_of(&slice).ok());
+        let opened = now_ns.is_some_and(|now| open.is_some_and(|open| now >= open));
+        if index == 0 && !opened {
             return;
         }
         let late = self.venue.pre_open.at_open.iter();

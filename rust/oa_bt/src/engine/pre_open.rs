@@ -170,7 +170,7 @@ impl Engine {
     /// The open of `slice`'s session on the calendar, UTC nanoseconds.
     ///
     /// Errors: `InvalidConfig` when the exchange has no session that day.
-    fn session_open_of(&self, slice: &SliceInfo) -> Result<TsNanos, KernelError> {
+    pub(super) fn session_open_of(&self, slice: &SliceInfo) -> Result<TsNanos, KernelError> {
         let exchange = self.timeline.exchange();
         self.calendar
             .session(exchange, slice.day)

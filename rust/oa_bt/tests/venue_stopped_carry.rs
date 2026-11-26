@@ -167,8 +167,8 @@ fn stopped_and_carried(mut kernel: Engine) -> StateValue {
     kernel.carried_state().expect("a stopped session carries")
 }
 
-/// A session of day 1 built for `instrument` given `saved` for day 2 with `unsent`; the
-/// session, its (saved id, new id) pairs asserted to be `orders`.
+/// A session of day 1 built for `instrument` given `saved`, carried to day 2, with
+/// `unsent`: the session, standing where the save stood.
 fn rebuilt(instrument: InstrumentSpec, saved: &StateValue, unsent: &[GttId]) -> Engine {
     let mut kernel = session_on(day_1(), instrument);
     kernel
@@ -363,18 +363,18 @@ fn a_leg_carried_without_a_stop_gtt_gets_one_from_protect_the_next_day() {
         .apply_fill(ENTRY, UNITS, 500.1, minute_on(day_1(), 1) + 5 * SECOND)
         .expect("the fill after the save");
     let carried = stopped_and_carried(session);
-    let mut tuesday = session_on(day_2(), sbin());
-    let ids = tuesday
+    let mut wednesday = session_on(day_2(), sbin());
+    let ids = wednesday
         .restore_carried_state(&carried)
         .expect("day 2 takes it");
     assert!(ids.gtts.is_empty());
-    assert!(tuesday
+    assert!(wednesday
         .push_tick(SBIN, 500.1, minute_on(day_2(), 0) - 60 * SECOND)
         .is_ok());
 
-    assert_eq!(tuesday.protect(SBIN, Product::Cnc), Ok(Protect::Placed));
+    assert_eq!(wednesday.protect(SBIN, Product::Cnc), Ok(Protect::Placed));
 
-    let placed = tuesday.take_commands();
+    let placed = wednesday.take_commands();
     assert!(
         matches!(placed[..], [VenueCommand::PlaceGtt { terms, .. }]
             if terms.trigger_rupees == 496.1 && terms.units == UNITS),

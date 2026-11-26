@@ -274,3 +274,24 @@ def test_a_decision_after_the_open_is_sent_at_once_flagged_late_decision():
     (entry,) = places(engine)
     assert entry["flags"] == ["late_decision"]
     assert engine.order_flags(ENTRY) == ["late_decision"]
+
+
+def test_a_restart_in_the_opens_first_minute_sends_the_waiting_decision_flagged_late():
+    # Saved before the open with its buy waiting; the restart comes at 09:15:30, before its
+    # catch-up has released the 09:15 slice. A start at 09:15:30 would decide late, so the
+    # restored buy goes at the first tick flagged late_decision (the lead's ruling N5c-4 (j)).
+    engine = session(WEDNESDAY, interval="D")
+    before_open = open_ns(WEDNESDAY) - 30 * MINUTE_NS
+    engine.pre_open_decision([daily_bar(TUESDAY, 500.0)], None, before_open)
+    assert engine.submit(order("BUY", 10.0, "CNC", {}))[:2] == ("submitted", ENTRY)
+    assert engine.advance()[0] == "waiting"
+    saved = json.loads(json.dumps(engine.live_state()))
+    restarted = session(WEDNESDAY, interval="D")
+    assert restarted.advance()[0] == "waiting"
+
+    restarted.restore_live_state(saved, now=at(0, WEDNESDAY, 30))
+
+    restarted.push_tick(0, 501.0, at(0, WEDNESDAY, 31))
+    (entry,) = places(restarted)
+    assert (entry["order_id"], entry["flags"]) == (ENTRY, ["late_decision"])
+    assert restarted.order_flags(ENTRY) == ["late_decision"]

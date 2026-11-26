@@ -216,14 +216,17 @@ impl NativeEngine {
         live_state::live_state(py, self.engine()?)
     }
 
-    /// Restore a saved state into a session built for a restart; `{saved id: new id}` of
-    /// the restored working orders (`live_state`).
+    /// Restore a saved state into a session built for a restart, at the present `now`
+    /// (UTC nanoseconds) when given; `{saved id: new id}` of the restored working orders
+    /// (`live_state`).
+    #[pyo3(signature = (state, now=None))]
     fn restore_live_state<'py>(
         &mut self,
         py: Python<'py>,
         state: &Bound<'py, PyAny>,
+        now: Option<i64>,
     ) -> PyResult<Dict<'py>> {
-        live_state::restore_live_state(py, self.engine_mut()?, state)
+        live_state::restore_live_state(py, self.engine_mut()?, state, now)
     }
 
     /// A live session's state carried to the next trading day, once its session has closed
