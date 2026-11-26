@@ -22,7 +22,10 @@ reference bars, as a backtest does before it loads data (`_warm_up_probe`): that
 also the strategy layer's causality and window-stability check, and the one that finds
 a condition strategy, since conditions are declared in `init`. Its version, the id of its
 code and parameters every order carries, is read then too (`_version_id`; 18-multi-strategy
-12.1).
+12.1). A strategy that names a contract whose expiry is before today is refused with the
+reference tables' ConfigError and one sentence more (`_instruments_today`): a position
+carried on it was settled by the exchange, and a start on the contract traded now records
+the settlement (`_carry_contracts`; the lead's ruling 2 of review round 4 of unit N5a).
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from .._warm_up_probe import ProbeContext, history_needs, probe_setup
 from ..calendar import Calendar
 from ..errors import ConfigError
 from ..reference import Instrument
+from ..reference.symbols import SymbolError, parse_symbol
 from ..report._format import indian_digits
 from ..strategy import Strategy
 from ._plan_daily import decides_before_open
@@ -61,6 +65,12 @@ from .series import DEFAULT_BASE
 CONDITIONS = "entry_when, exit_when, short_when, cover_when"
 #: The currency derivatives exchanges, backtest-only in 2.4.1 (`refuse_currency`).
 CURRENCY_EXCHANGES = ("CDS", "BCD")
+#: The sentence the refusal of a strategy naming an expired contract ends with
+#: (`_instruments_today`), true whether or not a position is carried on it.
+EXPIRED_CONTRACT_SETTLED = (
+    "If a strategy held a position on it from an earlier day, the exchange has settled it: "
+    "start the strategy on the contract traded now, and the start records the settlement"
+)
 
 
 @dataclass(frozen=True)
@@ -261,7 +271,7 @@ def strategy_spec(
     plan = resolve(strategy, dict(arguments))
     limit = _live_daily_loss_limit(name, plan.risk["max_daily_loss"], arguments)
     refuse_daily_mis(name, plan)
-    instruments, _, _ = resolve_instruments(plan, None, calendar)
+    instruments = _instruments_today(plan, calendar)
     refuse_no_tender(name, plan.product, instruments, calendar)
     check_margin(instruments, plan.product, (plan.start, plan.end))
     needs, measured = probe(strategy, plan, instruments, arguments["params"])
@@ -280,6 +290,32 @@ def strategy_spec(
         measured=measured,
         version=version_of(strategy, arguments["params"]),
     )
+
+
+def _instruments_today(plan: RunPlan, calendar: Calendar) -> list[Instrument]:
+    """The instruments of `plan` on its day (`resolve_instruments`). Raises what that
+    raises; a ConfigError while the plan names a contract whose expiry is before its day
+    ends with `EXPIRED_CONTRACT_SETTLED` (module docstring)."""
+    try:
+        instruments, _, _ = resolve_instruments(plan, None, calendar)
+    except ConfigError as error:
+        if not _names_expired(plan):
+            raise
+        raise ConfigError(f"{error}. {EXPIRED_CONTRACT_SETTLED}") from error
+    return instruments
+
+
+def _names_expired(plan: RunPlan) -> bool:
+    """Whether a symbol of `plan` is a contract whose expiry (as its symbol writes it) is
+    before the plan's day; a symbol that does not parse names none."""
+    for symbol in plan.symbols:
+        try:
+            expiry = parse_symbol(symbol, plan.exchange).expiry
+        except SymbolError:
+            continue
+        if expiry is not None and expiry < plan.start:
+            return True
+    return False
 
 
 def ist_day(present_ns: int) -> dt.date:

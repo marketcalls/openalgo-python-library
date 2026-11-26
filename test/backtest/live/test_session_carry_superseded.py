@@ -82,6 +82,23 @@ def set_aside(name, record_day, saved_day, today):
     )
 
 
+def refusal_binding(trigger_id, *, record_day):
+    """The refusal of `CncKept` whose session of Tuesday crashed before its close holding 10
+    SBIN CNC and Monday's stop GTT `trigger_id`, which its outdated day-close record of
+    `record_day` binds (the lead's ruling 1 of review round 4 of unit N5a), worked by hand."""
+    return (
+        f"CncKept: its session of {DAY2} stopped without its day-close record (the process "
+        "ended before the close) while holding a position, an order or a GTT, which this version "
+        "continues only by a restart of bt.live that same day, before the close; its stop GTT "
+        f"{trigger_id} of {DAY1} on NSE:SBIN (CNC) has not ended: its day-close record of "
+        f"{record_day} binds it, and a later session of {DAY2} outdates that record: "
+        f"{CHECK_BY_HAND}. The books show 10 SBIN NSE (CNC) held: if any of them are units of "
+        "your own, the start cannot tell them from the strategy's and never finds the leg "
+        "closed, so once the strategy's units are sold and its GTTs cancelled, start it under "
+        "another account name (account=)"
+    )
+
+
 def flat_record(world, name):
     """(the day of `name`'s latest day-close record, the units of its open positions)."""
     with journal_of(world) as journal:
@@ -174,16 +191,7 @@ def test_a_crash_on_a_continued_day_settled_by_hand_starts_flat_on_every_later_d
     with pytest.raises(PreflightError) as refused:
         world.run(CncKept)
 
-    assert refused.value.failures == (
-        f"CncKept: its session of {DAY2} stopped without its day-close record (the process "
-        "ended before the close) while holding a position, an order or a GTT, which this version "
-        f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
-        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}. "
-        "The books show 10 SBIN NSE (CNC) held: if any of them are units of your own, the "
-        "start cannot tell them from the strategy's and never finds the leg closed, so once "
-        "the strategy's units are sold and its GTTs cancelled, start it under another "
-        "account name (account=)",
-    )
+    assert refused.value.failures == (refusal_binding(trigger_id, record_day=DAY1),)
     client = world.fake.client()
     client.cancelgttorder(trigger_id=trigger_id)
     client.placeorder(
@@ -284,3 +292,31 @@ def test_a_restart_the_day_a_record_was_set_aside_names_the_position_it_resumes(
     ) in lines
     assert calls(world, *SENDS)[sent:] == []
     assert not alerts(caplog, "error")
+
+
+@MODES
+def test_a_restart_that_crashed_after_a_kept_ctrl_c_is_refused_naming_the_record_of_its_gtt(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # Tuesday continues Monday's carry and is stopped at 14:46, keeping the leg: Tuesday's
+    # record binds Monday's stop GTT. A restart that day crashes at 14:50 with nothing
+    # changed, so its save outdates that record: Wednesday's start is refused, naming the
+    # record that binds the GTT and the restart that would have continued it.
+    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, CncKept, analyzer=analyzer)
+    world.trace.waive("protected", "the session crashed: its windows end with it")
+    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
+    next_start(world, DAY2)
+    assert world.run(CncKept).stopped_by == "ctrl_c"
+    assert flat_record(world, "CncKept") == (DAY2, [10.0])
+    crashing(monkeypatch)
+    world.stop, world.feed = StopFlag(), None
+    crash_at(world, on(DAY2, 14, 50))
+    run_to_crash(world, CncKept)
+    sent = len(calls(world, *SENDS))
+    next_start(world, DAY3)
+
+    with pytest.raises(PreflightError) as refused:
+        world.run(CncKept)
+
+    assert refused.value.failures == (refusal_binding(trigger_id, record_day=DAY2),)
+    assert calls(world, *SENDS)[sent:] == []

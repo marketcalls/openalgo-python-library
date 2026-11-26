@@ -126,7 +126,8 @@ def test_a_crash_before_the_close_record_refuses_the_next_start_while_the_leg_is
     assert refused.value.failures == (
         f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
         "ended before the close) while holding a position, an order or a GTT, which this version "
-        f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
+        "continues only by a restart of bt.live that same day, before the close; "
+        f"its stop GTT {trigger_id} of {DAY1} on "
         f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
         f"{own_units_words(10)}",
     )
@@ -169,7 +170,8 @@ def test_a_crash_settled_by_hand_beside_the_users_own_units_is_refused_naming_th
     assert refused.value.failures == (
         f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
         "ended before the close) while holding a position, an order or a GTT, which this version "
-        f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
+        "continues only by a restart of bt.live that same day, before the close; "
+        f"its stop GTT {trigger_id} of {DAY1} on "
         f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
         f"{own_units_words(50)}",
     )
@@ -269,7 +271,8 @@ def test_a_crash_with_a_cnc_entry_working_refuses_the_next_start_once_it_filled(
     assert refused.value.failures == (
         f"CncLimitEntry: its session of {DAY1} stopped without its day-close record (the "
         "process ended before the close) while holding a position, an order or a GTT, which this "
-        f"version continues only from a day-close record: {CHECK_BY_HAND}"
+        "version continues only by a restart of bt.live that same day, before the close: "
+        f"{CHECK_BY_HAND}"
         f"{own_units_words(10)}",
     )
     assert calls(world, *SENDS)[sent:] == []

@@ -12,9 +12,11 @@ review round 1 of unit N5a). Split from `_carry_open` so each module keeps one j
   last save holds (20-positional-live 1). A strategy whose outdated record is set aside
   with nothing of the later session left to judge starts flat, the banner saying so
   (`set_aside`), and its close writes its record of the day.
-- **A loose GTT**: a GTT of the journal from an earlier day that has not ended and that no
-  carried record binds (one a session placed and never recorded at a close). Started
-  afresh beside it, the strategy would trade beside a GTT no engine follows.
+- **A loose GTT**: a GTT of the journal from an earlier day that has not ended and that
+  neither the strategy's continued record nor its set-aside one binds (one a session placed
+  and never recorded at a close). Started afresh beside it, the strategy would trade beside
+  a GTT no engine follows. A GTT the set-aside record binds is named with that record, so
+  the refusal never says that no record carries it (review round 4 of unit N5a).
 
 Such a strategy is judged against the broker's books, read once for every such strategy of
 the start (`BookReads`: the position book, the holdings when a CNC leg is judged, the
@@ -41,9 +43,10 @@ carry of earlier days never reads (review round 3 of unit N5a).
 Continuing such a leg from the last save of its day, with the journal's updates newer than
 it (the lead's ruling N5a-1 (5)), needs the engine's state of a day carried to a later
 day's session from a mid-session save, which the kernel gives only from a closed session
-(`carried_state`): not built in this release. So a crash before the close record, on the
-day a position was entered or on a later day that continued it, refuses the next start
-of a later day while the leg may be held; a restart the same day, before the close,
+(`carried_state`): not built in this release (the lead accepted the departure in review
+round 4; unit N5c builds it). So a crash before the close record, on the day a position was
+entered or on a later day that continued it, refuses the next start of a later day while
+the leg may be held, and the refusal says so; a restart the same day, before the close,
 resumes the leg from that save (16-session-design 3.6) and its close writes the record.
 
 Days are IST trading days, quantities signed whole units. Run by the main thread at the
@@ -62,6 +65,7 @@ from ._answers import server_answer
 from ._carry_start import CarryAtStart, gtt_seqs
 from ._gtt_book import Seen, gtt_rows, seen_of
 from ._gtt_reads import ALL_GTTS
+from ._journal_carry import DayClose
 from ._journal_gtt_rows import GttBinding, GttState
 from ._reconcile_rules import LegBooks, leg_books
 from ._types import Purpose
@@ -89,13 +93,15 @@ class Unrecorded:
     (module docstring): `save_day`, the day of its unrecorded save (None for none),
     `legs`, the legs its save and its GTTs are on, `gtts`, the journal's GTTs of earlier
     days of it that have not ended (every one with an unrecorded save, else the loose
-    ones), and `loose`, those of them no carried record binds."""
+    ones), `loose`, those of them no record binds, and `record_day`, the day of the
+    set-aside record that binds the others (None for none)."""
 
     name: str
     save_day: dt.date | None
     legs: frozenset[Leg]
     gtts: tuple[GttBinding, ...]
     loose: tuple[GttBinding, ...]
+    record_day: dt.date | None = None
 
     def words(self) -> str:
         """What it holds, in a refusal's words."""
@@ -104,9 +110,18 @@ class Unrecorded:
             held.append(
                 f"its session of {self.save_day} stopped without its day-close record (the "
                 "process ended before the close) while holding a position, an order or a GTT, "
-                "which this version continues only from a day-close record"
+                "which this version continues only by a restart of bt.live that same day, "
+                "before the close"
             )
-        held += [_gtt_words(gtt) for gtt in self.loose]
+        loose = {gtt.seq for gtt in self.loose}
+        for gtt in self.gtts:
+            if gtt.seq in loose:
+                held.append(f"{_gtt_words(gtt)} and no day-close record carries it")
+            else:
+                held.append(
+                    f"{_gtt_words(gtt)}: its day-close record of {self.record_day} binds it, "
+                    f"and a later session of {self.save_day} outdates that record"
+                )
         return f"{self.name}: {'; '.join(held)}"
 
     def settled(self, today: dt.date) -> str:
@@ -154,17 +169,27 @@ def unrecorded(
     for name in names:
         if name in resumed:
             continue
-        carried = carry.of(name)
+        record = _binding_record(journal, carry, name)
         save_day, legs = _save(journal, name, day)
-        bound = set() if carried is None else set(gtt_seqs(carried.record).values())
+        bound = set() if record is None else set(gtt_seqs(record).values())
         own = tuple(gtt for gtt in open_gtts if gtt.strategy == name)
         loose = tuple(gtt for gtt in own if gtt.seq not in bound)
         if save_day is None and not loose:
             continue
         gtts = own if save_day is not None else loose
         legs |= {(gtt.symbol, gtt.exchange, gtt.product) for gtt in gtts}
-        found.append(Unrecorded(name, save_day, frozenset(legs), gtts, loose))
+        record_day = None if record is None else record.day
+        found.append(Unrecorded(name, save_day, frozenset(legs), gtts, loose, record_day))
     return found
+
+
+def _binding_record(journal: Journal, carry: CarryAtStart, name: str) -> DayClose | None:
+    """Strategy `name`'s day-close record whose GTT bindings count (module docstring): the
+    record the start continues, else the one a later save set aside, else None."""
+    carried = carry.of(name)
+    if carried is not None:
+        return carried.record
+    return journal.day_close(name) if name in carry.superseded else None
 
 
 def read_books(client: Any, held: Iterable[Unrecorded]) -> BookReads:
@@ -324,13 +349,11 @@ def _answer(client: Any, name: str, **fields: Any) -> Mapping[str, Any] | None:
 
 
 def _gtt_words(gtt: GttBinding) -> str:
-    """A GTT of an earlier day that has not ended and that no record carries."""
+    """A GTT of an earlier day that has not ended, in a refusal's words."""
     kind = "stop GTT" if gtt.purpose is Purpose.STOP else "GTT order"
     name = gtt.trigger_id or f"g{gtt.gtt_id} (its place was not answered)"
-    return (
-        f"its {kind} {name} of {gtt.day} on {gtt.exchange}:{gtt.symbol} ({gtt.product}) has "
-        "not ended and no day-close record carries it"
-    )
+    leg = f"{gtt.exchange}:{gtt.symbol} ({gtt.product})"
+    return f"its {kind} {name} of {gtt.day} on {leg} has not ended"
 
 
 __all__ = [
