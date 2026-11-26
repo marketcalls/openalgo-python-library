@@ -144,13 +144,17 @@ def own_units_words(units):
     )
 
 
+@MODES
+@BOOKS
 def test_a_crash_settled_by_hand_beside_the_users_own_units_is_refused_naming_them(
-    make_fake_openalgo, monkeypatch, tmp_path
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer, history
 ):
     # The operator cancels the stop GTT and sells the strategy's 10 units by hand; the
     # account still holds 50 SBIN of the user's own, which the books cannot tell from the
     # strategy's: the refusal names them and the way out that remains.
-    world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path)
+    world = crashed_monday(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, history=history
+    )
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     world.fake.client().cancelgttorder(trigger_id=trigger_id)
     sell_by_hand(world)
