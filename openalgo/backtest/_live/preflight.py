@@ -68,6 +68,7 @@ import logging
 import numbers
 from collections.abc import Callable
 
+from .._products import MIS
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError
 from ._preflight_calendar import holiday_check
@@ -134,7 +135,12 @@ def check_preflight(
         *funds_with_carry(server.checks, server.funds_available, plan),
         *limit_checks(plan.capital, plan.max_daily_loss, plan.account_max_daily_loss),
         product_check(plan.product),
-        *trading_day_checks((exchange for _, exchange in plan.instruments), now_ns, calendar),
+        *trading_day_checks(
+            (exchange for _, exchange in plan.instruments),
+            now_ns,
+            calendar,
+            mis=MIS in plan.product.split(", "),
+        ),
     ]
     # The clock and the holidays are read from OpenAlgo's server and the test alert goes
     # through it, so they wait for ping to succeed; a missing alert channel is known

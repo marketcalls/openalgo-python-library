@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 import pytest
-from carry_samples import DAY1, DAY2, CncKept, held, on, to_day
+from carry_samples import DAY1, DAY2, DAY3, CncKept, held, missed_day, on, to_day
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import MODES, calls, gtt_world
 from session_samples import StopFlag, alerts
@@ -163,3 +163,29 @@ def test_the_funds_check_counts_the_carried_rearm_daily_leg(
         "the 5,000.00 rupees the carried positions hold (CncKept SBIN CNC 5,000.00), "
         "95,000.00 rupees"
     )
+
+
+@MODES
+def test_a_rearm_daily_legs_missed_days_are_named_once_with_no_gtt_words(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # Monday's leg is carried; no session runs on Tuesday; Wednesday's start names Tuesday
+    # once, in the start warning of rearm_daily legs, and the banner has no line of a stop
+    # GTT that fired then: the leg has none (the lead's ruling N5c-4 (g)).
+    world = gtt_world(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, trades_until=(15, 32)
+    )
+    assert world.run(CncKept, **REARM).stopped_by == "session_end"
+    world.day = DAY1
+    world.stop, world.feed = StopFlag(), None
+    missed_day(world, DAY2, ())
+    to_day(world, DAY3, start=START)
+    world.stop_at(on(DAY3, 9, 30))
+
+    world.run(CncKept, **REARM)
+
+    named = [line for line in world.lines if str(DAY2) in line]
+    assert named == [
+        f"Warning: CncKept: no session ran on {DAY2}, the trading days since its last close "
+        f"on {DAY1}"
+    ]

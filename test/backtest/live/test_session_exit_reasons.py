@@ -114,7 +114,8 @@ def test_the_kill_switchs_exits_name_the_accounts_daily_loss_limit(
     sales = [event for event in placements(made) if event["purpose"] == "risk_exit"]
     assert [event["reason"] for event in sales] == ["account_loss_limit"] * 2
     for line in console(made, "EXIT"):
-        assert "(risk_exit: kill switch at the account daily loss limit, order " in line
+        # An engine risk exit names the exit reason its trade records (N5c-4 (a)).
+        assert "(account_loss_limit: kill switch at the account daily loss limit, order " in line
 
 
 def kernel_exit_reasons() -> set[str]:

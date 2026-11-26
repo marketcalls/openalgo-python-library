@@ -299,6 +299,7 @@ class StopsSupervisor:
                     retries=retries,
                     held_by_other=instrument_held_by(self._session, self, trader) is not None,
                     closing_rejected=self._session.margin.unprotected_reason(trader),
+                    gtt_asked=stop_gtt(trader) and gtt_guarded(trader),
                 )
                 # A rearm_daily leg has no day stop while the market is closed (`_session_rearm`).
                 if rearm_daily(trader) and market_closed(trader, now_ns):

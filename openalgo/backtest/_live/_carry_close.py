@@ -21,6 +21,7 @@ from typing import Any
 from .._engine import call
 from .._series import ist_time
 from ._plan_catch_up import INSTRUMENT
+from ._session_expiry import settles_today, settles_words
 from ._session_rearm import rearm_daily, stop_at_close
 from ._session_trader import Trader
 from ._stops_gtt import CHECK_THEN_PLACE, gtt_unconfirmed, gtt_words, overnight, stop_gtts
@@ -49,6 +50,8 @@ def carried_words(session: Any, trader: Trader) -> str:
     at the broker until your next start"."""
     units = trader.open_units()
     held = f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units{_entered(trader)}"
+    if settles_today(trader, session.parts.spec.day):
+        return f"{held}: {settles_words(trader)}"
     if rearm_daily(trader):
         return f"{held}, {stop_at_close(session, trader)}"
     gtts = stop_gtts(trader)

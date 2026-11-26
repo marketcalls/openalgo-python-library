@@ -52,8 +52,9 @@ from .._warm_up import SeriesNeed
 from .._warm_up_measure import WarmUp
 from .._warm_up_probe import ProbeContext, history_needs, probe_setup
 from ..calendar import Calendar
-from ..errors import ConfigError
-from ..reference import Instrument
+from ..errors import ConfigError, ReferenceDataError
+from ..reference import Instrument, default_tables
+from ..reference._store import run_advice
 from ..reference.symbols import SymbolError, parse_symbol
 from ..report._format import indian_digits
 from ..strategy import Strategy
@@ -70,6 +71,14 @@ CURRENCY_EXCHANGES = ("CDS", "BCD")
 EXPIRED_CONTRACT_SETTLED = (
     "If a strategy held a position on it from an earlier day, the exchange has settled it: "
     "start the strategy on the contract traded now, and the start records the settlement"
+)
+#: The refusal of a strategy on a stock future or option, with what a run can do instead.
+STOCK_DERIVATIVES_NOT_LIVE = (
+    "{symbol}: stock futures and stock options cannot be traded in bt.live yet. A backtest "
+    "can trade one: pass it with instrument=Instrument(symbol=..., exchange=..., "
+    'kind=..., underlying=..., expiry=..., lot_size=..., tick_size=..., settlement="physical") '
+    "(Instrument from openalgo.backtest.reference); a stock future or option settles by "
+    "delivery, so the engine exits it at the square-off of its last trading day"
 )
 
 
@@ -295,14 +304,41 @@ def strategy_spec(
 def _instruments_today(plan: RunPlan, calendar: Calendar) -> list[Instrument]:
     """The instruments of `plan` on its day (`resolve_instruments`). Raises what that
     raises; a ConfigError while the plan names a contract whose expiry is before its day
-    ends with `EXPIRED_CONTRACT_SETTLED` (module docstring)."""
+    ends with `EXPIRED_CONTRACT_SETTLED` (module docstring); a ReferenceDataError says
+    what a run can do: for a stock future or option, that `bt.live` does not trade one yet
+    (`STOCK_DERIVATIVES_NOT_LIVE`), else the reference store's advice for a run
+    (`reference._store.run_advice`)."""
     try:
         instruments, _, _ = resolve_instruments(plan, None, calendar)
     except ConfigError as error:
         if not _names_expired(plan):
             raise
         raise ConfigError(f"{error}. {EXPIRED_CONTRACT_SETTLED}") from error
+    except ReferenceDataError as error:
+        stock = _stock_derivative(plan)
+        if stock is not None:
+            raise ReferenceDataError(STOCK_DERIVATIVES_NOT_LIVE.format(symbol=stock)) from error
+        raise ReferenceDataError(run_advice(str(error))) from error
     return instruments
+
+
+def _stock_derivative(plan: RunPlan) -> str | None:
+    """The first symbol of `plan` that is a future or an option on a stock (an underlying
+    the reference tables list as no index on its exchange), or None."""
+    for symbol in plan.symbols:
+        try:
+            parsed = parse_symbol(symbol, plan.exchange)
+        except SymbolError:
+            continue
+        if parsed.underlying is None:
+            continue
+        try:
+            kind = default_tables().underlying_type(parsed.underlying, plan.exchange, plan.start)
+        except ReferenceDataError:
+            kind = None
+        if kind != "index":
+            return symbol
+    return None
 
 
 def _names_expired(plan: RunPlan) -> bool:

@@ -6,8 +6,9 @@ time that end it (`Control`). The common close is `_session_close`.
 - **Ctrl+C, the safe stop (D29).** The first stop request locks every strategy's entries
   ("operator_stop") and cancels its working entries and adds (one decided in the same
   loop step is withdrawn before it is sent: `Trader.commands`; those of a pre-open
-  decision never sent are named in a line, `_session_pre_open.cancelled_unsent`, kept
-  for the result and the daily summary). Each leg is then flattened
+  decision never sent are named in a line, `_session_pre_open.cancelled_unsent`, and its
+  other orders left unsent for a restart that day in another, `kept_unsent`, kept for the
+  result and the daily summary). Each leg is then flattened
   or kept by `on_stop` (`Control.keeps`: by default an MIS leg is flattened and a CNC or
   NRML leg kept with its GTT stop). A flattened position is exited (`request_exit`,
   "operator_stop", after a fresh book read; the kernel answers "already_exiting" while an
@@ -69,7 +70,7 @@ from ._plan_args import kept_on_stop
 from ._session_day_end import MODE_BREACH, SESSION_END, DayEnd
 from ._session_left_open import left_open_lines
 from ._session_loop import Session
-from ._session_pre_open import cancelled_unsent
+from ._session_pre_open import cancelled_unsent, kept_unsent
 from ._session_trader import StrategyFailed, Trader
 from ._stops_gtt import overnight
 from ._stops_protect import PROTECTED
@@ -219,12 +220,12 @@ class Control:
         session.event("safe_stop", on_stop=self._on_stop)
         for trader in session.traders:
             trader.lock(OPERATOR_STOP)
-            cancelled = cancelled_unsent(trader)
+            named = (cancelled_unsent(trader), kept_unsent(trader))
             for kernel_order in trader.entry_orders():
                 trader.cancel(kernel_order)
-            if cancelled is not None:
-                session.warn(cancelled)
-                self.summary_lines.append(cancelled)
+            for line in (line for line in named if line is not None):
+                session.warn(line)
+                self.summary_lines.append(line)
         if session.locked:
             self.verdict = MODE_BREACH
             return

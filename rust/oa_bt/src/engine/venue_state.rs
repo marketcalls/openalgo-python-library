@@ -42,6 +42,10 @@
 //!   Place still to be taken is the live layer's to send or not, by its journal. A saved
 //!   order's `sent` is false for a strategy exit that waits for its cancels: nothing of it
 //!   can be at the venue, and the check has no intent to look for.
+//! - **A pre-open decision's orders** that wait for the open go as the restored session
+//!   reaches it; restored after the open (the session stands past its first slice), they
+//!   go at once and are late, as a start after the open sends its decision's: their fills
+//!   are flagged `late_decision` (`pre_open`).
 //! - **Controls.** The entry locks are not restored: the session keeps those set before
 //!   the restore (the live layer's "starting"), and the saved ones stay readable in the
 //!   state (`desk.entry_locks`) for the live layer to set again those that last the day
@@ -92,7 +96,7 @@ pub use error::LiveStateError;
 pub use value::StateValue;
 
 use crate::charges::OrderCharges;
-use crate::exec::{GttBook, InstrumentId, OrderId};
+use crate::exec::{FillFlags, GttBook, InstrumentId, OrderId};
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
@@ -343,6 +347,20 @@ impl Engine {
             self.charges.resume_trade(trade.key);
         }
         self.record.trades.open = saved.open_trades;
+        self.late_after_open();
         Ok(saved.ids.pairs)
+    }
+
+    /// A restored pre-open decision's orders that wait for the open, in a session restored
+    /// after its open (it stands past its first slice): they go at once, late, as a start
+    /// after the open sends its decision's (`pre_open`), so their fills are flagged
+    /// `late_decision`.
+    fn late_after_open(&mut self) {
+        if self.standing().0 == 0 {
+            return;
+        }
+        let late = self.venue.pre_open.at_open.iter();
+        let flagged = late.map(|id| (*id, FillFlags::LATE_DECISION));
+        self.venue.exit_flags.extend(flagged.collect::<Vec<_>>());
     }
 }

@@ -362,3 +362,44 @@ fn an_order_waiting_for_the_open_survives_a_restart_and_goes_at_the_open() {
         .expect("the open's tick");
     assert_eq!(places(&restarted.take_commands()), vec![ENTRY]);
 }
+
+#[test]
+fn an_order_waiting_for_the_open_restored_after_the_open_goes_at_once_flagged_late() {
+    // Saved before the open with its buy waiting; the restart's catch-up has released the
+    // 09:15 and 09:16 slices: the buy goes at the first tick after the restore, late, as a
+    // start after the open would send it.
+    let mut kernel = daily_session(july(3));
+    let at = open_of(july(3)) - 45 * 60 * SECOND;
+    kernel
+        .pre_open_decision(&[daily(july(2), 800.0)], None, at)
+        .unwrap();
+    kernel.submit(buy()).expect("submitted");
+    assert!(matches!(kernel.advance(), Ok(Pause::Waiting { .. })));
+    let saved = kernel.live_state();
+    let mut restarted = daily_session(july(3));
+    for k in 0..2_u32 {
+        assert!(matches!(restarted.advance(), Ok(Pause::Waiting { .. })));
+        let bar = oa_bt::engine::BaseBar {
+            ts_open: ts_from_ist(july(3), NSE_OPEN_MINUTE + k),
+            open: 800.0,
+            high: 800.0,
+            low: 800.0,
+            close: 800.0,
+            volume: 1_000.0,
+        };
+        restarted.add_bar(SBIN, bar).expect("a closed slice's bar");
+        restarted.release(k as usize + 1);
+    }
+    assert!(matches!(restarted.advance(), Ok(Pause::Waiting { .. })));
+
+    let ids = restarted.restore_live_state(&saved).expect("restored");
+
+    assert_eq!(ids, vec![(BUY, BUY)]);
+    assert!(restarted
+        .order_flags(BUY)
+        .contains(FillFlags::LATE_DECISION));
+    restarted
+        .push_tick(SBIN, 801.0, open_of(july(3)) + 2 * 60 * SECOND + SECOND)
+        .expect("a tick after the restore");
+    assert_eq!(places(&restarted.take_commands()), vec![ENTRY]);
+}

@@ -9,6 +9,7 @@ date after its table's as-of date warns the first time.
 """
 
 import datetime as _dt
+import re
 import warnings
 from collections.abc import Iterable, Sequence
 
@@ -31,6 +32,25 @@ _HOW_TO_SUPPLY = (
     "with write_symbol_master_snapshot(client, directory) and pass "
     "load_tables(snapshots=directory)."
 )
+
+
+#: What a run (`bt.backtest`, `bt.live`) says in place of `_HOW_TO_SUPPLY`: a run reads the
+#: built-in tables only, so the advice it can follow is to pass the instrument itself.
+RUN_ADVICE = (
+    "Pass the instrument to the run with instrument=Instrument(...) (Instrument from "
+    "openalgo.backtest.reference) with the figure you have confirmed."
+)
+_HOW_TO_SUPPLY_PATTERN = re.compile(
+    re.escape(_HOW_TO_SUPPLY).replace(re.escape("{table}"), "[^']+")
+)
+
+
+def run_advice(message: str) -> str:
+    """`message`, a reference error's or warning's words, as a run says them: the advice of
+    the public reference API (`load_tables` with a user file or a symbol-master snapshot,
+    which no run reads) replaced by the advice a run can follow (`RUN_ADVICE`). The one
+    rule of the two wordings: the store's messages keep the API's advice."""
+    return _HOW_TO_SUPPLY_PATTERN.sub(RUN_ADVICE, message)
 
 
 class ReferenceDataWarning(UserWarning):
@@ -233,5 +253,6 @@ __all__ = [
     "RowStore",
     "best_origin",
     "how_to_supply",
+    "run_advice",
     "warn",
 ]

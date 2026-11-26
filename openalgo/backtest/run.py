@@ -53,8 +53,9 @@ from ._rerun import RunRecord
 from ._robust_verbs import robustness, walk_forward
 from ._strategy_args import SHARED_POOL
 from ._warm_up_notice import announce_wait
-from .errors import ConfigError
+from .errors import ConfigError, ReferenceDataError
 from .reference import Instrument
+from .reference._store import run_advice
 from .result import Result
 from .strategy import Strategy
 from .units import Distance
@@ -308,11 +309,15 @@ def backtest(
     for any setting or feature the kernel does not run yet.
     """
     arguments = dict(locals())
-    if isinstance(strategy, list | tuple):
-        return run_portfolio(strategy, client, arguments)
-    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ConfigError("backtest takes a bt.Strategy subclass, or a list of them")
-    return _run(strategy, client, arguments)
+    try:
+        if isinstance(strategy, list | tuple):
+            return run_portfolio(strategy, client, arguments)
+        if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
+            raise ConfigError("backtest takes a bt.Strategy subclass, or a list of them")
+        return _run(strategy, client, arguments)
+    except ReferenceDataError as error:
+        # A run reads the built-in tables only: its advice is the run's (`run_advice`).
+        raise ReferenceDataError(run_advice(str(error))) from error
 
 
 def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:

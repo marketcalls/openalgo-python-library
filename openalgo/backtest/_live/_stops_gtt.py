@@ -118,18 +118,25 @@ def gtt_cancelling(trader: Any) -> bool:
 
 def gtt_words(trader: Any) -> str:
     """The leg's stop GTT in an alert's words: confirmed (its trigger ID, trigger and
-    units), one a restart could not tell where it stands, being cancelled, not confirmed
-    yet, or "" for none."""
+    units, and the trigger and units it is being modified to while a modification waits
+    for the broker's answer), one a restart could not tell where it stands, being
+    cancelled, not confirmed yet, or "" for none."""
     gtts = stop_gtts(trader)
     resting = resting_gtts(trader)
     settled = [gtt for gtt in resting if not _unsettled(trader, gtt)]
     if settled:
         gtt = settled[-1]
-        name = _name(trader, gtt)
-        return (
-            f"{name} confirmed at the broker, trigger {gtt['trigger_price']:.2f} for "
-            f"{round(gtt['quantity_units'])} units"
+        words = (
+            f"{_name(trader, gtt)} confirmed at the broker, trigger "
+            f"{gtt['trigger_price']:.2f} for {round(gtt['quantity_units'])} units"
         )
+        pending = gtt.get("pending") if gtt["state"] == "ModifyPending" else None
+        if pending:
+            words += (
+                f", being modified to trigger {pending['trigger_price']:.2f} for "
+                f"{round(pending['quantity_units'])} units"
+            )
+        return words
     if resting:
         return (
             f"{_name(trader, resting[-1])} not confirmed at the broker: the restart could not "

@@ -30,13 +30,16 @@ session's first open.
   undecided for a later start of the day, since the safe stop would withdraw the entries
   of their decision before they reach the broker.
 - **A stop before the decision's orders reach the broker** (Ctrl+C, or a strategy's
-  exception: the safe stop cancels the entries) withdraws them, before the open as after
-  it (a start after the open sends them at the loop's next turn), and the bar stays
+  exception: the safe stop cancels the entries) withdraws its entries, before the open as
+  after it (a start after the open sends them at the loop's next turn), and the bar stays
   decided in the journal, so no later start of the day decides it again (a decided bar is
-  noted before its orders go, so a crash never decides one twice). The stop says so in a
-  line naming the bar and the orders (`cancelled_unsent`), kept in the result's warnings
-  and the daily summary; the day's next start says the bar was decided by an earlier start
-  (`_pre_open_due.DECIDED_TODAY`).
+  noted before its orders go, so a crash never decides one twice). Its other orders (an
+  exit) stay unsent in the saved state: a restart that day sends them as a late start
+  would, at the open, or at once once the open has passed, flagged `late_decision` (the
+  kernel's restore); without one they are never sent. The stop says each in a line naming
+  the bar and the orders and what becomes of them (`cancelled_unsent`, `kept_unsent`),
+  kept in the result's warnings and the daily summary; the day's next start says the bar
+  was decided by an earlier start (`_pre_open_due.DECIDED_TODAY`).
 - **A change of the analyzer switch before the decision's orders reach the broker** locks
   the mode guard, and the session sends nothing more: every order of the decision still
   waiting (entries and exits) is dropped. The mode-switch alert and the result's warnings
@@ -65,6 +68,14 @@ PRE_OPEN_EVENT = "pre_open_decision"
 CANCELLED_UNSENT = (
     "{name}: the stop cancels the orders of its decision on its {interval} bar closing on "
     "{day} ({orders}) before they went to the broker, and that bar is not decided again today"
+)
+#: The line of a pre-open decision's orders other than entries a stop leaves unsent in the
+#: saved state (module docstring).
+KEPT_UNSENT = (
+    "{name}: the stop leaves the orders of its decision on its {interval} bar closing on "
+    "{day} ({orders}) unsent: a restart today sends them, at the open or at once after it, "
+    "flagged late_decision, since that bar is not decided again; with no restart today they "
+    "are never sent"
 )
 #: The line of a pre-open decision's orders a mode switch drops before they reach the broker
 #: (module docstring): the bar is decided in the session's ledger.
@@ -146,6 +157,18 @@ def cancelled_unsent(trader: Any) -> str | None:
     return CANCELLED_UNSENT.format(**_named(trader, waiting))
 
 
+def kept_unsent(trader: Any) -> str | None:
+    """The line naming the orders of `trader`'s pre-open decision other than its entries
+    (an exit) that a stop leaves unsent in the saved state (module docstring), as
+    `cancelled_unsent` finds them. None for a strategy that decides in the session, or
+    with none unsent."""
+    entries = set(trader.entry_orders())
+    waiting = _unsent(trader, [o for o in trader.working() if o not in entries])
+    if not waiting:
+        return None
+    return KEPT_UNSENT.format(**_named(trader, waiting))
+
+
 def dropped_unsent(trader: Any, mode: Any) -> str | None:
     """The line naming every order of `trader`'s pre-open decision, entries and exits, that
     a change of the analyzer switch drops before it reaches the broker (module docstring),
@@ -216,6 +239,7 @@ __all__ = [
     "DROPPED_BY_SWITCH",
     "PRE_OPEN_EVENT",
     "cancelled_unsent",
+    "kept_unsent",
     "daily_traders",
     "decide_before_open",
     "dropped_unsent",

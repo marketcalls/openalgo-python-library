@@ -31,6 +31,9 @@ LOOKAHEAD_DAYS = 75
 # The expiry of the example contract in the message for an underlying without expiry
 # rules (`_no_expiry_rule`): it only shapes the example symbol and date the user replaces.
 EXAMPLE_EXPIRY = dt.date(2026, 11, 18)
+#: The exchanges whose underlyings with no expiry rule in the tables are stocks, whose
+#: futures settle by delivery (`reference/data/settlement.csv`).
+STOCK_FUTURE_EXCHANGES = ("NFO", "BFO")
 
 
 @dataclass(frozen=True)
@@ -83,16 +86,27 @@ def _no_expiry_rule(name: str, exchange: str) -> str:
     contracts instead."""
     symbol = format_symbol(name, EXAMPLE_EXPIRY)
     expiry = f"datetime.date({EXAMPLE_EXPIRY.year}, {EXAMPLE_EXPIRY.month}, {EXAMPLE_EXPIRY.day})"
+    # On NFO and BFO the tables have an expiry rule for every index, so this underlying
+    # is a stock, whose futures settle by delivery (`settlement.csv`).
+    stock = exchange in STOCK_FUTURE_EXCHANGES
+    settlement = ', settlement="physical"' if stock else ""
     example = (
         f'bt.backtest(Strategy, ..., instrument={{"{symbol}": Instrument(symbol="{symbol}", '
         f'exchange="{exchange}", kind="future", underlying="{name}", expiry={expiry}, '
-        "lot_size=..., tick_size=...), ...})"
+        f"lot_size=..., tick_size=...{settlement}), ...}})"
+    )
+    why = (
+        ': a stock future settles by delivery, and settlement="physical" has the engine exit '
+        "it at the square-off of its last trading day instead of settling it in cash at expiry"
+        if stock
+        else ""
     )
     return unsupported(
         f"{name} futures on {exchange} without instrument=",
         f"the reference tables have no expiry rule for {name} on {exchange}, so pass every "
         "contract the run trades with instrument=, each with its own expiry, lot size and "
-        f"tick size, for example {example}, with Instrument from openalgo.backtest.reference",
+        f"tick size, for example {example}, with Instrument from openalgo.backtest.reference"
+        f"{why}",
     )
 
 

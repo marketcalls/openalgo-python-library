@@ -26,6 +26,9 @@ from ._stops_orders import LegOrders, Sent
 STOP_UNCONFIRMED = "stop unconfirmed"
 STOP_HELD = "stop held"
 STOP_ENDED = "stop ended"
+#: A CNC or NRML leg whose stop GTT is asked for and not confirmed by a read of the GTT book
+#: yet (after the entry's fill, 20-positional-live 2 "Day 1, entry fills").
+STOP_GTT_UNCONFIRMED = "stop GTT not confirmed yet"
 EXITING = "exiting"
 EXIT_RETRIES = "exit retries"
 UNBOUND_ADD = "unbound add"
@@ -41,6 +44,7 @@ REASONS = (
     STOP_UNCONFIRMED,
     STOP_HELD,
     STOP_ENDED,
+    STOP_GTT_UNCONFIRMED,
     EXITING,
     EXIT_RETRIES,
     UNBOUND_ADD,
@@ -80,6 +84,7 @@ def reason_of(
     retries: bool,
     held_by_other: bool = False,
     closing_rejected: str | None = None,
+    gtt_asked: bool = False,
 ) -> str:
     """Why `leg`'s units are uncovered (one of `REASONS`): an order of it ambiguous in the
     order book (an entry's units uncovered too, `LegOrders.ambiguous_entry_units`), its
@@ -88,7 +93,8 @@ def reason_of(
     lost, its stop held back while another strategy's placement of the instrument is
     unanswered (`held_by_other`), its stop held back or unanswered, an exit the exit
     owner retries (`retries`), an exit working or the stop's cancel sent for one, else its
-    stop not confirmed yet or ended."""
+    stop not confirmed yet or ended; with no stop order, a CNC or NRML leg whose stop GTT
+    is asked for (`gtt_asked`) has it not confirmed yet: no stop has ended."""
     live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
     if any(w.state is Sent.AMBIGUOUS for w in live):
         return AMBIGUOUS_ORDER
@@ -108,7 +114,9 @@ def reason_of(
     if leg.exits() or (stop is not None and stop.cancel_sent):
         # A stop's cancel is sent only for an exit of the position (R4).
         return EXITING
-    return STOP_ENDED if stop is None else STOP_UNCONFIRMED
+    if stop is None:
+        return STOP_GTT_UNCONFIRMED if gtt_asked else STOP_ENDED
+    return STOP_UNCONFIRMED
 
 
 def held_by_other(others: Iterable[tuple[str, LegOrders]]) -> tuple[str, str] | None:
@@ -178,6 +186,7 @@ __all__ = [
     "REASONS",
     "REFUSED_FOR_MARGIN",
     "STOP_ENDED",
+    "STOP_GTT_UNCONFIRMED",
     "STOP_HELD",
     "STOP_UNCONFIRMED",
     "UNBOUND_ADD",
