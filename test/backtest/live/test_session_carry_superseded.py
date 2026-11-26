@@ -31,7 +31,7 @@ from carry_samples import (
 )
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, MODES, calls, gtt_world, gtts
-from restart_samples import crash_at, crashing, run_to_crash
+from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import StopFlag, alerts
 from stops_samples import at_price
 
@@ -53,6 +53,17 @@ SENDS = (
 @pytest.fixture(autouse=True)
 def _logs(caplog):
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+
+
+def _buys_once_more(self, bar):
+    if not self.state.get("again"):
+        self.state["again"] = True
+        self.buy(self.qty, **type(self).rules)
+
+
+#: `CncKeptTrail` under its own name (so its journal rows and records are the same) that
+#: buys 10 once more at its first decision of a later day, the entry kept in `self.state`.
+BuysAgain = type("CncKeptTrail", (CncKeptTrail,), {"on_bar": _buys_once_more})
 
 
 def next_start(world, day):
@@ -234,5 +245,42 @@ def test_a_restart_that_exited_after_a_kept_ctrl_c_and_crashed_is_not_continued(
 
     assert tuesday.stopped_by == "ctrl_c"
     assert set_aside("CncKeptTrail", DAY1, DAY1, DAY2) in world.lines
+    assert calls(world, *SENDS)[sent:] == []
+    assert not alerts(caplog, "error")
+
+
+@MODES
+@BOOKS
+def test_a_restart_the_day_a_record_was_set_aside_names_the_position_it_resumes(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
+):
+    # Wednesday's first start sets Monday's record aside, buys 10 again at 500.00 with its
+    # stop GTT at 497.00 and crashes at 14:46; the restart resumes that position, so its
+    # banner never says the strategy starts flat (review round 3 of unit N5a).
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail, analyzer=analyzer, history=history
+    )
+    world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
+    exited_on_tuesday(world, monkeypatch)
+    world.stop, world.feed = StopFlag(), None
+    to_day(world, DAY3)
+    world.script.price = lambda now_ns: 500.0
+    crash_at(world, on(DAY3, 14, 46))
+    run_to_crash(world, BuysAgain)
+    assert set_aside("CncKeptTrail", DAY1, DAY2, DAY3) in world.lines
+    assert held(world) == 10
+    (trigger_id,) = [g.trigger_id for g in world.fake.gtts(world.fake.mode) if g.status == "active"]
+    first, sent = len(world.lines), len(calls(world, *SENDS))
+    caplog.clear()
+
+    outcome = restart(world, BuysAgain, stop_ns=on(DAY3, 14, 50))
+
+    assert outcome.stopped_by == "ctrl_c"
+    lines = world.lines[first:]
+    assert [line for line in lines if "starts flat" in line] == []
+    assert (
+        f"CncKeptTrail: resumed 10 SBIN NSE, stop GTT {trigger_id} confirmed at the broker, "
+        "trigger 497.00 for 10 units"
+    ) in lines
     assert calls(world, *SENDS)[sent:] == []
     assert not alerts(caplog, "error")

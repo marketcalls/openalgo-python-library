@@ -4,9 +4,10 @@ continue, refused before anything is sent (20-positional-live 4.2 step 2; the le
 ruling N5a-1): a capital other than a carried strategy's (`_carry_start.capital_refusals`),
 what a strategy holds from an earlier day that no day-close record carries (with a record
 a later save outdates, which is set aside), unless the broker's books show it closed by
-hand (`_carry_unrecorded`), and a carried contract the
-strategy no longer trades that has not expired (`_carry_contracts`: one that expired was
-settled by the exchange, and the strategy starts flat).
+hand or the strategy has a save of today, which a restart resumes (`_carry_unrecorded`),
+and a carried contract the strategy no longer trades that has not expired
+(`_carry_contracts`: one that expired was settled by the exchange, and the strategy starts
+flat).
 
 Each refusal names what is held and what to do. Days are IST trading days. Run by the
 main thread at the start, before the preflight.
@@ -19,7 +20,7 @@ from typing import Any
 
 from ._carry_contracts import settle_expired
 from ._carry_start import CarryAtStart, capital_refusals, read_carry
-from ._carry_unrecorded import judge, read_books, set_aside, unrecorded
+from ._carry_unrecorded import judge, read_books, resumed_today, set_aside, unrecorded
 from ._preflight_plan import refused
 from ._types import Mode, Now
 from .journal import Journal
@@ -46,10 +47,11 @@ def open_carry(
     refusals: list[str] = []
     with Journal.open(path, account=account, broker=broker, mode=mode, now=now) as journal:
         carry = read_carry(journal, names, spec.day, mode)
-        held = unrecorded(journal, names, spec.day, carry)
+        resumed = resumed_today(journal, names, spec.day)
+        held = unrecorded(journal, names, spec.day, carry, resumed=resumed)
         if held:
             carry, refusals = judge(held, read_books(client, held), journal, carry)
-        carry = set_aside(carry, held)
+        carry = set_aside(carry, held, resumed=resumed)
         carry, moved = settle_expired(journal, carry, spec.strategies)
     refusals += moved
     capitals = {each.name: each.capital for each in spec.strategies}

@@ -9,10 +9,8 @@ review round 1 of unit N5a). Split from `_carry_open` so each module keeps one j
   NRML position, a CNC or NRML order working (it may have filled after the save), or a GTT
   that has not ended. An MIS position never counts: the broker squares MIS off at its
   close and nothing of it is carried, so an MIS strategy starts as in 2.4.1 whatever its
-  last save holds (20-positional-live 1). Nor does it once the
-  strategy has a save of today: an earlier start today passed this judgement, and a
-  restart today resumes today's save. A strategy whose outdated record is set aside with
-  nothing of the later session left to judge starts flat, the banner saying so
+  last save holds (20-positional-live 1). A strategy whose outdated record is set aside
+  with nothing of the later session left to judge starts flat, the banner saying so
   (`set_aside`), and its close writes its record of the day.
 - **A loose GTT**: a GTT of the journal from an earlier day that has not ended and that no
   carried record binds (one a session placed and never recorded at a close). Started
@@ -33,12 +31,20 @@ what to do (`CHECK_BY_HAND`); a CNC leg the books show held may be held with uni
 user's own, which the books cannot tell from the strategy's (7.2), so the refusal names
 those units and the way out that remains: another account name.
 
+A strategy with a save of today (`resumed_today`) is not judged at all, and no set-aside
+line is shown for it: an earlier start today passed this judgement (anything loose was
+refused, or found settled and ended), and a restart today resumes today's save, whose GTT
+bindings take back each GTT of an earlier day it follows (`_session_restore_gtts`). Its
+latest record may be of today (a Ctrl+C that kept the leg, or the day's close), which the
+carry of earlier days never reads (review round 3 of unit N5a).
+
 Continuing such a leg from the last save of its day, with the journal's updates newer than
 it (the lead's ruling N5a-1 (5)), needs the engine's state of a day carried to a later
 day's session from a mid-session save, which the kernel gives only from a closed session
 (`carried_state`): not built in this release. So a crash before the close record, on the
 day a position was entered or on a later day that continued it, refuses the next start
-while the leg may be held.
+of a later day while the leg may be held; a restart the same day, before the close,
+resumes the leg from that save (16-session-design 3.6) and its close writes the record.
 
 Days are IST trading days, quantities signed whole units. Run by the main thread at the
 start, before the order worker follows any GTT.
@@ -126,15 +132,28 @@ class BookReads:
     gttbook: Mapping[str, Any] | None
 
 
+def resumed_today(journal: Journal, names: Sequence[str], day: dt.date) -> frozenset[str]:
+    """The strategies of `names` with a save of `day`, which this start resumes and never
+    judges (module docstring). Raises JournalError when the journal cannot be read."""
+    return frozenset(name for name in names if journal.rms_state(name, day=day) is not None)
+
+
 def unrecorded(
-    journal: Journal, names: Sequence[str], day: dt.date, carry: CarryAtStart
+    journal: Journal,
+    names: Sequence[str],
+    day: dt.date,
+    carry: CarryAtStart,
+    *,
+    resumed: frozenset[str],
 ) -> list[Unrecorded]:
     """What each of the strategies `names` holds from before `day` that no record carries
-    (module docstring), for those that hold any. Raises JournalError when the journal
-    cannot be read."""
+    (module docstring), for those that hold any; those `resumed` today (`resumed_today`)
+    are not judged. Raises JournalError when the journal cannot be read."""
     open_gtts = [gtt for gtt in journal.open_gtts() if gtt.day < day]
     found = []
     for name in names:
+        if name in resumed:
+            continue
         carried = carry.of(name)
         save_day, legs = _save(journal, name, day)
         bound = set() if carried is None else set(gtt_seqs(carried.record).values())
@@ -176,17 +195,20 @@ def judge(
     return replace(carry, settled=(*carry.settled, *settled)), refusals
 
 
-def set_aside(carry: CarryAtStart, held: Sequence[Unrecorded]) -> CarryAtStart:
+def set_aside(
+    carry: CarryAtStart, held: Sequence[Unrecorded], *, resumed: frozenset[str]
+) -> CarryAtStart:
     """The carry with the banner's line of each strategy whose outdated day-close record
     (`CarryAtStart.superseded`) is not continued and whose later save left nothing to
-    judge (`held` names none of its saves): it starts flat (module docstring)."""
+    judge (`held` names none of its saves): it starts flat (module docstring). A strategy
+    `resumed` today has none: an earlier start today said so, and it resumes today's save."""
     judged = {each.name for each in held if each.save_day is not None}
     lines = [
         f"{name}: its day-close record of {outdated.record_day} is not continued, since its "
         f"session of {outdated.saved_day} changed what it held and ended without a record of "
         f"its own, and nothing of that session is left to carry: it starts flat on {carry.day}"
         for name, outdated in carry.superseded.items()
-        if name not in judged
+        if name not in judged and name not in resumed
     ]
     return replace(carry, settled=(*carry.settled, *lines))
 
@@ -197,7 +219,7 @@ def _save(journal: Journal, name: str, day: dt.date) -> tuple[dt.date | None, se
     docstring): its latest session's save, made after its latest day-close record. A
     working order counts: it may have filled after the save."""
     last = journal.last_ran(name, day)
-    if last is None or journal.rms_state(name, day=day) is not None:
+    if last is None:
         return None, set()
     record = journal.day_close(name)
     if record is not None and journal.saved_after(record, day) != last:
@@ -317,6 +339,7 @@ __all__ = [
     "Unrecorded",
     "judge",
     "read_books",
+    "resumed_today",
     "set_aside",
     "unrecorded",
 ]
