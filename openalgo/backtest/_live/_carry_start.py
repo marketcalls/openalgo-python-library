@@ -8,8 +8,14 @@ preflight, so that every check and refusal of a carry comes before anything is s
   With it, the latest day before today on which a session of the strategy started
   (`Journal.last_ran`): a session that ran after the record's day may have changed what
   it carries, so the record's reference of the broker's units then counts no more
-  (`Carried.current`, the lead's ruling N5a-1 (3)). The other ledger's latest records are
-  read too: their positions are only named in the start banner, never restored
+  (`Carried.current`, the lead's ruling N5a-1 (3)). A record is never continued once a
+  session of the strategy saved its risk state after it and ended without a record of its
+  own (a crash, a power cut: `Journal.saved_after`): that save, not the record, holds what
+  the strategy carries, so the record is set aside (`CarryAtStart.superseded`), the save
+  is judged as one no record carries (`_carry_unrecorded`: one that holds no CNC or NRML
+  position or order and no GTT starts the strategy flat), and the close writes the strategy's
+  record of the day (`_carry_record`). The other ledger's latest records are read too:
+  their positions are only named in the start banner, never restored
   (`CarryAtStart.other`, 4.2 step 1).
 - **The capital** (`capital_refusals`): the engine continues a carried position only with
   the capital it was entered with (`restore_carried_state` refuses another), so a start
@@ -68,13 +74,25 @@ class Carried:
 
 
 @dataclass(frozen=True)
+class Superseded:
+    """A strategy's latest day-close record that a later save outdates (module docstring):
+    the `record_day` it was written on and the `saved_day` of the strategy's latest save
+    after it."""
+
+    record_day: dt.date
+    saved_day: dt.date
+
+
+@dataclass(frozen=True)
 class CarryAtStart:
     """What a session of trading `day` in `mode` continues (module docstring): `carried`,
     by strategy name in call order, `other`, the other ledger's latest records of the
     session's strategies that carry a position, by name, `settled`, the banner's line
     of each strategy whose holdings of an earlier day no record carried were found closed
-    at the broker (`_carry_unrecorded`), and `expired`, the words of each strategy whose
-    carried contract the exchange settled, by name (`_carry_contracts`): it starts flat."""
+    at the broker, or whose outdated record it no longer continues (`_carry_unrecorded`),
+    `expired`, the words of each strategy whose carried contract the exchange settled, by
+    name (`_carry_contracts`): it starts flat, and `superseded`, each strategy's record a
+    later save outdates, by name: never continued."""
 
     day: dt.date
     mode: Mode
@@ -82,6 +100,7 @@ class CarryAtStart:
     other: Mapping[str, DayClose]
     settled: tuple[str, ...] = ()
     expired: Mapping[str, str] = field(default_factory=dict)
+    superseded: Mapping[str, Superseded] = field(default_factory=dict)
 
     @classmethod
     def none(cls, day: dt.date, mode: Mode) -> CarryAtStart:
@@ -101,15 +120,20 @@ def read_carry(journal: Journal, names: Sequence[str], day: dt.date, mode: Mode)
     records = journal.day_closes()
     others = journal.other_ledger_day_closes()
     carried = {}
+    superseded = {}
     for name in names:
         record = records.get(name)
         if record is None or record.day >= day or not _carries(record):
+            continue
+        saved_day = journal.saved_after(record, day)
+        if saved_day is not None:
+            superseded[name] = Superseded(record.day, saved_day)
             continue
         carried[name] = Carried(record, journal.last_ran(name, day))
     other = {
         name: others[name] for name in names if name in others and carried_positions(others[name])
     }
-    return CarryAtStart(day, mode, carried, other)
+    return CarryAtStart(day, mode, carried, other, superseded=superseded)
 
 
 def capital_refusals(carry: CarryAtStart, capitals: Mapping[str, float]) -> list[str]:
@@ -168,13 +192,16 @@ def gtt_seqs(record: DayClose) -> dict[int, int]:
 def carried_references(journal: Journal, day: dt.date) -> list[CarriedReference]:
     """Each carried GTT's reference (`CarriedReference`), from the latest day-close record,
     of a day before `day`, of every strategy of `journal`'s ledger: only from a record that
-    is `Carried.current` (no session of the strategy ran after it) whose reference was
-    settled, the lead's ruling N5a-1 (3); `confirmed` only for a GTT the record names as
-    confirmed at the close (`CONFIRMED_KEY`), never inferred from one it does not name as
-    unconfirmed. Raises JournalError when the journal cannot be read."""
+    is `Carried.current` (no session of the strategy ran after it) and that no later save
+    outdates, whose reference was settled, the lead's ruling N5a-1 (3); `confirmed` only
+    for a GTT the record names as confirmed at the close (`CONFIRMED_KEY`), never inferred
+    from one it does not name as unconfirmed. Raises JournalError when the journal cannot
+    be read."""
     found = []
     for name, record in journal.day_closes().items():
         if record.day >= day or not Carried(record, journal.last_ran(name, day)).current:
+            continue
+        if journal.saved_after(record, day) is not None:
             continue
         state = record.carried
         confirmed_ids = {int(gtt_id) for gtt_id in state.get(CONFIRMED_KEY, [])}
@@ -218,6 +245,7 @@ __all__ = [
     "CarryAtStart",
     "Carried",
     "CarriedReference",
+    "Superseded",
     "capital_refusals",
     "carried_references",
     "gtt_seqs",

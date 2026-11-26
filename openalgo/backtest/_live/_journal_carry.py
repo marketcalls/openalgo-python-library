@@ -8,7 +8,9 @@ next (20-positional-live 3.5, 4 and 8; the lead's ruling N2-2).
   same day (a close after such a Ctrl+C) replaces it. The latest is read back, in the
   handle's own ledger only, so a live session never restores a sandbox position nor the
   reverse; the other ledger's latest records are read only to name their carried
-  positions in the start banner (`other_ledger_day_closes`).
+  positions in the start banner (`other_ledger_day_closes`). A record a later save of the
+  strategy's risk state outdates (`saved_after`: a session after it that ended without
+  its own record) no longer holds what the strategy carries.
 - **Kept refusals** (`keep_refusal`, `kept_refusals`, `clear_refusals`): a broker's
   refusal of a stop GTT that no price explains (a segment or product the broker takes no
   GTT on), kept so the strategy is refused at every later start with that message until
@@ -31,7 +33,7 @@ from typing import Any
 from ..errors import JournalError
 from ._journal_file import check_name
 from ._journal_handle import JournalHandle
-from ._journal_rows import state_from, state_json, unreadable, whole_number
+from ._journal_rows import day_key, state_from, state_json, unreadable, whole_number
 from ._types import Mode
 
 _LATEST = (
@@ -108,6 +110,29 @@ class JournalCarry(JournalHandle):
     def day_closes(self) -> dict[str, DayClose]:
         """Each strategy's latest day-close record in the handle's ledger, by strategy."""
         return self._latest(self._ledger, "read the day-close records")
+
+    def saved_after(self, record: DayClose, before: date) -> date | None:
+        """The latest trading day before `before` on which `record`'s strategy saved its
+        risk state after `record` in the handle's ledger, or None: a session that saved
+        after a day-close record and ended without its own changed what the record
+        carries. A save of a later day counts; one of the record's own day only when made
+        after the record by a start that began once it was written (a restart that day),
+        so the save a close makes just before its record never counts, whatever the clock
+        did between the two. Raises JournalError for a row it cannot read."""
+        query = (
+            "SELECT MAX(r.day) AS day FROM risk_states AS r LEFT JOIN sessions AS s "
+            "ON s.ledger = r.ledger AND s.day = r.day "
+            "WHERE r.ledger = ? AND r.strategy = ? AND r.day < ? AND (r.day > ? OR "
+            "(r.day = ? AND r.saved_ns > ? AND s.last_started_ns >= ?))"
+        )
+        day, ns = day_key(record.day), record.saved_ns
+        values = (self._ledger, record.strategy, day_key(before), day, day, ns, ns)
+        with self._sql("read the days a strategy saved") as sql:
+            row = sql.execute(query, values).fetchone()
+        try:
+            return None if row["day"] is None else date.fromisoformat(row["day"])
+        except ValueError as error:
+            raise JournalError(unreadable("a risk state's day", error)) from error
 
     def other_ledger_day_closes(self) -> dict[str, DayClose]:
         """Each strategy's latest day-close record in the other mode's ledger, by strategy:

@@ -1,9 +1,10 @@
 """A strategy whose session of an earlier day ended without its day-close record, at the next
 day's start, on the fake OpenAlgo (20-positional-live 1 and 4.2 step 2; the lead's ruling
 N5a-1): an MIS strategy is never refused for it (the broker squares MIS off, nothing is
-carried); a CNC strategy whose crash left a position or a stop GTT is refused while the
-broker may still hold either, and starts flat once the operator has closed the position
-and the GTT by hand.
+carried); a CNC strategy whose crash left a position, a working entry or a stop GTT is
+refused while the broker may still hold any of them, naming the units the books show, which
+may be the user's own (review round 2 of unit N5a), and starts flat once the operator has
+closed the position and the GTT by hand.
 
 The days and the strategies are `carry_samples`' and `positional_samples`': on Monday
 `MisHold` (MIS) or `CncKept` (CNC) buys 10 SBIN at 500.00 at 14:42:01 IST with a stop 3
@@ -124,12 +125,51 @@ def test_a_crash_before_the_close_record_refuses_the_next_start_while_the_leg_is
 
     assert refused.value.failures == (
         f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
-        "ended before the close) while holding a position or a GTT, which this version "
+        "ended before the close) while holding a position, an order or a GTT, which this version "
         f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
-        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}",
+        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
+        f"{own_units_words(10)}",
     )
     assert [c for c in calls(world, *SENDS) if c.ts_ns >= DAY2_START] == []
     assert gtts(world) == [("active", 10, 497.0, "SELL")]
+
+
+def own_units_words(units):
+    """What a refusal adds when the books show `units` SBIN CNC held, worked by hand."""
+    return (
+        f". The books show {units} SBIN NSE (CNC) held: if any of them are units of your own, "
+        "the start cannot tell them from the strategy's and never finds the leg closed, so "
+        "once the strategy's units are sold and its GTTs cancelled, start it under another "
+        "account name (account=)"
+    )
+
+
+def test_a_crash_settled_by_hand_beside_the_users_own_units_is_refused_naming_them(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The operator cancels the stop GTT and sells the strategy's 10 units by hand; the
+    # account still holds 50 SBIN of the user's own, which the books cannot tell from the
+    # strategy's: the refusal names them and the way out that remains.
+    world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path)
+    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
+    world.fake.client().cancelgttorder(trigger_id=trigger_id)
+    sell_by_hand(world)
+    # 60 held for delivery, less the 10 sold today: 50 of the user's own.
+    world.fake.set_holding("SBIN", "NSE", 60, average_price=480.0)
+    assert held(world) == 50
+    by_hand = len(calls(world, *SENDS))
+
+    with pytest.raises(PreflightError) as refused:
+        world.run(CncKept)
+
+    assert refused.value.failures == (
+        f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
+        "ended before the close) while holding a position, an order or a GTT, which this version "
+        f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
+        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
+        f"{own_units_words(50)}",
+    )
+    assert calls(world, *SENDS)[by_hand:] == []
 
 
 @pytest.mark.parametrize("settled", ["units sold", "gtt cancelled"])
@@ -187,6 +227,48 @@ def test_a_crash_settled_by_hand_starts_flat_the_next_day_and_every_day_after(
     world.stop_at(on(DAY3, 14, 46))
 
     assert world.run(CncKept).stopped_by == "ctrl_c"
+
+
+class CncLimitEntry(CncKept):
+    """CncKept whose entry is a DAY LIMIT buy at 495.00, below SBIN's 500.00."""
+
+    def on_bar(self, bar):
+        if not self.state.get("bought"):
+            self.state["bought"] = True
+            self.buy(self.qty, price=495.0, **type(self).rules)
+
+
+@MODES
+def test_a_crash_with_a_cnc_entry_working_refuses_the_next_start_once_it_filled(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # Monday's session crashes at 14:46 with its LIMIT entry working; SBIN trades at 494.00
+    # after the crash, which fills it with no session running: the save holds no position,
+    # yet the broker holds the strategy's 10 units on Tuesday.
+    world = gtt_world(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, trades_until=(14, 47)
+    )
+    world.trace.waive("protected", "the session crashed: its windows end with it")
+    crashing(monkeypatch)
+    crash_at(world, on(DAY1, 14, 46))
+    run_to_crash(world, CncLimitEntry)
+    assert held(world) == 0
+    world.fake.trade("SBIN", "NSE", 494.0, volume=10.0)
+    assert held(world) == 10
+    world.day, world.stop, world.feed = DAY1, StopFlag(), None
+    to_day(world, DAY2)
+    sent = len(calls(world, *SENDS))
+
+    with pytest.raises(PreflightError) as refused:
+        world.run(CncLimitEntry)
+
+    assert refused.value.failures == (
+        f"CncLimitEntry: its session of {DAY1} stopped without its day-close record (the "
+        "process ended before the close) while holding a position, an order or a GTT, which this "
+        f"version continues only from a day-close record: {CHECK_BY_HAND}"
+        f"{own_units_words(10)}",
+    )
+    assert calls(world, *SENDS)[sent:] == []
 
 
 def an_earlier_days_gtt_order(world, trigger_id):
