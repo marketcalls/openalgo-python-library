@@ -19,7 +19,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from carry_samples import DAY1, on
+from carry_samples import DAY1, add_future, on
 from positional_samples import gtt_world
 from restart_samples import crash_at, crashing, run_to_crash
 from session_samples import StopFlag
@@ -44,12 +44,17 @@ def crashed_world(
     strategy: Any,
     *,
     crash: tuple[int, int, int] = (14, 46, 0),
+    future: str | None = None,
     **options: Any,
 ) -> Any:
     """A `positional_samples.gtt_world` (its `history` and `analyzer` among `options`) whose
     Monday session of `strategy` crashed at the IST time `crash`: the process ended with no
-    close and no record (module docstring). The world stays on Monday."""
+    close and no record (module docstring). With `future` (a symbol of `carry_samples`), the
+    fake also trades it, as `carry_samples.carried_world` does. The world stays on Monday."""
     world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 32), **options)
+    world.future = future
+    if future is not None:
+        add_future(world, future)
     world.trace.waive("protected", "the session crashed: its windows end with it")
     crashing(monkeypatch)
     crash_at(world, on(DAY1, *crash))

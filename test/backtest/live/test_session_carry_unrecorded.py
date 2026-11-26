@@ -291,10 +291,12 @@ def test_a_crash_with_a_cnc_entry_working_that_never_filled_starts_flat(
     # so the rebuilt record holds nothing and the strategy starts flat.
     world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 47))
     world.trace.waive("protected", "the session crashed: its windows end with it")
-    world.trace.waive("no orphan", "the session crashed with its entry working")
     crashing(monkeypatch)
     crash_at(world, on(DAY1, 14, 46))
     run_to_crash(world, CncLimitEntry)
+    # The exchange's close cancels the entry the crashed session left working.
+    (entry,) = [o for o in world.fake.orders(world.fake.mode) if o.status == "open"]
+    world.fake.client().cancelorder(order_id=entry.order_id, strategy=entry.strategy)
     world.day, world.stop, world.feed = DAY1, StopFlag(), None
     to_day(world, DAY2)
     world.stop_at(on(DAY2, 14, 46))
