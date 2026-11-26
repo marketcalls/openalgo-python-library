@@ -64,7 +64,6 @@ from ._stops_gtt import (
     gtt_unconfirmed,
     gtt_unsettled,
     gtt_words,
-    overnight,
     stop_gtt,
 )
 from ._stops_kernel import PROTECT_PLACED, order_of
@@ -168,7 +167,7 @@ def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     held = stops.day.words(trader, check=advice == _CHECK)
     if held is not None:
         return "; ".join([*parts, held])
-    if overnight(trader) and gtt_unconfirmed(trader):
+    if stop_gtt(trader) and gtt_unconfirmed(trader):
         # Carried with no stop GTT the close confirmed: it may have fired (`_stops_gtt`).
         return "; ".join([*parts, CHECK_THEN_PLACE])
     if advice == _CHECK:

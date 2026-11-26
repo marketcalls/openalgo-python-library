@@ -3,7 +3,9 @@
 restart's lines and before the funds:
 
 - each continued leg: the day its record was written, its units and its stop GTT as the
-  stops supervisor knows it once the start phase is over (`continued_line`);
+  stops supervisor knows it once the start phase is over (`continued_line`); a
+  `positional_stops="rearm_daily"` leg's stop level and whether its day stop is placed yet,
+  as the start's warning of such legs says it (`_session_rearm.stop_at_start`);
 - the trading days of its exchange since that record on which no session ran: a stop GTT
   that fired on one is recorded at its child's limit, and targets reached then were
   missed (`missed_line`);
@@ -24,6 +26,7 @@ from typing import Any
 from ..calendar import default_calendar
 from ._carry_start import Carried
 from ._preflight_carry import missed_days, other_ledger_lines
+from ._session_rearm import rearm_daily, stop_at_start
 from ._session_trader import Trader
 from ._stops_report import stop_words
 
@@ -51,11 +54,10 @@ def carry_lines(session: Any) -> list[str]:
 def continued_line(session: Any, trader: Trader, carried: Carried) -> str:
     """The line of a continued leg (module docstring)."""
     units = trader.open_units()
-    held = (
-        f"{units:g} {trader.symbol} {trader.exchange}, {stop_words(session.stops, trader)}"
-        if units
-        else "flat now"
+    stop = (
+        stop_at_start(session, trader) if rearm_daily(trader) else stop_words(session.stops, trader)
     )
+    held = f"{units:g} {trader.symbol} {trader.exchange}, {stop}" if units else "flat now"
     return f"{trader.name}: continued from its day-close record of {carried.record.day}: {held}"
 
 

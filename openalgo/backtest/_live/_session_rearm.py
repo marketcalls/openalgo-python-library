@@ -13,19 +13,23 @@ the next start, and the user is told so at every start and every close (decision
   whether its day stop is placed yet (placed, sent and not confirmed yet, waiting for the
   open, or not placed), then the trading days since the leg's last close on which no
   session ran (`_preflight_carry.missed_days`). Each is a warning of the session: printed
-  in the banner and kept in `SessionResult.warnings`.
+  in the banner and kept in `SessionResult.warnings`. The banner's line of a leg continued
+  from its day-close record gives its stop in the same words (`stop_at_start`,
+  `_carry_lines`).
 - **Before its day stop is placed** a leg with a stop level counts as guarded
   (`rearm_guarded`), never as a position opened with no stop; while the market is closed
   (`market_closed`) its units are uncovered for `_stops_cover.MARKET_CLOSED` in the
   result's unprotected table: `protect` answers `waits_for_open` before the open, which is
   no alert.
-- **At every close** (`warn_at_close`, the session's end, a Ctrl+C, an error): one alert
-  listing each carried leg with its units and stop level, as without a stop at the broker
-  until the next start, then the sentence (a future the exchange settles today is left
-  out: it is not carried past its expiry, `_session_expiry`); the same lines in
-  `SessionResult.warnings` and
-  in the daily summary. `AlertKind` has no WARN kind, so it goes as a SESSION alert whose
-  text begins "WARNING:"; the console prints its lines as the session's warnings.
+- **At every close** (`warn_at_close`, the session's end, a Ctrl+C, an error): one WARN
+  alert (urgent, as the design's WARN; review round 4 of unit N5a) listing each carried leg
+  with its units and stop level, as without a stop at the broker until the next start,
+  then the sentence (a future the exchange settles today is left out: it is not carried
+  past its expiry, `_session_expiry`); the same lines in `SessionResult.warnings` and in
+  the daily summary, and the console prints them as the session's warnings. The close's
+  alert of the carried legs (`_carry_close`) gives each such leg's stop in the same words
+  (`stop_at_close`), so the two never disagree and neither says a stop rests at the
+  broker overnight.
 
 Quantities are signed units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -44,8 +48,6 @@ from ._session_expiry import settles_today
 from ._stops_gtt import overnight, stop_gtt
 from ._types import AlertKind
 
-#: How the close's alert begins: the design's WARN alert (module docstring).
-WARNING_PREFIX = "WARNING: "
 #: What each carried leg's line says at the close.
 NO_STOP_UNTIL_START = "no stop at the broker until your next start"
 #: The same, for a leg whose day stop still works (a Ctrl+C that keeps it before the close).
@@ -106,12 +108,27 @@ def rearm_guarded(trader: Any) -> bool:
 
 def leg_line(trader: Any) -> str:
     """A carried leg in a line's words: "CncHold 10 SBIN NSE (CNC), stop 497.00"."""
-    level = stop_level(trader)
-    stop = "no stop level" if level is None else f"stop {level:.2f}"
     return (
         f"{trader.name} {trader.open_units():g} {trader.symbol} {trader.exchange} "
-        f"({trader.product}), {stop}"
+        f"({trader.product}), {_level_words(trader)}"
     )
+
+
+def stop_at_start(session: Any, trader: Any) -> str:
+    """A carried rearm_daily leg's stop at the start, in a line's words (module docstring):
+    "stop 497.00: its day stop waits for the open"."""
+    return f"{_level_words(trader)}: {_day_stop_words(session, trader)}"
+
+
+def stop_at_close(session: Any, trader: Any) -> str:
+    """A carried rearm_daily leg's stop from the close's moment on, in a line's words
+    (module docstring): "stop 497.00: no stop at the broker until your next start"."""
+    return f"{_level_words(trader)}: {_at_close_words(session, trader)}"
+
+
+def _level_words(trader: Any) -> str:
+    level = stop_level(trader)
+    return "no stop level" if level is None else f"stop {level:.2f}"
 
 
 def warn_at_start(session: Any) -> None:
@@ -145,9 +162,8 @@ def warn_at_close(session: Any) -> tuple[str, ...]:
         return ()
     lines = tuple(f"{leg_line(trader)}: {_at_close_words(session, trader)}" for trader in legs)
     session.alert(
-        AlertKind.SESSION,
-        f'{WARNING_PREFIX}positional_stops="{REARM_DAILY}": {"; ".join(lines)}. '
-        f"{REARM_DAILY_SENTENCE}",
+        AlertKind.WARN,
+        f'positional_stops="{REARM_DAILY}": {"; ".join(lines)}. {REARM_DAILY_SENTENCE}',
     )
     for line in lines:
         session.warn(line)
@@ -202,12 +218,13 @@ __all__ = [
     "DAY_STOP_WAITS",
     "NO_STOP_UNTIL_START",
     "STOP_UNTIL_CLOSE",
-    "WARNING_PREFIX",
     "day_orders",
     "leg_line",
     "market_closed",
     "rearm_daily",
     "rearm_guarded",
+    "stop_at_close",
+    "stop_at_start",
     "stop_level",
     "warn_at_close",
     "warn_at_start",

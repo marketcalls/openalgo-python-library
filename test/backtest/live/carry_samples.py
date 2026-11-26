@@ -170,8 +170,8 @@ def missed_day(world: Any, day: dt.date, prices: tuple[tuple[tuple[int, int], fl
 
 def to_day(world: Any, day: dt.date, *, start: tuple[int, int, int] = START) -> None:
     """End the fake's current day and move to `day`'s session start (module docstring),
-    SBIN trading every 10 s from then at the script's price."""
-    _next(world, day)
+    or to the IST time `start`, SBIN trading every 10 s from then at the script's price."""
+    _next(world, day, start)
     fake = world.fake
     start_ns = on(day, *start)
     world.script.sleep((start_ns - fake.clock.now()) / NS)
@@ -181,9 +181,10 @@ def to_day(world: Any, day: dt.date, *, start: tuple[int, int, int] = START) -> 
         _future_trades(world, start_ns, on(day, *TRADES_UNTIL))
 
 
-def _next(world: Any, day: dt.date) -> None:
+def _next(world: Any, day: dt.date, start: tuple[int, int, int] = START) -> None:
     """End the fake's day and seed flat candles of SBIN (and of `FUTURE`, which the
-    world may trade) from the last day's start to `day`'s session start."""
+    world may trade) from the last day's start to `day`'s session start (none of `day`
+    for a start before the open)."""
     fake, calendar = world.fake, default_calendar()
     fake.end_day()
     _, last_close = calendar.session("NSE", world.day)
@@ -193,7 +194,7 @@ def _next(world: Any, day: dt.date) -> None:
         priced.append((world.future, "NFO", FUTURE_PRICE))
     for symbol, exchange, price in priced:
         rows = flat_minutes(on(world.day, 14, 40), last_close, price)
-        rows += flat_minutes(opens, on(day, *START[:2]), price)
+        rows += flat_minutes(opens, on(day, *start[:2]), price)
         fake.seed_candles(symbol, exchange, rows)
     world.day = day
 
