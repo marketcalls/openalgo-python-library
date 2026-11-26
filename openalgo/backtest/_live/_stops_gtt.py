@@ -45,8 +45,16 @@ CHECK_THEN_PLACE = f"check the order book and the position, then {PLACE_GTT_BY_H
 
 
 def overnight(trader: Any) -> bool:
-    """Whether `trader` trades CNC or NRML: its leg's stop is a GTT."""
+    """Whether `trader` trades CNC or NRML: its leg is carried overnight, never squared off
+    (its stop is a GTT unless it chose `positional_stops="rearm_daily"`, `stop_gtt`)."""
     return trader.product in OVERNIGHT_PRODUCTS
+
+
+def stop_gtt(trader: Any) -> bool:
+    """Whether `trader`'s leg stop is a SINGLE GTT at the broker: a CNC or NRML strategy
+    with `positional_stops="gtt"`. With `"rearm_daily"` its stop is a day stop order, as an
+    MIS leg's is, and the supervisor follows it as one (20-positional-live 6)."""
+    return overnight(trader) and trader.part.spec.stop_gtt
 
 
 def stop_gtts(trader: Any) -> list[dict[str, Any]]:
@@ -189,6 +197,7 @@ __all__ = [
     "gtt_waiting",
     "gtt_words",
     "overnight",
+    "stop_gtt",
     "resting_gtts",
     "stop_gtts",
 ]

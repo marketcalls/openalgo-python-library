@@ -87,8 +87,8 @@ def test_a_stop_gtt_fired_on_a_missed_day_is_recorded_at_its_limit_with_both_fla
         "flagged price_unverified, missed_day; the contract note holds the true price"
     ]
     assert alerts(caplog, "exit") == [
-        f"{mode} (CncKept): SELL 10 SBIN NSE at {GTT_LIMIT:.2f} (exit: stop level; flagged "
-        f"price_unverified, missed_day, order {missed_child_id(trigger_id)})"
+        f"{mode} (CncKept): SELL 10 SBIN NSE at {GTT_LIMIT:.2f} (exit: stop level, "
+        f"order {missed_child_id(trigger_id)}, flagged price_unverified, missed_day)"
     ]
     # Counted in today's figures: the trade closes on Wednesday.
     assert outcome.summary.closed_trades == 1

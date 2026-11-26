@@ -26,8 +26,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ._session_expiry import settles_today
+from ._session_rearm import day_orders, rearm_daily
 from ._session_trader import Trader
-from ._stops_gtt import overnight
+from ._stops_gtt import gtt_cancelling, gtt_cover, gtt_waiting, overnight
 from ._types import AlertKind
 
 #: How a session ended by the day (1.4 `stopped_by`).
@@ -78,10 +80,26 @@ class DayEnd:
         return None, False
 
     def _carried_done(self, now_ns: int) -> bool:
-        """Whether the carried legs let the session end (module docstring)."""
+        """Whether the carried legs let the session end (module docstring): the close's GTT
+        book read judged, and every carried leg's own close answered (`_closing`), so the
+        lines see where it ended."""
         if self._carry_ns is None or now_ns < self._carry_ns:
             return False
+        if any(self._closing(trader) for trader in self._session.traders):
+            return False
         return bool(self._session.news.carry.confirmed())
+
+    def _closing(self, trader: Trader) -> bool:
+        """Whether `trader`'s carried leg is still closing: a `positional_stops="rearm_daily"`
+        leg with a DAY order working (its day stop's end at the close not answered yet; the
+        strategy's own GTT orders rest overnight, `_session_rearm.day_orders`), or a future
+        the exchange settles today whose stop GTT rests or is being cancelled (the kernel
+        cancels it at the close, `_session_expiry`)."""
+        if rearm_daily(trader):
+            return bool(day_orders(trader))
+        if settles_today(trader, self._session.parts.spec.day):
+            return bool(gtt_cover(trader) or gtt_cancelling(trader) or gtt_waiting(trader))
+        return False
 
     def _not_flat(self, trader: Trader) -> None:
         exits = [trader.order_name(kernel_order) for kernel_order in trader.working()]

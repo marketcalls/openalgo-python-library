@@ -119,6 +119,24 @@ def test_any_other_answer_refuses_the_start_with_the_servers_message(fake_openal
     )
 
 
+def test_with_rearm_daily_another_answer_still_refuses_in_words_true_of_that_run(fake_openalgo):
+    # No stop is a GTT with rearm_daily, but the session reads the GTT book for every CNC
+    # and NRML leg (a strategy's own GTT orders among them), so the start cannot go on.
+    fake_openalgo.faults.gateway_error("gttorderbook", status=503)
+
+    check = gtt_check(
+        fake_openalgo.client(), mode=Mode.LIVE, broker=BROKER, positional_stops="rearm_daily"
+    )
+
+    assert not check.ok
+    assert check.message == (
+        "the start cannot tell whether zerodha holds GTT orders: OpenAlgo's GTT book answered "
+        'HTTP 503: Endpoint request timed out. With positional_stops="rearm_daily" no stop is '
+        "a GTT, but the session reads the GTT book for its CNC and NRML positions and the "
+        "strategies' own GTT orders: check OpenAlgo and the broker's login, then start again"
+    )
+
+
 def test_a_gateways_page_is_quoted_with_its_http_status_once(fake_openalgo):
     fake_openalgo.faults.bad_gateway_page("gttorderbook")
 

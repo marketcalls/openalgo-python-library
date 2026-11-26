@@ -13,6 +13,7 @@ import numbers
 from dataclasses import dataclass
 from typing import Any
 
+from .._risk_settings import GTT_STOPS
 from ..errors import ConfigError, PreflightError
 from ..reference import Instrument
 from ._types import AlertsLike, Mode
@@ -49,8 +50,10 @@ class PreflightPlan:
     futures and options as the reference tables resolved them, whose expiry is checked
     against OpenAlgo's master contract (`_preflight_expiry`; a list is kept as a tuple).
     `gtt` is True for a session with a CNC or NRML strategy, whose stops rest at the broker
-    as GTTs: the GTT capability check runs (`_preflight_gtt`). `carried` are the positions
-    the session continues from earlier days, each with the rupees of the account's cash it
+    as GTTs: the GTT capability check runs (`_preflight_gtt`), with `positional_stops`, how
+    the session holds those stops overnight ("gtt", the default, or "rearm_daily" when
+    every CNC and NRML strategy of the session chose it). `carried` are the positions the
+    session continues from earlier days, each with the rupees of the account's cash it
     holds (`_preflight_carry.held_rupees`): the funds check sets the cash against the
     capital less them (`_preflight_carry.funds_with_carry`).
 
@@ -73,6 +76,7 @@ class PreflightPlan:
     contracts: tuple[Instrument, ...] = ()
     gtt: bool = False
     carried: tuple[tuple[Any, float], ...] = ()
+    positional_stops: str = GTT_STOPS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", _instrument_pairs(self.instruments))

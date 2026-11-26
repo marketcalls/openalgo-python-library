@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .._calendar_convert import format_ist
+from .._products import OVERNIGHT_PRODUCTS
 from ..calendar import default_calendar
 from ..report._format import indian_digits
 from ._carry_lines import carry_lines
@@ -45,6 +46,13 @@ POSITIONAL_STOPS_LINE = (
     "CNC and NRML: each position's stop rests at the broker as a SINGLE GTT, kept overnight; "
     "its targets are held by the session while it runs"
 )
+#: The banner's line on the stops of CNC and NRML strategies that chose
+#: `positional_stops="rearm_daily"` (20-positional-live 6), naming them.
+REARM_STOPS_LINE = (
+    'CNC and NRML with positional_stops="rearm_daily" ({names}): each position\'s stop is a '
+    "day stop order at the broker, placed at each session's open and ended by its close; its "
+    "targets are held by the session while it runs"
+)
 #: What Ctrl+C does with CNC and NRML positions, by `on_stop` (20-positional-live 10.2).
 ON_STOP_LINES = {
     None: (
@@ -54,6 +62,13 @@ ON_STOP_LINES = {
     "flatten": "Ctrl+C: exits every position, CNC and NRML too (on_stop='flatten')",
     "keep": "Ctrl+C: keeps every position open with its stop at the broker (on_stop='keep')",
 }
+#: What Ctrl+C does by default in a session with a `positional_stops="rearm_daily"`
+#: strategy, whose stop at the broker is a day order (20-positional-live 6 and 10.2).
+ON_STOP_REARM_LINE = (
+    "Ctrl+C: exits the MIS positions and keeps the CNC and NRML positions open with their "
+    "stops at the broker, a rearm_daily day stop until the close only (on_stop default; "
+    "on_stop='flatten' exits them all)"
+)
 
 
 def banner_lines(session: Any) -> list[str]:
@@ -135,14 +150,26 @@ def strategy_lines(session: Any) -> list[str]:
 
 def positional_lines(spec: Any, mode: Mode) -> list[str]:
     """The banner's lines of a session with a CNC or NRML strategy (20-positional-live 2,
-    5 and 10.2): how their stops are held, in `mode` SANDBOX that the live broker's GTT
-    support is checked in LIVE mode only (`SANDBOX_GTT_LINE`), and what Ctrl+C does with
-    their positions by `on_stop` (`ON_STOP_LINES`); none for an MIS-only session, whose
-    banner is as before."""
+    5, 6 and 10.2): how their stops are held (a stop GTT, `POSITIONAL_STOPS_LINE`, or a day
+    stop for those that chose `positional_stops="rearm_daily"`, `REARM_STOPS_LINE`), in
+    `mode` SANDBOX that the live broker's GTT support is checked in LIVE mode only
+    (`SANDBOX_GTT_LINE`), and what Ctrl+C does with their positions by `on_stop`
+    (`ON_STOP_LINES`, `ON_STOP_REARM_LINE` by default beside a rearm_daily strategy);
+    none for an MIS-only session, whose banner is as before."""
     if not spec.gtt_legs:
         return []
+    held = [POSITIONAL_STOPS_LINE] if spec.positional else []
+    rearm = [
+        each.name
+        for each in spec.strategies
+        if each.product in OVERNIGHT_PRODUCTS and not each.stop_gtt
+    ]
+    if rearm:
+        held.append(REARM_STOPS_LINE.format(names=", ".join(rearm)))
     sandbox = [SANDBOX_GTT_LINE] if mode is Mode.SANDBOX else []
-    return [POSITIONAL_STOPS_LINE, *sandbox, ON_STOP_LINES[spec.arguments.on_stop]]
+    on_stop = spec.arguments.on_stop
+    ctrl_c = ON_STOP_REARM_LINE if rearm and on_stop is None else ON_STOP_LINES[on_stop]
+    return [*held, *sandbox, ctrl_c]
 
 
 def daily_limit_words(risk: Mapping[str, Any]) -> str:
@@ -202,7 +229,9 @@ __all__ = [
     "BANNER_ALERT_LINES",
     "CARRIED_WORDS",
     "ON_STOP_LINES",
+    "ON_STOP_REARM_LINE",
     "POSITIONAL_STOPS_LINE",
+    "REARM_STOPS_LINE",
     "STOPS_LINE",
     "account_limit_lines",
     "banner_lines",

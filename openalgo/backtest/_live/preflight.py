@@ -73,7 +73,7 @@ from ..errors import ConfigError
 from ._preflight_calendar import holiday_check
 from ._preflight_carry import funds_with_carry
 from ._preflight_clock import clock_check
-from ._preflight_gtt import GTT_STOPS, gtt_check
+from ._preflight_gtt import gtt_check
 from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
 from ._preflight_lock import LOCK_FILE_NAME, AccountLock
 from ._preflight_plan import (
@@ -145,8 +145,9 @@ def check_preflight(
         holidays, disagrees = holiday_check(client, exchanges, now_ns, calendar)
         checks += [holidays, clock_check(client, now)]
         if plan.gtt:
+            stops = plan.positional_stops
             checks.append(
-                gtt_check(client, mode=plan.mode, broker=server.broker, positional_stops=GTT_STOPS)
+                gtt_check(client, mode=plan.mode, broker=server.broker, positional_stops=stops)
             )
     if plan.tested_alerts is not None:
         checks.append(plan.tested_alerts)

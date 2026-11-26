@@ -14,7 +14,9 @@ at every start, never from a list kept in the SDK (OpenAlgo adds GTT to more bro
   (`REARM_DAILY_SENTENCE`); unless the run chose `rearm_daily` already, which holds each
   carried position's stop as a day order placed at each start. Any other answer refuses
   the start: it cannot tell, and says so with the server's message
-  (`_preflight_answers.answer_reason`).
+  (`_preflight_answers.answer_reason`); with `rearm_daily` too, since the session still
+  reads the GTT book for every CNC and NRML leg (`SessionSpec.gtt_legs`), a strategy's own
+  `validity="gtt"` orders among them, and the words say so.
 - **SANDBOX mode**: no call. OpenAlgo answers every GTT call from the sandbox before it
   looks at the broker, so it would succeed for any broker; the check passes with the
   banner line `SANDBOX_GTT_LINE`.
@@ -28,6 +30,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+# How a position's stop is held overnight: `bt.backtest`'s names, re-exported (one source).
+from .._risk_settings import GTT_STOPS, POSITIONAL_STOPS, REARM_DAILY
 from ..errors import ConfigError
 from ._answers import server_answer
 from ._guard_answers import SUCCESS
@@ -35,11 +39,6 @@ from ._preflight_answers import answer_reason, switch_changed
 from ._preflight_plan import WARNING, Check
 from ._types import Mode, mode_of
 
-#: How a CNC or NRML position's stop is held overnight (20-positional-live 6): a GTT at the
-#: broker (the default), or a day stop placed again at each start.
-GTT_STOPS = "gtt"
-REARM_DAILY = "rearm_daily"
-POSITIONAL_STOPS = (GTT_STOPS, REARM_DAILY)
 #: The name of the check.
 GTT_CHECK = "gtt"
 #: OpenAlgo's answer for a broker that ships no GTT module: its HTTP status, and the words
@@ -88,12 +87,18 @@ def gtt_check(client: GttBookClient, *, mode: Mode, broker: str, positional_stop
         return _supported(broker, rearm=rearm)
     if _not_supported(answer):
         return _unsupported(broker, answer_reason(answer), rearm=rearm)
+    why = (
+        f'With positional_stops="{REARM_DAILY}" no stop is a GTT, but the session reads the '
+        "GTT book for its CNC and NRML positions and the strategies' own GTT orders"
+        if rearm
+        else "A CNC or NRML position needs a GTT to keep its stop at the broker overnight"
+    )
     return Check(
         GTT_CHECK,
         False,
         f"the start cannot tell whether {broker} holds GTT orders: OpenAlgo's GTT book "
-        f"answered {answer_reason(answer)}. A CNC or NRML position needs a GTT to keep its "
-        "stop at the broker overnight: check OpenAlgo and the broker's login, then start again",
+        f"answered {answer_reason(answer)}. {why}: check OpenAlgo and the broker's login, "
+        "then start again",
     )
 
 

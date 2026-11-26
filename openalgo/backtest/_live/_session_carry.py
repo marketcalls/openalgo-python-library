@@ -54,8 +54,9 @@ from ._carry_record import LegReference, write_day_close
 from ._carry_start import REFERENCES_KEY, UNCONFIRMED_KEY
 from ._gtt_types import GttBookSeen, GttEvent, GttOutcome, ReadGtts
 from ._own_fills import POSITION_BOOK_LAG_S
+from ._session_expiry import settles_today
 from ._session_trader import Trader
-from ._stops_gtt import PLACE_GTT_BY_HAND, RESTING, overnight, resting_gtts, stop_gtts
+from ._stops_gtt import PLACE_GTT_BY_HAND, RESTING, overnight, resting_gtts, stop_gtt, stop_gtts
 from ._stops_kernel import protect
 from ._types import LOGGER_NAME, AlertKind, Purpose
 from ._venue_gtt_known import KernelGtt
@@ -106,10 +107,18 @@ class CarriedLegs:
         """The CNC and NRML strategies holding a position."""
         return [t for t in self._session.traders if overnight(t) and t.open_units() != 0]
 
+    def held_by_gtt(self) -> list[Trader]:
+        """The carried legs whose stop is a GTT: those the close's GTT book read confirms
+        (a `positional_stops="rearm_daily"` leg's day stop ends at the close,
+        `_session_rearm`; a future the exchange settles today has its stop GTT cancelled
+        at the close, `_session_expiry`)."""
+        day = self._session.parts.spec.day
+        return [t for t in self.carried() if stop_gtt(t) and not settles_today(t, day)]
+
     def confirmed(self) -> bool:
         """Whether the close's GTT book read has been judged (module docstring); asks for
-        it at the first call. True at once with no leg carried."""
-        if not self.carried():
+        it at the first call. True at once with no leg carried by a stop GTT."""
+        if not self.held_by_gtt():
             return True
         if not self._asked:
             self._asked = True
@@ -121,7 +130,7 @@ class CarriedLegs:
         if not self._asked:
             return
         self._seen = message
-        for trader in self.carried():
+        for trader in self.held_by_gtt():
             leg = (trader.symbol, trader.exchange, trader.product)
             units = message.units.get(leg)
             if units is not None:

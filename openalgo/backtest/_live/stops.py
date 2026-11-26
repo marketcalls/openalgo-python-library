@@ -47,14 +47,15 @@ from ._group_rules import and_join
 from ._gtt_types import GttRequest
 from ._order_answers import Outcome
 from ._order_book import Resolution, Resolved
+from ._session_rearm import market_closed, rearm_daily, rearm_guarded
 from ._session_trader import Trader
 from ._stops_after import AfterLines
 from ._stops_alerts import held_back, instrument_held_by, stop_moved, unbound_add
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
-from ._stops_cover import Windows, reason_of
+from ._stops_cover import MARKET_CLOSED, Windows, reason_of
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
-from ._stops_gtt import gtt_cover, gtt_guarded, overnight
+from ._stops_gtt import gtt_cover, gtt_guarded, stop_gtt
 from ._stops_held import HeldWords
 from ._stops_held_day import DayHolds
 from ._stops_kernel import cancelling, push_price
@@ -277,7 +278,12 @@ class StopsSupervisor:
             # An entry the order book cannot tell apart: its units count whatever the rules.
             unsure = abs(leg.ambiguous_entry_units())
             key = (trader.name, trader.symbol, trader.exchange)
-            guarded = leg.guarded or (overnight(trader) and gtt_guarded(trader))
+            guarded = (
+                leg.guarded
+                or (stop_gtt(trader) and gtt_guarded(trader))
+                # A rearm_daily leg with a stop level, its day stop not placed yet.
+                or rearm_guarded(trader)
+            )
             if units == 0 and not leg.unbound_add_units and not unsure:
                 leg.flat()
             elif not guarded and not unsure:
@@ -294,6 +300,9 @@ class StopsSupervisor:
                     held_by_other=instrument_held_by(self._session, self, trader) is not None,
                     closing_rejected=self._session.margin.unprotected_reason(trader),
                 )
+                # A rearm_daily leg has no day stop while the market is closed (`_session_rearm`).
+                if rearm_daily(trader) and market_closed(trader, now_ns):
+                    reason = MARKET_CLOSED
                 opened = self.windows.note(key, uncovered, reason, span)
                 if opened is not None:
                     self._session.event(
@@ -312,9 +321,9 @@ class StopsSupervisor:
         """The units the leg's confirmed stop may still fill at the broker now, by the terms
         the broker confirmed (the venue map's, whatever modify or cancel of it waits), so
         more than the position until a sale by hand is fitted; none once a cancel of it
-        was sent (the broker may have cancelled it already). A CNC or NRML leg's are its
+        was sent (the broker may have cancelled it already). A leg whose stop is a GTT has its
         confirmed stop GTTs' (`_stops_gtt`)."""
-        if overnight(trader):
+        if stop_gtt(trader):
             return gtt_cover(trader)
         leg = self.leg(trader)
         kernel_order = leg.stop

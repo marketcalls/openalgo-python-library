@@ -45,6 +45,8 @@ from fake_openalgo import FakeOpenAlgo
 
 from openalgo.backtest._engine import call
 from openalgo.backtest._live._order_state import ENTRY_PURPOSES
+from openalgo.backtest._live._session_expiry import settles_today
+from openalgo.backtest._live._session_rearm import market_closed, rearm_daily
 from openalgo.backtest._live._types import Mode
 
 #: The checks of 7.1 (`session_invariants`), by the name a waiver gives.
@@ -266,6 +268,13 @@ class SessionTrace:
             raise ValueError(f"no check {check!r}: use one of {sorted(CHECKS)}")
         self.waived[check] = reason
 
+    def carried(self, mode: Mode, symbol: str, exchange: str, units: int) -> None:
+        """The account holds `units` (signed) of `exchange:symbol` in book `mode` before the
+        runs, a position carried from an earlier day (CNC units in the holdings): the
+        fills of the runs count from them."""
+        key = (mode, symbol, exchange)
+        self._positions[key] = self._positions.get(key, 0) + units
+
     def check_now(self, check: Callable[[SessionTrace, FakeOpenAlgo], None]) -> None:
         """Run `check` over this trace now, inside the test, and not again when it ends:
         for a self-test of the invariants that expects `check` to raise InvariantBroken
@@ -378,6 +387,11 @@ def closing_of(session: Any, trader: Any) -> Closing | None:
     except Exception:
         return None
     wants = any(leg.get("stop") is not None for leg in state.get("legs", []))
+    # A positional_stops="rearm_daily" leg holds no stop at the broker while the market is
+    # closed: its day stop ends at the close (20-positional-live 6).
+    wants = wants and not (rearm_daily(trader) and market_closed(trader, session.now()))
+    # A future the exchange settles today has its stop GTT cancelled at the close (9).
+    wants = wants and not settles_today(trader, session.parts.spec.day)
     order_ids = frozenset(bound[k] for k in working if bound.get(k))
     unbound = len(working) - len(order_ids)
     return Closing(

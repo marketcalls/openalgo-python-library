@@ -2,7 +2,10 @@
 10), split from `_session_news` so each module keeps one job: through the order's venue map
 and fill ledger to the kernel, then the stops supervisor; ENTRY, EXIT and REJECT alerts
 with the order IDs, an EXIT alert with the order's exit reason (`_exit_reasons`), an ENTRY
-or EXIT alert of a session of several strategies with the strategy's name after its kind;
+or EXIT alert of a session of several strategies with the strategy's name after its kind,
+and the flags the kernel puts on the order's fills (`Engine.order_flags`: `late_decision`
+for an order of a pre-open decision made after the open, `stop_crossed`, ...), read before
+the fill ends the order;
 a fill the kernel refuses is a reconciliation mismatch: the strategy's entries are locked
 and a RECONCILE_MISMATCH alert sent.
 
@@ -17,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from .._engine import call
 from ._exit_reasons import exit_reason, exit_words
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_state import ENTRY_PURPOSES
@@ -47,6 +51,10 @@ class FillNews(ResolutionNews):
         if update.status is OrderStatus.REJECTED and kernel_order is not None:
             self._closing_rejected(trader, kernel_order, update)
         before = trader.open_units()
+        # Read before the fill: the kernel names an order's flags while it works only.
+        order_flags = (
+            () if kernel_order is None else tuple(call(trader.engine.order_flags, kernel_order))
+        )
         result = trader.venue.news(update, flags)
         if result.increment is not None:
             trader.records.filled(before, trader.open_units())
@@ -67,7 +75,8 @@ class FillNews(ResolutionNews):
             session.reconcile.filled(trader, update.ts_recv_ns)
             reason = exit_reason(trader, result.kernel_order, intent.purpose)
             words = None if reason is None else exit_words(trader, result.kernel_order, reason)
-            self._fill_alert(intent, update, result.increment, words, flags)
+            both = tuple(dict.fromkeys((*order_flags, *flags)))
+            self._fill_alert(intent, update, result.increment, words, both)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
@@ -98,15 +107,13 @@ class FillNews(ResolutionNews):
         flags: tuple[str, ...],
     ) -> None:
         """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
-        the exit reason of an order that closes a position (`_exit_reasons`), the fill's
-        `flags` when it has any, and in a session of several strategies, first, the
-        strategy whose order filled."""
+        the exit reason of an order that closes a position (`_exit_reasons`), in a session
+        of several strategies, first, the strategy whose order filled, and last the fill's
+        `flags`: the kernel's flags of the order, then the venue's (`_session_gtts`)."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
         why = intent.purpose.value
         if words is not None:
             why = f"{why}: {words}"
-        if flags:
-            why = f"{why}; flagged {', '.join(flags)}"
         session = self._session
         # The alert's prefix lists every strategy of the session, so with several the line
         # says whose order it was (2.4.0 item P5-1); a session of one keeps its old line.
@@ -128,7 +135,7 @@ class FillNews(ResolutionNews):
         self._session.alert(
             kind,
             f"{named}{intent.action} {increment.units} {intent.symbol} {intent.exchange} at "
-            f"{increment.price:.2f} ({why}, order {update.order_id})",
+            f"{increment.price:.2f} ({why}, order {update.order_id}{_flagged(flags)})",
         )
 
     def _mismatch(self, trader: Trader, update: OrderUpdate) -> None:
@@ -143,6 +150,11 @@ class FillNews(ResolutionNews):
             "of the strategy are locked for the rest of the session and nothing is sent to "
             "fix it. Check the position and the order in OpenAlgo",
         )
+
+
+def _flagged(flags: tuple[str, ...]) -> str:
+    """A fill's flags in its alert's words: ", flagged late_decision"; "" for none."""
+    return f", flagged {', '.join(flags)}" if flags else ""
 
 
 __all__ = ["RECONCILE_LOCK", "FillNews"]

@@ -34,6 +34,9 @@ AMBIGUOUS_ORDER = "ambiguous order"
 INSTRUMENT_HELD = "instrument held by another strategy's order"
 REFUSED_FOR_MARGIN = "closing order refused for margin"
 CLOSE_REJECTED = "closing order rejected"
+#: A `positional_stops="rearm_daily"` leg while the market is closed: its day stop is
+#: placed at the open and ends at the close (20-positional-live 6, `_session_rearm`).
+MARKET_CLOSED = "no day stop while the market is closed"
 REASONS = (
     STOP_UNCONFIRMED,
     STOP_HELD,
@@ -46,6 +49,7 @@ REASONS = (
     INSTRUMENT_HELD,
     REFUSED_FOR_MARGIN,
     CLOSE_REJECTED,
+    MARKET_CLOSED,
 )
 
 
@@ -170,6 +174,7 @@ __all__ = [
     "CLOSE_REJECTED",
     "HELD_CANCEL",
     "INSTRUMENT_HELD",
+    "MARKET_CLOSED",
     "REASONS",
     "REFUSED_FOR_MARGIN",
     "STOP_ENDED",

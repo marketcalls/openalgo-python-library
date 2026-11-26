@@ -3,8 +3,7 @@ list of strategies and for `bt.live`.
 
 A per-strategy setting (`PER_STRATEGY`) takes one value for every strategy, or a dict keyed
 by strategy class name ({"SbinTrend": 200_000, "SbinBreakout": 150_000}); `bt.live` takes
-every one of them but `product` and `base`, which a live session refuses, and
-`positional_stops`, which it does not read yet. A key that names
+every one of them but `product` and `base`, which a live session refuses. A key that names
 no strategy of the call is refused, naming the strategies it may name. A strategy the dict
 leaves out is refused where the setting must be given for each one (`capital`, and every
 setting but `params` and, in `bt.live`, `max_daily_loss`, which its plan checks for each

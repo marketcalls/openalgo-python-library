@@ -43,7 +43,10 @@ after the Reconcile line (18-multi-strategy 4.11): "SBIN NSE (A and B): OpenAlgo
 by the last read, their sum 90: they agree"; a session with none prints none. A CNC or NRML
 leg the session leaves open has a "Carried" line before the end state (20-positional-live
 4.1): "CncHold SBIN NSE 10 units entered on 2026-11-16 at 500.00, stop 497.00: stop GTT
-261116000001 confirmed at the broker, trigger 497.00 for 10 units".
+261116000001 confirmed at the broker, trigger 497.00 for 10 units". A "Warning" line
+before the end state carries each warning the close gives the day (a
+`positional_stops="rearm_daily"` leg carried with no stop at the broker until the next
+start, `_session_rearm`); a session with none prints none.
 
 Rupees are written as `Result.summary()` writes them (Indian digit grouping, a loss as
 "Rs -500.00"). `alerts` re-exports both names.
@@ -117,12 +120,13 @@ class SessionSummary:
     set none. `versions` are the strategies' version ids, in the order of `strategies`
     (none: not given). `carried` names, in words, each CNC or NRML leg the session leaves
     open with its stop GTT and its status (`_carry_close`), none when it carries none.
+    `warnings` are the close's warnings in words, one line each.
 
     Raises ConfigError when a rupee figure or the seconds unprotected is not a finite
     number (None is allowed for `slippage`, `stop_slippage` and `notes_charges`), when
     the seconds unprotected are negative, when a count is not a whole number of at least
-    zero, when a leg of `differing`, `unconfirmed`, `shared` or `limits` is not named in
-    words, when `differing` names more legs than the mismatches counted, or when
+    zero, when a leg of `differing`, `unconfirmed`, `shared`, `limits` or `warnings` is
+    not named in words, when `differing` names more legs than the mismatches counted, or when
     `versions` are given and are not one id in words per strategy.
     """
 
@@ -150,6 +154,7 @@ class SessionSummary:
     stop_slippage_not_compared: int = 0
     notes_charges: float | None = None
     carried: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _check_figure("gross_pnl", self.gross_pnl)
@@ -173,6 +178,7 @@ class SessionSummary:
         _check_legs("earlier", self.earlier)
         _check_legs("shared", self.shared)
         _check_legs("limits", self.limits)
+        _check_legs("warnings", self.warnings)
         _check_legs("versions", self.versions)
         _check_legs("carried", self.carried)
         if self.versions and len(self.versions) != len(self.strategies):
@@ -215,6 +221,7 @@ def summary_text(summary: SessionSummary) -> str:
     if summary.undelivered_alerts:
         lines.append(("Alerts", f"{summary.undelivered_alerts} not delivered"))
     lines += [("Carried", line) for line in summary.carried]
+    lines += [("Warning", line) for line in summary.warnings]
     end = ("flat" if summary.flat else "not flat: a position is still open") + at_close
     lines.append(("End state", end))
     width = max(len(label) for label, _ in lines)
