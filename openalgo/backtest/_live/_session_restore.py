@@ -29,7 +29,9 @@ broker locked from the start and, when other orders' trades explain the differen
 adopted; the exit guard opened for a leg whose broker holds fewer units (a leg whose
 restored engine holds other units than the start judged waits for a fresh read instead:
 `Reconciler.differs_at_start`); a CNC or NRML leg's GTTs taken back by the journal
-(`_session_restore_gtts`); each leg with a position given its stop again (`protect`, R7:
+(`_session_restore_gtts`, for a saved state of today: a carry's are taken back by
+`_carry_restore`, and a GTT its kernel places since, as a stop again, goes out once with
+the loop's commands); each leg with a position given its stop again (`protect`, R7:
 nothing when one works), or, for an MIS leg past its square-off, exited
 (`request_exit("square_off")`: a CNC or NRML leg is never squared off, it is carried at
 the close, 20-positional-live 7.3); the reconciler told what was adopted and which orders
@@ -279,7 +281,10 @@ def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> Non
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
         reconcile = session.reconcile
         reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
-    restore_gtts(session, trader, None if leg.saved is None else leg.saved.bindings)
+    if leg.saved is not None:
+        # A carry's GTTs were all taken back by `_carry_restore`; any other GTT of its
+        # kernel is one the kernel made since, whose place the loop sends (`commands`).
+        restore_gtts(session, trader, leg.saved.bindings)
     units = trader.open_units()
     if units == 0:
         return

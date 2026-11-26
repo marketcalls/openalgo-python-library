@@ -139,8 +139,10 @@ def restore_gtts(session: Any, trader: Trader, bindings: Mapping[int, int] | Non
     calls that never reached it, after the kernel's restore and before its leg is
     protected; `session` is the `_session_loop.Session`, `bindings` the journal's GTT of
     each kernel GTT the saved state kept (`_carry_restore.gtt_bindings`), by which a GTT
-    carried from an earlier day is found. A GTT the strategy's GTT map took back already
-    (`_carry_restore`) is left as it is."""
+    carried from an earlier day is found. Used for a saved state of today only: a carry
+    from an earlier day is taken back by `_carry_restore`, and a GTT its kernel places
+    since goes out with the loop's commands. A GTT the strategy's GTT map holds already is
+    left as it is."""
     gtts = trader.gtts
     if gtts is None or not overnight(trader):
         return

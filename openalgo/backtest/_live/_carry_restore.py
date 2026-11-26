@@ -17,10 +17,12 @@ step 11 once the plan's catch-up is done, for a strategy with nothing saved toda
   today (the start's read of the GTT book found it ended: its finding, on its way to the
   loop, applies it) is taken back as bound; one it ended on an earlier day (after that
   day's close) ended outside the session, so the kernel places the leg's stop again (as
-  a GTT older than 360 days the broker expires is: 20-positional-live 3.1, "expired");
-  any other is unsettled: entries locked with
-  an ERROR alert, never an exit (`_session_restore_gtts`). Each binding is kept with the
-  strategy's saved state (`gtt_bindings`), so a restart later today takes them back too.
+  a GTT older than 360 days the broker expires is: 20-positional-live 3.1, "expired"),
+  once, as the loop takes its commands, and held back by the exit guard while the
+  start's books show the leg short (`Reconciler.differs_at_start`); any other is
+  unsettled: entries locked with an ERROR alert, never an exit
+  (`_session_restore_gtts`). Each binding is kept with the strategy's saved state
+  (`gtt_bindings`), so a restart later today takes them back too.
 
 Quantities are signed whole units, prices rupees. Run by the main thread at the start.
 """
