@@ -29,15 +29,14 @@ from carry_samples import (
     on,
     to_day,
 )
+from crash_samples import rebuilt_line
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, MODES, calls, gtt_world, gtts
 from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import StopFlag, alerts
 from stops_samples import at_price
 
-from openalgo.backtest._live._carry_unrecorded import CHECK_BY_HAND
 from openalgo.backtest._live._types import LOGGER_NAME
-from openalgo.backtest.errors import PreflightError
 
 #: The calls that send anything to the broker.
 SENDS = (
@@ -79,23 +78,6 @@ def set_aside(name, record_day, saved_day, today):
         f"{name}: its day-close record of {record_day} is not continued, since its session "
         f"of {saved_day} changed what it held and ended without a record of its own, and "
         f"nothing of that session is left to carry: it starts flat on {today}"
-    )
-
-
-def refusal_binding(trigger_id, *, record_day):
-    """The refusal of `CncKept` whose session of Tuesday crashed before its close holding 10
-    SBIN CNC and Monday's stop GTT `trigger_id`, which its outdated day-close record of
-    `record_day` binds (the lead's ruling 1 of review round 4 of unit N5a), worked by hand."""
-    return (
-        f"CncKept: its session of {DAY2} stopped without its day-close record (the process "
-        "ended before the close) while holding a position, an order or a GTT, which this version "
-        "continues only by a restart of bt.live that same day, before the close; its stop GTT "
-        f"{trigger_id} of {DAY1} on NSE:SBIN (CNC) has not ended: its day-close record of "
-        f"{record_day} binds it, and a later session of {DAY2} outdates that record: "
-        f"{CHECK_BY_HAND}. The books show 10 SBIN NSE (CNC) held: if any of them are units of "
-        "your own, the start cannot tell them from the strategy's and never finds the leg "
-        "closed, so once the strategy's units are sold and its GTTs cancelled, start it under "
-        "another account name (account=)"
     )
 
 
@@ -177,8 +159,11 @@ def test_a_crash_on_a_continued_day_settled_by_hand_starts_flat_on_every_later_d
     world = carried_world(
         make_fake_openalgo, monkeypatch, tmp_path, CncKept, analyzer=analyzer, history=history
     )
+    # A book of active GTTs only shows the GTT cancelled by hand gone, as one that fired:
+    # the leg is continued as a record's and the sale by hand, of its shape, is its child.
     world.trace.waive("protected", "the session crashed: its windows end with it")
     world.trace.waive("books agree", "Tuesday's leg was closed by hand before Wednesday")
+    world.trace.waive("isolation", "a sale by hand of a fired GTT's shape is taken as its child")
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     crashing(monkeypatch)
     world.stop, world.feed = StopFlag(), None
@@ -187,11 +172,6 @@ def test_a_crash_on_a_continued_day_settled_by_hand_starts_flat_on_every_later_d
     run_to_crash(world, CncKept)
     assert held(world) == 10
     next_start(world, DAY3)
-
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
-
-    assert refused.value.failures == (refusal_binding(trigger_id, record_day=DAY1),)
     client = world.fake.client()
     client.cancelgttorder(trigger_id=trigger_id)
     client.placeorder(
@@ -295,13 +275,13 @@ def test_a_restart_the_day_a_record_was_set_aside_names_the_position_it_resumes(
 
 
 @MODES
-def test_a_restart_that_crashed_after_a_kept_ctrl_c_is_refused_naming_the_record_of_its_gtt(
+def test_a_restart_that_crashed_after_a_kept_ctrl_c_is_continued_from_its_last_save(
     make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
 ):
     # Tuesday continues Monday's carry and is stopped at 14:46, keeping the leg: Tuesday's
     # record binds Monday's stop GTT. A restart that day crashes at 14:50 with nothing
-    # changed, so its save outdates that record: Wednesday's start is refused, naming the
-    # record that binds the GTT and the restart that would have continued it.
+    # changed, so its save outdates that record: Wednesday's start continues the leg from
+    # that save (its last, at the 14:48 slice's release, 14:49:01), with Monday's stop GTT.
     world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, CncKept, analyzer=analyzer)
     world.trace.waive("protected", "the session crashed: its windows end with it")
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
@@ -315,8 +295,9 @@ def test_a_restart_that_crashed_after_a_kept_ctrl_c_is_refused_naming_the_record
     sent = len(calls(world, *SENDS))
     next_start(world, DAY3)
 
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
+    assert world.run(CncKept).stopped_by == "ctrl_c"
 
-    assert refused.value.failures == (refusal_binding(trigger_id, record_day=DAY2),)
+    assert rebuilt_line("CncKept", DAY2, "14:49:01", "14:49:01", 0) in world.lines
     assert calls(world, *SENDS)[sent:] == []
+    assert gtts(world)[0][:2] == ("active", 10)
+    assert trigger_id in {gtt.trigger_id for gtt in world.fake.gtts()}

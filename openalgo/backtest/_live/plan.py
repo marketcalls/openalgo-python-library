@@ -68,7 +68,7 @@ from ._bars_candle import candle_bar
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
 from ._plan_daily import DAILY, DailySeries, daily_candles, decides_before_open
-from ._plan_engine import bind_strategy, check_grid, session_engine
+from ._plan_engine import bind_strategy, check_grid, kernel_instruments, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
 from ._plan_strategies import StrategySpec, ist_day, refuse_shared_positional, strategy_spec
@@ -246,7 +246,8 @@ def _caught_up(plan: StrategyPlan, frame: pd.DataFrame, read_ns: int) -> tuple[s
 def _strategy_plan(
     spec: StrategySpec, setup: StrategySetup, calendar: Calendar, saved: Any
 ) -> StrategyPlan:
-    engine = session_engine(setup, calendar)
+    instruments = kernel_instruments(setup, calendar)
+    engine = session_engine(setup.config, instruments, calendar)
     kept = setup.history.symbols.get(spec.symbol)
     history = None if kept is None else kept.base
     # A daily or longer strategy's bars are the broker's daily candles (`_plan_daily`);
@@ -264,7 +265,9 @@ def _strategy_plan(
     if setup.recent is not None:
         bars = DailySeries(spec.symbol, spec.exchange, daily_candles(setup, spec.symbol), calendar)
     strategy, context = bind_strategy(spec, setup, engine, bars, calendar, saved)
-    return StrategyPlan(spec, setup, engine, series, strategy, context, calendar)
+    plan = StrategyPlan(spec, setup, engine, series, strategy, context, calendar)
+    plan.kernel_instruments = instruments
+    return plan
 
 
 def build(

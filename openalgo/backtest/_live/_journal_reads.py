@@ -181,6 +181,15 @@ def rms_state(
     return None if row is None else state_from(row["state"], "rms_state", strategy)
 
 
+def rms_saved(sql: sqlite3.Connection, ledger: str, strategy: str, day: str) -> SavedState | None:
+    """A strategy's risk state of the day and when it was saved, or None."""
+    query = "SELECT state, saved_ns FROM risk_states WHERE ledger = ? AND strategy = ? AND day = ?"
+    row = sql.execute(query, (ledger, strategy, day)).fetchone()
+    if row is None:
+        return None
+    return SavedState(state_from(row["state"], "rms_state", strategy), row["saved_ns"])
+
+
 def rms_states(sql: sqlite3.Connection, ledger: str, day: str) -> dict[str, dict[str, Any]]:
     """The day's risk state of each strategy that saved one."""
     query = "SELECT * FROM risk_states WHERE ledger = ? AND day = ? ORDER BY strategy"
@@ -241,6 +250,7 @@ __all__ = [
     "intent_by_order",
     "last_update",
     "queued",
+    "rms_saved",
     "rms_state",
     "rms_states",
     "session",

@@ -12,6 +12,14 @@ plain-data dict:
 | "figures" | the strategy's figures of the day as that state holds them (`_session_figures`) |
 | "fill_comparison" | its fills against a backtest, the day's so far (`_fill_comparison`) |
 | "gtt_bindings" | the journal's GTT each kernel GTT is bound to (`_carry_restore.gtt_bindings`) |
+| "kernel_instruments" | a CNC or NRML strategy's kernel instruments (below) |
+| "gtt_references" | a CNC or NRML strategy's leg's reference (below) |
+
+The last two let a later day's start rebuild what a session that stopped without its
+day-close record carries (`_carry_rebuild`): the binding's instrument dicts the strategy's
+kernel session was built on (`_plan_engine.kernel_instruments`), and its leg's latest
+reference of the broker's units from a reconciliation read
+(`_session_carry.CarriedLegs.references`, as a day-close record keeps it).
 
 It is saved before each batch of the kernel's commands reaches the order worker (design
 rule 4: a restart never meets an order the saved state lacks) and after each slice a
@@ -36,7 +44,7 @@ from typing import Any
 from .._engine import call
 from ..errors import LiveError
 from ._carry_restore import gtt_bindings
-from ._carry_start import BINDINGS_KEY
+from ._carry_start import BINDINGS_KEY, REFERENCES_KEY
 from ._fill_comparison import COMPARED, slippage_of, strategy_rows
 from ._kill_switch import ACCOUNT_LOSS, ACCOUNT_PROFIT
 from ._plan_catch_up import INSTRUMENT
@@ -45,10 +53,13 @@ from ._session_figures import FIGURES, SESSION_KEY
 from ._session_gtts import GTT_REFUSED_LOCK
 from ._session_news import RECONCILE_LOCK
 from ._session_trader import Trader
+from ._stops_gtt import overnight
 from ._venue_saved import SavedOrder, read_records
 
 #: The roles of the kernel's saved orders that are leg stops (the binding's ORDER_ROLES).
 LEG_STOP_ROLE = "leg_stop"
+#: The key of a saved state's kernel instruments (module docstring).
+KERNEL_INSTRUMENTS_KEY = "kernel_instruments"
 #: The entry locks that last the day, set again at a restart from the saved state (6.2):
 #: a reconciliation mismatch, an exit that failed every attempt, the account's daily loss
 #: limit and daily profit target (18-multi-strategy 2.5a rule 8), and a stop GTT the
@@ -144,6 +155,10 @@ def save(session: Any, trader: Trader) -> None:
         COMPARED: session.figures.rows.saved(trader.name, rows),
         BINDINGS_KEY: gtt_bindings(trader),
     }
+    if overnight(trader):
+        saved[KERNEL_INSTRUMENTS_KEY] = [dict(spec) for spec in trader.part.kernel_instruments]
+        reference = session.news.carry.references.get(trader.name)
+        saved[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]
     session.parts.journal.put_rms_state(trader.name, saved, day=session.parts.spec.day)
 
 
@@ -230,6 +245,7 @@ def another_instrument(
 
 __all__ = [
     "DAY_LOCKS",
+    "KERNEL_INSTRUMENTS_KEY",
     "LEG_STOP_ROLE",
     "Saved",
     "another_instrument",

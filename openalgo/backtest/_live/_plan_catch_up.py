@@ -43,7 +43,12 @@ class StrategyPlan:
     """One strategy's part of the plan (`plan` module docstring): its `spec`, its `setup`,
     its kernel session (`engine`), its live `series`, the strategy instance and its live
     run `context`. `released` counts the slices of the day released to the kernel, by
-    the catch-up and then by the session loop."""
+    the catch-up and then by the session loop. `kernel_instruments` are the binding's
+    instrument dicts the kernel session was built on (`_plan_engine.kernel_instruments`;
+    none for a plan built without them), which the session saves."""
+
+    #: The binding's instrument dicts of the kernel session.
+    kernel_instruments: tuple[dict[str, Any], ...] = ()
 
     def __init__(
         self,

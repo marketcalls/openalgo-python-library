@@ -279,6 +279,12 @@ class Journal(JournalStops, JournalVersions, JournalGtts, JournalCarry):
         with self._sql("read the risk state") as sql:
             return reads.rms_state(sql, self._ledger, strategy, key)
 
+    def rms_saved(self, strategy: str, *, day: date) -> SavedState | None:
+        """A strategy's risk state of trading day `day` and when it was saved (UTC
+        nanoseconds), or None."""
+        with self._sql("read the risk state") as sql:
+            return reads.rms_saved(sql, self._ledger, strategy, day_key(day))
+
     def put_user_state(self, strategy: str, state: dict[str, Any]) -> None:
         """Save a strategy's `self.state`, replacing the last; it carries across days.
         Raises `JournalError` naming a key whose value does not survive a JSON round trip."""

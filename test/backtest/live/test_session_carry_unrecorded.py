@@ -1,10 +1,12 @@
 """A strategy whose session of an earlier day ended without its day-close record, at the next
-day's start, on the fake OpenAlgo (20-positional-live 1 and 4.2 step 2; the lead's ruling
-N5a-1): an MIS strategy is never refused for it (the broker squares MIS off, nothing is
-carried); a CNC strategy whose crash left a position, a working entry or a stop GTT is
-refused while the broker may still hold any of them, naming the units the books show, which
-may be the user's own (review round 2 of unit N5a), and starts flat once the operator has
-closed the position and the GTT by hand.
+day's start, on the fake OpenAlgo (20-positional-live 1 and 4.2 step 2; the lead's rulings
+N5a-1 and N5c-2): an MIS strategy is never refused for it (the broker squares MIS off,
+nothing is carried); a CNC strategy whose crash left a position or a stop GTT is continued
+from its last save as from a record, by the record's rules against the broker's books
+(`test_session_carry_crash`), and starts flat once the operator has closed the position and
+the GTT by hand where the books tell that from a GTT that fired; one whose entry still
+worked at the crash is refused when the books show units its save does not hold, which may
+be the user's own.
 
 The days and the strategies are `carry_samples`' and `positional_samples`': on Monday
 `MisHold` (MIS) or `CncKept` (CNC) buys 10 SBIN at 500.00 at 14:42:01 IST with a stop 3
@@ -22,7 +24,7 @@ import pytest
 from carry_samples import DAY1, DAY2, DAY3, CncKept, held, journal_of, on, to_day
 from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import BOOKS, MODES, STOP_AT, MisHold, calls, gtt_world, gtts
+from positional_samples import BOOKS, MODES, STOP_AT, MisHold, calls, gtt_world
 from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import StopFlag, alerts
 
@@ -114,27 +116,6 @@ def sell_by_hand(world):
     )
 
 
-def test_a_crash_before_the_close_record_refuses_the_next_start_while_the_leg_is_held(
-    make_fake_openalgo, monkeypatch, tmp_path
-):
-    world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path)
-    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
-
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
-
-    assert refused.value.failures == (
-        f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
-        "ended before the close) while holding a position, an order or a GTT, which this version "
-        "continues only by a restart of bt.live that same day, before the close; "
-        f"its stop GTT {trigger_id} of {DAY1} on "
-        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
-        f"{own_units_words(10)}",
-    )
-    assert [c for c in calls(world, *SENDS) if c.ts_ns >= DAY2_START] == []
-    assert gtts(world) == [("active", 10, 497.0, "SELL")]
-
-
 def own_units_words(units):
     """What a refusal adds when the books show `units` SBIN CNC held, worked by hand."""
     return (
@@ -147,53 +128,70 @@ def own_units_words(units):
 
 @MODES
 @BOOKS
-def test_a_crash_settled_by_hand_beside_the_users_own_units_is_refused_naming_them(
+def test_a_crash_settled_by_hand_beside_the_users_own_units_is_continued_selling_nothing(
     make_fake_openalgo, monkeypatch, tmp_path, analyzer, history
 ):
     # The operator cancels the stop GTT and sells the strategy's 10 units by hand; the
     # account still holds 50 SBIN of the user's own, which the books cannot tell from the
-    # strategy's: the refusal names them and the way out that remains.
+    # strategy's (7.2): the start continues the leg as a record's, and sends no order. A
+    # book of GTT history shows the GTT cancelled (ended outside the session): it is placed
+    # again, for the strategy's 10 units only. A broker's book of active GTTs only shows it
+    # gone, as one that fired: the sale by hand, of its shape, is taken as its child (3.2).
     world = crashed_monday(
         make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, history=history
     )
+    world.trace.waive("books agree", "the strategy's units sold by hand; 50 of the user's own")
+    world.trace.waive("isolation", "a sale by hand of a fired GTT's shape is taken as its child")
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     world.fake.client().cancelgttorder(trigger_id=trigger_id)
     sell_by_hand(world)
-    # 60 held for delivery, less the 10 sold today: 50 of the user's own.
     world.fake.set_holding("SBIN", "NSE", 60, average_price=480.0)
     assert held(world) == 50
     by_hand = len(calls(world, *SENDS))
+    world.stop_at(on(DAY2, 14, 46))
 
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
+    assert world.run(CncKept).stopped_by == "ctrl_c"
 
-    assert refused.value.failures == (
-        f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
-        "ended before the close) while holding a position, an order or a GTT, which this version "
-        "continues only by a restart of bt.live that same day, before the close; "
-        f"its stop GTT {trigger_id} of {DAY1} on "
-        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}"
-        f"{own_units_words(50)}",
-    )
-    assert calls(world, *SENDS)[by_hand:] == []
+    sent = [(c.what, c.detail["request"].get("quantity")) for c in calls(world, *SENDS)[by_hand:]]
+    gone = not history and not analyzer
+    assert sent == ([] if gone else [("placegttorder", 10)])
+    assert held(world) == 50
 
 
-@pytest.mark.parametrize("settled", ["units sold", "gtt cancelled"])
-def test_a_crash_settled_only_in_part_is_still_refused(
-    make_fake_openalgo, monkeypatch, tmp_path, settled
+def test_a_crash_with_its_units_sold_by_hand_and_its_gtt_resting_is_continued_selling_nothing(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # Today's trade book shows the sale by hand: the start takes it as the leg's end (other
+    # orders' trades), as for a record: nothing is sold or bought and no GTT is placed.
+    world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path, history=False)
+    world.trace.waive("books agree", "the strategy's units sold by hand before the start")
+    world.trace.waive("isolation", "the sale by hand is the other order whose trade closed it")
+    sell_by_hand(world)
+    by_hand = len(calls(world, *SENDS))
+    world.stop_at(on(DAY2, 14, 46))
+
+    assert world.run(CncKept).stopped_by == "ctrl_c"
+
+    assert held(world) == 0
+    later = [c for c in calls(world, *SENDS)[by_hand:] if c.what in ("placeorder", "placegttorder")]
+    assert later == []
+
+
+def test_a_crash_whose_stop_gtt_was_cancelled_by_hand_is_continued_and_protected_again(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
 ):
     world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path, history=False)
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
-    if settled == "units sold":
-        sell_by_hand(world)
-    else:
-        world.fake.set_gtt_status(trigger_id, "cancelled")
+    world.fake.set_gtt_status(trigger_id, "cancelled")
     by_hand = len(calls(world, *SENDS))
+    world.stop_at(on(DAY2, 14, 46))
 
-    with pytest.raises(PreflightError):
-        world.run(CncKept)
+    assert world.run(CncKept).stopped_by == "ctrl_c"
 
-    assert calls(world, *SENDS)[by_hand:] == []
+    (placed,) = calls(world, *SENDS)[by_hand:]
+    assert (placed.what, placed.detail["request"]["quantity"]) == ("placegttorder", 10)
+    assert held(world) == 10
+    assert not alerts(caplog, "error")
 
 
 @MODES
@@ -202,12 +200,16 @@ def test_a_crash_settled_by_hand_starts_flat_the_next_day_and_every_day_after(
     make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
     # The operator cancels the stop GTT and sells the 10 units by hand before Tuesday's
-    # start: the books show both closed, so the start ends the journal's GTT and begins
-    # flat; Wednesday's start is no longer judged by Monday's save.
+    # start: the books show both closed. A book that keeps the GTT's history shows it
+    # cancelled, so the start ends the journal's GTT and begins flat; Wednesday's start is
+    # no longer judged by Monday's save. A broker's book of active GTTs only shows it gone,
+    # which 3.3 takes as fired when the leg's units fell by its units: the leg is continued
+    # as a record's and the sale by hand, of its shape, is taken as its child.
     world = crashed_monday(
         make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
     )
     world.trace.waive("books agree", "Monday's leg was closed by hand before Tuesday")
+    world.trace.waive("isolation", "a sale by hand of a fired GTT's shape is taken as its child")
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     world.fake.client().cancelgttorder(trigger_id=trigger_id)
     sell_by_hand(world)
@@ -218,11 +220,13 @@ def test_a_crash_settled_by_hand_starts_flat_the_next_day_and_every_day_after(
     tuesday = world.run(CncKept)
 
     assert tuesday.stopped_by == "ctrl_c"
-    assert (
+    settled = (
         f"CncKept: what it held since {DAY1} with no day-close record is closed at the "
         f"broker (none of SBIN NSE (CNC) held, none of its GTTs resting): it starts flat on "
         f"{DAY2}"
-    ) in world.lines
+    )
+    gone = not history and not analyzer
+    assert (settled in world.lines) is not gone
     with journal_of(world) as journal:
         assert journal.open_gtts() == []
     # Its self.state kept the entry: it buys nothing more, and nothing is sent.
@@ -250,7 +254,8 @@ def test_a_crash_with_a_cnc_entry_working_refuses_the_next_start_once_it_filled(
 ):
     # Monday's session crashes at 14:46 with its LIMIT entry working; SBIN trades at 494.00
     # after the crash, which fills it with no session running: the save holds no position,
-    # yet the broker holds the strategy's 10 units on Tuesday.
+    # the journal no fill, yet the broker holds 10 units on Tuesday, which the start cannot
+    # tell from units of the user's own.
     world = gtt_world(
         make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, trades_until=(14, 47)
     )
@@ -261,6 +266,7 @@ def test_a_crash_with_a_cnc_entry_working_refuses_the_next_start_once_it_filled(
     assert held(world) == 0
     world.fake.trade("SBIN", "NSE", 494.0, volume=10.0)
     assert held(world) == 10
+    (entry,) = [o for o in world.fake.orders(world.fake.mode) if o.action == "BUY"]
     world.day, world.stop, world.feed = DAY1, StopFlag(), None
     to_day(world, DAY2)
     sent = len(calls(world, *SENDS))
@@ -269,13 +275,35 @@ def test_a_crash_with_a_cnc_entry_working_refuses_the_next_start_once_it_filled(
         world.run(CncLimitEntry)
 
     assert refused.value.failures == (
-        f"CncLimitEntry: its session of {DAY1} stopped without its day-close record (the "
-        "process ended before the close) while holding a position, an order or a GTT, which this "
-        "version continues only by a restart of bt.live that same day, before the close: "
-        f"{CHECK_BY_HAND}"
+        f"CncLimitEntry: its entry order {entry.order_id} (BUY 10 SBIN) still worked when its "
+        f"session of {DAY1} stopped without its day-close record, and the books show 10 units "
+        "where its last save and the journal's updates hold 0: the start cannot tell what that "
+        f"order filled after the stop from units of your own: {CHECK_BY_HAND}"
         f"{own_units_words(10)}",
     )
     assert calls(world, *SENDS)[sent:] == []
+
+
+def test_a_crash_with_a_cnc_entry_working_that_never_filled_starts_flat(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # The LIMIT entry still worked at the crash and never filled: the books show no unit,
+    # so the rebuilt record holds nothing and the strategy starts flat.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(14, 47))
+    world.trace.waive("protected", "the session crashed: its windows end with it")
+    world.trace.waive("no orphan", "the session crashed with its entry working")
+    crashing(monkeypatch)
+    crash_at(world, on(DAY1, 14, 46))
+    run_to_crash(world, CncLimitEntry)
+    world.day, world.stop, world.feed = DAY1, StopFlag(), None
+    to_day(world, DAY2)
+    world.stop_at(on(DAY2, 14, 46))
+    sent = len(calls(world, *SENDS))
+
+    assert world.run(CncLimitEntry).stopped_by == "ctrl_c"
+
+    assert calls(world, *SENDS)[sent:] == []
+    assert held(world) == 0
 
 
 def an_earlier_days_gtt_order(world, trigger_id):

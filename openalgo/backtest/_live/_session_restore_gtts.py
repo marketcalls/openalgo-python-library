@@ -50,6 +50,7 @@ Quantities are whole units, prices rupees. Run by the main thread at a restart.
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -109,13 +110,13 @@ def settle(view: Mapping[str, Any], row: GttBinding | None) -> Settled:
     if state in ("Requested", "ModifyPending") and under_way:
         # A place, or a replace's place after its cancel, under way: settled (module docstring).
         return Settled(Settle.SETTLE_PLACE)
-    if bound and state in ("Requested", "Active") and _same(view, row):
+    if bound and state in ("Requested", "Active") and same_terms(view, row):
         return Settled(Settle.CONFIRM_PLACE if state == "Requested" else Settle.TAKE_BACK)
-    if bound and state == "ModifyPending" and _same(view, row):
+    if bound and state == "ModifyPending" and same_terms(view, row):
         return Settled(Settle.MODIFY)
-    if bound and state == "ModifyPending" and _same(view["pending"], row):
+    if bound and state == "ModifyPending" and same_terms(view["pending"], row):
         return Settled(Settle.CONFIRM_MODIFY)
-    if bound and state == "CancelPending" and _same(view, row):
+    if bound and state == "CancelPending" and same_terms(view, row):
         return Settled(Settle.CANCEL)
     seen = "none in the journal" if row is None else f"the journal's says {row.state.value}"
     return Settled(Settle.UNSETTLED, f"the engine's GTT was {state} and {seen}")
@@ -125,7 +126,7 @@ def _ended(view: Mapping[str, Any], row: GttBinding) -> Settled:
     """What a restart does with the kernel's restored GTT `view` whose journal's GTT `row`
     has ended (module docstring's table)."""
     state = view["state"]
-    if state == "CancelPending" and row.state is GttState.CANCELLED and _same(view, row):
+    if state == "CancelPending" and row.state is GttState.CANCELLED and same_terms(view, row):
         return Settled(Settle.CONFIRM_CANCEL)
     if state == "Requested" and row.state is GttState.NOT_PLACED:
         return Settled(Settle.PLACE)
@@ -151,13 +152,7 @@ def restore_gtts(session: Any, trader: Trader, bindings: Mapping[int, int] | Non
     if not views:
         return
     journal = session.parts.journal
-    today = journal.day_gtts(trader.name, day=session.parts.spec.day)
-    # By kernel GTT id, the latest that has not ended, else the latest (module docstring).
-    rows = {row.gtt_id: row for row in today if row.state.terminal}
-    rows.update({row.gtt_id: row for row in today if not row.state.terminal})
-    for gtt_id, seq in (bindings or {}).items():
-        if gtt_id not in rows and (carried := journal.gtt(seq)) is not None:
-            rows[gtt_id] = carried
+    rows = journal_rows(journal, trader.name, session.parts.spec.day, bindings or {})
     requests: list[GttRequest] = []
     for view in views:
         row = rows.get(int(view["gtt_id"]))
@@ -208,7 +203,23 @@ def _apply(
     return []
 
 
-def _same(terms: Mapping[str, Any] | None, row: GttBinding | None) -> bool:
+def journal_rows(
+    journal: Any, strategy: str, day: dt.date, bindings: Mapping[int, int]
+) -> dict[int, GttBinding]:
+    """The journal's GTT of each kernel GTT of `strategy`'s session of `day`, by kernel id
+    (module docstring): the latest of the day's that has not ended, else the latest that
+    has, else the one `bindings` (kernel id to journal `seq`) bind it to. Raises
+    JournalError when the journal cannot be read."""
+    of_day = journal.day_gtts(strategy, day=day)
+    rows = {row.gtt_id: row for row in of_day if row.state.terminal}
+    rows.update({row.gtt_id: row for row in of_day if not row.state.terminal})
+    for gtt_id, seq in bindings.items():
+        if gtt_id not in rows and (carried := journal.gtt(seq)) is not None:
+            rows[gtt_id] = carried
+    return rows
+
+
+def same_terms(terms: Mapping[str, Any] | None, row: GttBinding | None) -> bool:
     """Whether the kernel's `terms` are the journal's GTT's: side, units and trigger (the
     limit is the broker's own rounding, 20-positional-live 3.6)."""
     if terms is None or row is None:
@@ -220,4 +231,4 @@ def _same(terms: Mapping[str, Any] | None, row: GttBinding | None) -> bool:
     )
 
 
-__all__ = ["Settle", "Settled", "restore_gtts", "settle"]
+__all__ = ["Settle", "Settled", "journal_rows", "restore_gtts", "same_terms", "settle"]
