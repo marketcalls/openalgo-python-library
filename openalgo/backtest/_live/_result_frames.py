@@ -9,7 +9,7 @@ nanoseconds missing. Prices are rupees, quantities units.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, fields
 from typing import Any
 
@@ -73,6 +73,22 @@ def fill_comparison_frame(rows: Sequence[FillRow]) -> pd.DataFrame:
     for a row not compared)."""
     instants = [("live_ns", "live_time"), ("backtest_ns", "backtest_time")]
     return frame(rows, _names(FillRow), instants)
+
+
+def trades_frame(trades: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+    """Every round trip the strategies closed in this start, each strategy's `Result.trades`
+    (by name, in call order) one after the other with `strategy` and `entry_day` (the IST
+    date of `entry_time`) first: a trade carried from an earlier day shows the day it was
+    entered (20-positional-live 4; the lead's ruling N5a-4), and its fills' flags (the
+    kernel's of each order, such as "late_decision", and the venue's, "price_unverified"
+    and "missed_day") are in its `flags`."""
+    tables = []
+    for name, table in trades.items():
+        table = table.copy()
+        table.insert(0, "strategy", name)
+        table.insert(1, "entry_day", table["entry_time"].dt.date)
+        tables.append(table)
+    return pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
 
 
 def fills_frame(fills: Sequence[FillRecord]) -> pd.DataFrame:
@@ -150,5 +166,6 @@ __all__ = [
     "orders_frame",
     "reconciliations_frame",
     "skipped_frame",
+    "trades_frame",
     "unprotected_frame",
 ]

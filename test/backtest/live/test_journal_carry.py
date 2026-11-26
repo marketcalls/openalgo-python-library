@@ -1,8 +1,9 @@
 """What the live journal carries from one trading day's session to the next
 (`_live/_journal_carry.py`; 20-positional-live 3.5, 4 and 8, the lead's ruling N2-2): the
-day-close record of each strategy and the latest one read back, kept refusals and their
-clearing, and the last bar each strategy decided. Each row is the ledger's of the handle's
-mode: a live handle never reads a sandbox record back as its own.
+day-close record of each strategy and the latest one read back, the latest save that
+outdates a record, kept refusals and their clearing, and the last bar each strategy
+decided. Each row is the ledger's of the handle's mode: a live handle never reads a sandbox
+record back as its own.
 
 The journal is on the test's folder with a manual clock; expected values are the ones
 written.
@@ -15,6 +16,7 @@ from datetime import date
 
 import pytest
 from journal_samples import (
+    BROKER,
     DAY,
     DAY_NS,
     NEXT_DAY,
@@ -111,6 +113,59 @@ def test_a_later_record_of_the_same_day_replaces_the_earlier(path):
         record = journal.day_close("hold")
 
     assert (record.carried["positions"][0]["quantity_units"], record.saved_ns) == (0.0, DAY_NS + 1)
+
+
+def test_a_save_of_a_later_day_outdates_a_record(path):
+    clock = ManualClock()
+    with started_journal(path, now=clock) as journal:
+        close_day(journal, "hold", DAY, 10.0)
+        record = journal.day_close("hold")
+        clock.ns += 1
+        journal.start_session(NEXT_DAY, Mode.SANDBOX, BROKER)
+        journal.put_rms_state("hold", {"live_state": {}}, day=NEXT_DAY)
+        journal.put_rms_state("swing", {"live_state": {}}, day=NEXT_DAY)
+
+        assert journal.saved_after(record, THIRD_DAY) == NEXT_DAY
+        assert journal.saved_after(record, NEXT_DAY) is None
+
+
+def test_the_save_a_close_makes_just_before_its_record_never_outdates_it(path):
+    # The clock may step back between the close's last save and its record: a save of the
+    # record's day counts only when a start after the record made it.
+    clock = ManualClock()
+    with started_journal(path, now=clock) as journal:
+        clock.ns += 10
+        close_day(journal, "hold", DAY, 10.0)
+        record = journal.day_close("hold")
+        clock.ns += 1
+        journal.put_rms_state("hold", {"live_state": {}}, day=DAY)
+
+        assert journal.saved_after(record, NEXT_DAY) is None
+
+
+def test_a_save_of_a_restart_after_the_record_that_day_outdates_it(path):
+    clock = ManualClock()
+    with started_journal(path, now=clock) as journal:
+        close_day(journal, "hold", DAY, 10.0)
+        record = journal.day_close("hold")
+        clock.ns += 1
+        journal.start_session(DAY, Mode.SANDBOX, BROKER)
+        clock.ns += 1
+        journal.put_rms_state("hold", {"live_state": {}}, day=DAY)
+
+        assert journal.saved_after(record, NEXT_DAY) == DAY
+
+
+def test_a_live_handle_never_finds_a_sandbox_save_after_its_record(path):
+    clock = ManualClock()
+    with started_journal(path, mode=Mode.LIVE, now=clock) as live:
+        close_day(live, "hold", DAY, 10.0)
+        record = live.day_close("hold")
+    clock.ns += 1
+    with started_journal(path, day=NEXT_DAY, mode=Mode.SANDBOX, now=clock) as sandbox:
+        sandbox.put_rms_state("hold", {"live_state": {}}, day=NEXT_DAY)
+    with open_journal(path, mode=Mode.LIVE, now=clock) as live:
+        assert live.saved_after(record, THIRD_DAY) is None
 
 
 def test_a_day_close_record_json_cannot_keep_is_refused(path):

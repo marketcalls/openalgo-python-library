@@ -21,17 +21,16 @@ strategy to fix before starting again.
 
 **The journal position** of each strategy (`judge_start`, 3.6): its saved position, plus,
 for each order its saved state worked, the units filled beyond its saved ledger by the
-journal's last update or the trade book, whichever says more. The restart rules (5.5,
-`_reconcile_rules.restart_kind`) judge it against the broker's: a broker position on a
-traded symbol that no journal position holds, and a journal position the broker does not
-hold that no trade of another order explains, refuse the start (LiveError naming them;
-nothing has been sent). An instrument several strategies share is judged as one, the sum
-of its members' journal positions against the broker's net (`_restart_groups`,
-18-multi-strategy 4.10). A resumed leg whose saved stop does not work in the order book is
-an ERROR alert now, saying what the restart does about it (`_missing_stop_words`): its
-stop is placed again at the end of step 11, unless the books show the broker holding
-fewer units that no trade explains, or the other side (the exit guard then holds a stop
-for the journal's units), or other orders closed the position. A CNC leg is judged
+journal's last update or the trade book, whichever says more; with nothing saved today,
+what its day-close record of an earlier day carries (`_restart_carried`, which judges such
+a leg: never refused). The restart rules (5.5, `_reconcile_rules.restart_kind`) judge it
+against the broker's: a broker position on a traded symbol that no journal position
+holds, and a journal position the broker does not hold that no trade of another order
+explains, refuse the start (LiveError naming them; nothing has been sent). An instrument
+several strategies share is judged as one, the sum of its members' journal positions
+against the broker's net (`_restart_groups`, 18-multi-strategy 4.10). A resumed leg whose
+saved stop does not work in the order book is an ERROR alert now (`_restart_stops`). A
+CNC leg is judged
 one-sided (`_broker_units.strategy_units`): the user's own units beyond it are no
 unknown position. Times are UTC nanoseconds, quantities signed units. Run by the main
 thread at the start.
@@ -47,12 +46,15 @@ from typing import Any
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
 from ._broker_units import strategy_units
+from ._carry_start import CarryAtStart
 from ._group_rules import GroupFigure, and_join
 from ._groups import InstrumentGroup, instrument_groups
 from ._order_book import Resolved
 from ._reconcile_rules import Kind, LegBooks, RestartKind, judge, leg_books, restart_kind
 from ._reconcile_rules import unexplained_by as unexplained_units
+from ._restart_carried import carried_units, carried_verdict, gone_moves
 from ._restart_groups import judge_group
+from ._restart_stops import alert_missing_stops
 from ._session_saved import Saved, another_instrument, read_saved
 from ._types import LOGGER_NAME, AlertKind
 from ._worker_queue import ReadBooks
@@ -100,13 +102,16 @@ class LegStart:
 @dataclass(frozen=True)
 class _Found:
     """One strategy before it is judged: its spec, saved state, the books of its
-    instrument (readable), the broker's units in them and its journal position."""
+    instrument (readable), the broker's units in them and its journal position; for a leg
+    carried from an earlier day, its carried GTTs' moves by firing that the start's read
+    found fired or gone (`_restart_carried.gone_moves`; None for a leg not carried)."""
 
     spec: Any
     saved: Saved | None
     books: LegBooks
     broker_units: int
     journal_units: int
+    moves: frozenset[int] | None = None
 
 
 @dataclass(frozen=True)
@@ -223,10 +228,14 @@ def _failed(books: Books) -> list[str]:
     return [name for name, answer in read if answer.get("status") != "success"]
 
 
-def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Restart:
+def judge_start(
+    spec: Any, journal: Any, start: StartBooks, alerts: Any, carry: CarryAtStart | None = None
+) -> Restart:
     """Each strategy's journal position judged against the broker's, an instrument several
-    strategies share as one (module docstring). Raises LiveError, once, for the positions
-    a restart cannot resume and the strategies saved on another instrument, naming them."""
+    strategies share as one, a leg carried from an earlier day (`carry`) as
+    `_restart_carried` judges it (module docstring). Raises LiveError, once, for the
+    positions a restart cannot resume and the strategies saved on another instrument,
+    naming them."""
     day, books = spec.day, start.books
     own = frozenset(order.order_id for order in journal.bound_orders(day=day))
     found: dict[str, _Found] = {}
@@ -249,9 +258,11 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
         )
         if leg.units is None or leg.trades is None:
             raise LiveError(_unread(books))
-        units = _journal_units(saved, journal, day, leg)
+        carried = None if saved is not None else carried_units(carry, each)
+        units = _journal_units(saved, journal, day, leg) if carried is None else carried
+        moves = None if carried is None else gone_moves(carry, each.name, start.deferred)
         broker = strategy_units(each.product, units, leg.units)
-        found[each.name] = _Found(each, saved, leg, broker, units)
+        found[each.name] = _Found(each, saved, leg, broker, units, moves)
     legs: dict[str, LegStart] = {}
     refused: list[str] = []
     named = ((s.name, s.symbol, s.exchange, s.product) for s in spec.strategies)
@@ -267,7 +278,7 @@ def judge_start(spec: Any, journal: Any, start: StartBooks, alerts: Any) -> Rest
     if refused or moved:
         positions = ["the start cannot resume: " + "; ".join(refused)] if refused else []
         raise LiveError(". ".join([*positions, *moved]))
-    _alert_missing_stops(spec, legs, journal, alerts)
+    alert_missing_stops(spec, legs, journal, alerts)
     return Restart(legs, own, books.started_ns)
 
 
@@ -278,8 +289,11 @@ def _judge_leg(found: _Found, own: frozenset[str]) -> tuple[list[LegStart], str 
     external = sum(trade.signed for trade in leg.external(own))
     adopted = 0 if found.saved is None else found.saved.adopted
     unexplained = unexplained_units(units, broker, external, adopted)
-    verdict = restart_kind(units, broker, unexplained)
-    start = LegStart(found.saved, units, broker, leg, verdict, judge(units, broker, unexplained))
+    judged = (restart_kind(units, broker, unexplained), judge(units, broker, unexplained))
+    if found.moves is not None:
+        judged = carried_verdict(units, broker, judged, found.moves)
+    verdict, kind = judged
+    start = LegStart(found.saved, units, broker, leg, verdict, kind)
     if verdict is RestartKind.UNKNOWN_POSITION:
         return [start], (
             f"OpenAlgo's books show {broker} units of {each.symbol} {each.exchange}, which "
@@ -337,54 +351,6 @@ def _journal_units(saved: Saved | None, journal: Any, day: Any, leg: LegBooks) -
         more = max(0, filled - record.filled_units)
         units += more if record.intent.action == "BUY" else -more
     return units
-
-
-def _alert_missing_stops(
-    spec: Any, legs: Mapping[str, LegStart], journal: Any, alerts: Any
-) -> None:
-    """An ERROR alert for each leg that resumes with a position whose saved stop does not
-    work in the order book (3.1 step 10)."""
-    for each in spec.strategies:
-        leg = legs[each.name]
-        stop = None if leg.saved is None else leg.saved.stop
-        if leg.journal_units == 0 or stop is None:
-            continue
-        order_id = stop.order_id or journal.order_id_of(stop.intent.intent_id) or ""
-        row = leg.books.row(order_id) if order_id else None
-        if row is not None and row.working:
-            continue
-        alerts.send(
-            AlertKind.ERROR,
-            f"{each.name}: {leg.journal_units} units of {each.symbol} {each.exchange} have no "
-            f"working stop at the broker (stop {order_id or 'not sent'}): "
-            f"{_missing_stop_words(leg, each.name)}",
-        )
-
-
-def _missing_stop_words(leg: LegStart, name: str) -> str:
-    """What the restart does about strategy `name`'s resumed leg's missing stop, by how
-    the start judged the leg against the broker's books (module docstring); a member of a
-    shared instrument's words name the group and the sum it was judged by, and a member
-    an explained difference leaves flat (its share, `_reconcile_allocate`) is closed."""
-    shown = f"OpenAlgo's books show {leg.broker_units} units"
-    if leg.group is not None:
-        shown += f" for {and_join(leg.group.members)} together, who hold {leg.group.units}"
-    share = None if leg.group is None else leg.group.share(name)
-    if leg.kind is Kind.EXPLAINED_FLAT or (share is not None and share.left == 0):
-        return (
-            "OpenAlgo's books show the position closed by other orders, which the engine "
-            "takes as its own, so no stop is placed"
-        )
-    if leg.kind is Kind.UNEXPLAINED:
-        return (
-            f"{shown}, which no trade explains, so no stop is placed for the journal's units "
-            "while they disagree: check the account in OpenAlgo"
-        )
-    if leg.kind is Kind.OTHER_SIDE:
-        return (
-            f"{shown}, the other side, so no stop is placed: close the position by hand in OpenAlgo"
-        )
-    return "it is placed again once the engine is restored"
 
 
 __all__ = [

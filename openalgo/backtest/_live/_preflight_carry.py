@@ -8,24 +8,18 @@ from the journal's day-close records and kept refusals (`_journal_carry`):
 - **The other ledger** (`other_ledger_lines`): positions carried in the other mode's ledger
   are named in the start banner ("held in sandbox, not continued in live") and never
   restored into this one (4.2 step 1).
-- **Funds on a carry** (`held_rupees`, `carry_funds_check`): a carried position has spent
-  cash already, so the account's available cash is set against the capital less what the
-  carried positions hold (4.2 step 3, review H7): the margin the engine blocked for each,
-  which its carried state keeps, so the check never works it out a second way. That is a
-  CNC position's cost and a bought option's premium (all of their value), a future's
-  margin by the engine's futures rule on its entry day (20 percent of the contract value
-  by default, `_futures_margin`), each cut with the units a part exit sold. The failure's
-  words are the preflight's own funds check's (`_preflight_server.funds_check`).
+- **Funds on a carry** (`held_rupees`, `carry_funds_check`, `funds_with_carry`): a carried
+  position has spent cash already, so the account's available cash is set against the
+  capital less what the carried positions hold (4.2 step 3, review H7): the margin the
+  engine blocked for each, which its carried state keeps, so the check never works it out
+  a second way. That is a CNC position's cost and a bought option's premium (all of their
+  value), a future's margin by the engine's futures rule on its entry day (20 percent of
+  the contract value by default, or the `margin=` the run gave, `_futures_margin`), each
+  cut with the units a part exit sold. The failure's words are the preflight's own funds
+  check's (`_preflight_server.funds_check`).
 - **Kept refusals** (`kept_refusal_checks`): a strategy whose stop GTT a broker refused for
   a reason no price explains is refused at every start with the broker's message until
   the user passes `positional_stops="rearm_daily"` or trades it in another product (3.5).
-- **Carried from an earlier day** (`refuse_carried`): until a session continues them (the
-  restart across days is unit N5's), a strategy whose latest day-close record of an
-  earlier day carries a position, or whose GTT recorded on an earlier day has not ended
-  in the journal, is refused at the start (review finding 1 of round 3 of unit N3b).
-  Started afresh it would enter again beside the carried position, and the GTT follower,
-  which follows the journal's GTTs of every day, would find the earlier GTT under a kernel
-  GTT id the new session uses too (they start again at 1 each day).
 
 A carried position is read from a day-close record's carried state, the kernel's saved
 state (its `instruments` and `positions`, rust/oa_bt/src/engine/venue_state/book.rs).
@@ -43,19 +37,10 @@ from ..errors import LiveError
 from ..reference import Instrument
 from ..report._format import indian_digits
 from ._journal_carry import DayClose, KeptRefusal
-from ._journal_gtt_rows import GttBinding
 from ._preflight_gtt import GTT_STOPS, REARM_DAILY
-from ._preflight_plan import Check, refused
-from ._preflight_server import funds_check
-from ._types import Mode, Purpose
-
-#: What a start refused for what a strategy holds from an earlier day asks the operator to
-#: do (`refuse_carried`).
-CARRIED_LATER = (
-    "This version does not continue a position or a GTT from an earlier day: close the "
-    "position and cancel its GTT in OpenAlgo by hand, then start under another account "
-    "name (account=), or wait for the version that continues them"
-)
+from ._preflight_plan import Check, PreflightPlan, positive_amount, refused
+from ._preflight_server import FUNDS_CHECK, funds_check
+from ._types import Mode
 
 
 @dataclass(frozen=True)
@@ -174,6 +159,20 @@ def carry_funds_check(
     return funds_check(available, needed, figures, mode)
 
 
+def funds_with_carry(
+    checks: Sequence[Check], available: float | None, plan: PreflightPlan
+) -> list[Check]:
+    """The server's `checks` with the funds check set against the capital less what the
+    carried positions hold (`carry_funds_check`) when `plan` continues any
+    (`PreflightPlan.carried`); as they are when it continues none, or when the cash or the
+    capital is not known (their own checks fail then)."""
+    capital = positive_amount(plan.capital)
+    if not plan.carried or available is None or capital is None:
+        return list(checks)
+    carried = carry_funds_check(available, capital, plan.carried, plan.mode)
+    return [carried if check.name == FUNDS_CHECK else check for check in checks]
+
+
 def kept_refusal_checks(
     refusals: Sequence[KeptRefusal],
     strategies: Sequence[tuple[str, str, str, str]],
@@ -205,50 +204,6 @@ def refuse_kept(
         raise refused(failures)
 
 
-def refuse_carried(
-    records: Mapping[str, DayClose],
-    gtts: Sequence[GttBinding],
-    strategies: Sequence[str],
-    day: dt.date,
-) -> None:
-    """Refuse the start of a session (of trading `day`) with a strategy of `strategies`
-    (their names) that holds a position or a GTT from an earlier day (module docstring):
-    its latest day-close record (`records`, by strategy) of a day before `day` carries a
-    position, or a GTT of the journal that has not ended (`gtts`, the journal's open GTTs)
-    was recorded for it before `day`. Raises PreflightError with one failure per such
-    strategy, naming what it holds and what to do (`CARRIED_LATER`), and LiveError for a
-    record whose carried state cannot be read."""
-    failures = []
-    for strategy in strategies:
-        held = _carried_words(records.get(strategy), day)
-        held += [_gtt_words(gtt) for gtt in gtts if gtt.strategy == strategy and gtt.day < day]
-        if held:
-            failures.append(f"{strategy}: {'; '.join(held)}. {CARRIED_LATER}")
-    if failures:
-        raise refused(tuple(failures))
-
-
-def _carried_words(record: DayClose | None, day: dt.date) -> list[str]:
-    """Each position the day-close record `record` carries from a day before `day`, in a
-    refusal's words; none for a record of `day` (a same-day restart continues it)."""
-    if record is None or record.day >= day:
-        return []
-    return [
-        f"its day-close record of {record.day} carries {_units(position)} {position.symbol} "
-        f"{position.exchange} ({position.product})"
-        for position in carried_positions(record)
-    ]
-
-
-def _gtt_words(gtt: GttBinding) -> str:
-    """A GTT of an earlier day that has not ended, in a refusal's words: by its trigger ID,
-    or as a place never answered, which the GTT book may still hold."""
-    kind = "stop GTT" if gtt.purpose is Purpose.STOP else "GTT order"
-    name = gtt.trigger_id or f"g{gtt.gtt_id} (its place was not answered)"
-    leg = f"{gtt.exchange}:{gtt.symbol} ({gtt.product})"
-    return f"its {kind} {name} of {gtt.day} on {leg} has not ended"
-
-
 def _units(position: CarriedPosition) -> str:
     """A carried position's signed units, whole and grouped as Indian figures are
     ("12,34,567")."""
@@ -267,14 +222,13 @@ def _refused(refusal: KeptRefusal) -> Check:
 
 
 __all__ = [
-    "CARRIED_LATER",
     "CarriedPosition",
     "carried_positions",
     "carry_funds_check",
+    "funds_with_carry",
     "held_rupees",
     "kept_refusal_checks",
     "missed_days",
     "other_ledger_lines",
-    "refuse_carried",
     "refuse_kept",
 ]

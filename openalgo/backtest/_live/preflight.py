@@ -13,8 +13,10 @@ each of them, not only the first. The checks, by name:
   of `orders`, refused with the reason);
 - `mode`: `funds` was answered in the session's mode, so the analyzer switch has not
   moved since the mode guard read it;
-- `funds`: the available cash covers `capital`; no cash at all, with ping working, is
-  what some brokers answer for an expired login, so it is a login failure as well;
+- `funds`: the available cash covers `capital`, less what the positions carried from
+  earlier days hold (`_preflight_carry.funds_with_carry`); no cash at all, with ping
+  working, is what some brokers answer for an expired login, so it is a login failure as
+  well;
 - `symbol:<EXCHANGE>:<SYMBOL>`: each instrument found, with its lot size, tick size and
   freeze quantity, in an answer for that instrument; an instrument on an index exchange
   is refused, as an index cannot be traded;
@@ -69,6 +71,7 @@ from collections.abc import Callable
 from ..calendar import Calendar, default_calendar
 from ..errors import ConfigError
 from ._preflight_calendar import holiday_check
+from ._preflight_carry import funds_with_carry
 from ._preflight_clock import clock_check
 from ._preflight_gtt import gtt_check
 from ._preflight_local import alerts_check, limit_checks, product_check, trading_day_checks
@@ -128,7 +131,7 @@ def check_preflight(
     now_ns = now()
     server = read_server(client, plan)
     checks = [
-        *server.checks,
+        *funds_with_carry(server.checks, server.funds_available, plan),
         *limit_checks(plan.capital, plan.max_daily_loss, plan.account_max_daily_loss),
         product_check(plan.product),
         *trading_day_checks((exchange for _, exchange in plan.instruments), now_ns, calendar),

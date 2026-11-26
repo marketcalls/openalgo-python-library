@@ -140,8 +140,15 @@ def test_a_start_after_the_open_sends_the_decision_at_once_flagged_late_decision
     assert [bar_close for _, bar_close, _ in DailyTarget.decided] == [close_of(FRIDAY)]
     (entry, *_) = [text for text in alerts(caplog, "entry")]
     assert entry.endswith("(entry, order 261116000000001, flagged late_decision)")
-    (trade,) = session_result(outcome).results["DailyTarget"].trades.itertuples()
+    result = session_result(outcome)
+    (trade,) = result.results["DailyTarget"].trades.itertuples()
     assert (trade.exit_reason, trade.flags) == ("leg_target", ["late_decision"])
+    # The result's fills carry the kernel's flags of each order beside the venue's.
+    fills = result.fills
+    assert [(a, list(f)) for a, f in zip(fills["action"], fills["flags"], strict=True)] == [
+        ("BUY", ["late_decision"]),
+        ("SELL", []),
+    ]
 
 
 def test_bars_of_days_no_session_ran_feed_the_series_and_only_the_latest_is_decided(

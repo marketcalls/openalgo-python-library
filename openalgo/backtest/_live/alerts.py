@@ -56,7 +56,9 @@ URGENT_PRIORITY = 9
 
 #: The priority of each kind of alert, in the bands of the SDK's `telegram` docstring:
 #: 9 to 10 urgent (risk), 7 to 8 high (position updates), 4 to 6 normal (signals and
-#: summaries). The four kinds that lock entries or need the operator are the highest.
+#: summaries). The four kinds that lock entries or need the operator are the highest. A
+#: warning (WARN: a figure the operator should check, such as a fill recorded at a GTT
+#: child's limit, 20-positional-live 3.3 and 4.3) is urgent as a rejection is.
 ALERT_PRIORITY: Mapping[AlertKind, int] = MappingProxyType(
     {
         AlertKind.MODE_BREACH: PRIORITY_HIGHEST,
@@ -64,6 +66,7 @@ ALERT_PRIORITY: Mapping[AlertKind, int] = MappingProxyType(
         AlertKind.RECONCILE_MISMATCH: PRIORITY_HIGHEST,
         AlertKind.ERROR: PRIORITY_HIGHEST,
         AlertKind.REJECT: URGENT_PRIORITY,
+        AlertKind.WARN: URGENT_PRIORITY,
         AlertKind.ENTRY: 7,
         AlertKind.EXIT: 7,
         AlertKind.STOP_MOVED: 6,

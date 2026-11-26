@@ -151,6 +151,23 @@ def test_two_positional_strategies_on_one_symbol_and_product_are_refused(product
     )
 
 
+def test_a_strategy_naming_an_expired_contract_is_refused_saying_how_a_carry_of_it_settles():
+    # October's NIFTY future's last trading day is Tuesday 2026-10-27, before the module's
+    # day: the reference tables give it no terms. A carried position on it was settled by
+    # the exchange; started on the contract traded now, the start records the settlement
+    # (the lead's ruling 2 of review round 4 of unit N5a).
+    expired = subclass(symbol="NIFTY27OCT26FUT", exchange="NFO", product="NRML")
+
+    with pytest.raises(ConfigError) as refused:
+        specify(expired)
+
+    assert str(refused.value) == (
+        f"NIFTY27OCT26FUT expired on 2026-10-27; it has no terms on {DAY}. If a strategy held "
+        "a position on it from an earlier day, the exchange has settled it: start the strategy "
+        "on the contract traded now, and the start records the settlement"
+    )
+
+
 def test_an_mis_and_a_cnc_strategy_on_one_symbol_run_together():
     spec = specify([subclass("Intraday"), subclass("Positional", product="CNC")])
 

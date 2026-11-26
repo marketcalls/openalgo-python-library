@@ -71,12 +71,13 @@ def _day_before_tender(calendar: Any, last_day: dt.date, tender_days: int) -> dt
 
 
 def _no_tender_warning(symbol: str) -> str:
+    """The warning of a delivery contract with no tender period in the tables. No run takes
+    reference tables of the user's (each reads `default_tables()`), so it gives the advice
+    a user can follow: exit before the tender period."""
     return (
         f"{symbol} is settled by delivery, and the reference table mcx_contracts gives no "
         "tender period for it: a position held into its tender period is settled at expiry "
-        "in cash, where MCX would mark it for delivery. Exit it before its tender period, or "
-        "give its tender_days (the trading days of the tender period, the expiry day "
-        "included) in a user file of the mcx_contracts table"
+        "in cash, where MCX would mark it for delivery. Exit it before its tender period"
     )
 
 

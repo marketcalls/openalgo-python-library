@@ -52,7 +52,10 @@ class PreflightPlan:
     `gtt` is True for a session with a CNC or NRML strategy, whose stops rest at the broker
     as GTTs: the GTT capability check runs (`_preflight_gtt`), with `positional_stops`, how
     the session holds those stops overnight ("gtt", the default, or "rearm_daily" when
-    every CNC and NRML strategy of the session chose it).
+    every CNC and NRML strategy of the session chose it). `carried` are the positions the
+    session continues from earlier days, each with the rupees of the account's cash it
+    holds (`_preflight_carry.held_rupees`): the funds check sets the cash against the
+    capital less them (`_preflight_carry.funds_with_carry`).
 
     Raises ConfigError when `instruments` is empty or holds anything but pairs of
     non-blank strings, when neither `interval` nor `intervals` names an interval or
@@ -72,11 +75,13 @@ class PreflightPlan:
     tested_alerts: Check | None = None
     contracts: tuple[Instrument, ...] = ()
     gtt: bool = False
+    carried: tuple[tuple[Any, float], ...] = ()
     positional_stops: str = GTT_STOPS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", _instrument_pairs(self.instruments))
         object.__setattr__(self, "contracts", tuple(self.contracts))
+        object.__setattr__(self, "carried", tuple(self.carried))
         object.__setattr__(self, "intervals", _intervals(self.interval, self.intervals))
         if not isinstance(self.mode, Mode):
             raise ConfigError(

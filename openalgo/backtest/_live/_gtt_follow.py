@@ -35,7 +35,9 @@ read is not judged by that read. A GTT with a call of the order worker pending i
 call's to judge (`hold`), and still takes its leg's reference when a read shows it
 resting.
 
-**The child** (3.2, 3.3; `_gtt_child`): the sandbox's book names it; otherwise the order
+**The child** (3.2, 3.3; `_gtt_child`): the sandbox's book names it, for a GTT that rested
+today (one carried from a day it last rested on may have fired on a day no session ran,
+whose orders today's books do not hold: 4.3); otherwise the order
 book is read every `CHILD_READ_EVERY_S` for `CHILD_SEARCH_S`: one candidate is the child
 (TRIGGERED), several a MISMATCH naming them, never a guess. A GTT taken over after the
 replace of a modify that cannot be told is looked for by both sets of terms (the lead's
@@ -67,6 +69,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from .._series import ist_time
 from ._gtt_book import GttRow, Seen
 from ._gtt_child import CHILD_READ_EVERY_S, CHILD_SEARCH_S, child_candidates
 from ._gtt_follow_intake import FollowerIntake
@@ -116,7 +119,7 @@ class GttFollower(FollowerIntake):
         self._busy = busy
         self._followed: dict[int, Followed] = {}
         self._references = References()
-        self._outcomes = GttOutcomes(journal, post, self._followed, self._references)
+        self._outcomes = GttOutcomes(journal, post, self._followed, self._references, now)
         self._held: set[int] = set()
         self._asked = False
         self._next_read_ns = 0
@@ -246,10 +249,20 @@ class GttFollower(FollowerIntake):
             self._journal.set_gtt_state(followed.gtt.seq, GttState.TRIGGERED, note=note)
             followed.gtt = dataclasses.replace(followed.gtt, state=GttState.TRIGGERED)
         followed.since_ns, followed.next_ns = at_ns, at_ns
-        followed.child = None if row is None else row.child_order_id
+        named = None if row is None else row.child_order_id
+        # A child the row names is today's order only when the GTT rested today: one that
+        # fired on an earlier day is looked for in today's order book (module docstring).
+        followed.child = named if self._rested_today(followed, at_ns) else None
         self._outcomes.post(followed, GttEvent.IN_FLIGHT, message=note)
         if followed.child is not None:
             self._outcomes.triggered(followed, followed.child)
+
+    @staticmethod
+    def _rested_today(followed: Followed, at_ns: int) -> bool:
+        """Whether `followed`'s last read that showed it resting was on the IST day of
+        `at_ns`."""
+        rested = followed.active_ns
+        return rested is not None and ist_time(rested).date() == ist_time(at_ns).date()
 
     # ----- the child --------------------------------------------------------------------
 

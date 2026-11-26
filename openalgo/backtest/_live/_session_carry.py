@@ -21,23 +21,23 @@
   day-close record never report it as protecting the leg. A finding after the close about
   any other GTT (a strategy's GTT order, a stop GTT of a flat leg) touches no leg: it is
   named in a REJECT alert, an ERROR one when it fired or its terms are not the session's.
-  Each finding is named in plain words (`_AFTER_CLOSE`).
+  Each finding is named in plain words (`FINDING_WORDS`).
 - **The reference for the next day** (`references`): each GTT leg's units at the broker,
   by product (`_broker_units`), read just before the close's GTT book read, with the
   read's time and whether the session's own fills on the leg had settled then; without
   that read (a Ctrl+C), the last reconciliation read's, settled when no order of the leg
-  works and no own fill on it came within `_own_fills.POSITION_BOOK_LAG_S` before it.
-  Unit N5 takes a settled one as the reference of a stop that fires while no session
-  runs.
-- **The day-close record** (`write`): per strategy that carries a position or a resting
-  GTT order, once its kernel session has stopped, the kernel's `carried_state()` with the
-  reference under `REFERENCES_KEY` (the kernel's restore takes the record whole), the
-  strategy's `self.state` and its version id, on the session's trading day, in the
-  ledger of the session's mode (journal L), with each stop GTT the close did not confirm
-  under `UNCONFIRMED_KEY` (its kernel id, trigger ID and why). A strategy that ends flat
-  writes none, but
-  one with a record of the same day (an earlier start's Ctrl+C that kept its leg) has it
-  replaced by its flat state, so the latest record never names a closed position.
+  works and no own fill on it came within `_own_fills.POSITION_BOOK_LAG_S` before it. A
+  read whose units are not the leg's (one-sided for CNC: the user's own units beyond it
+  count for nothing, `_broker_units.strategy_units`) is never settled: the leg's stop GTT
+  may have fired, and a fall measured from such a reference would take a GTT that fired
+  for one that ended outside the session. The next start takes a settled one as the
+  reference of a stop that fires while no session runs.
+- **A finding the close leaves open** (`unresolved_at_close`): at every close, a carried
+  leg's stop GTT the kernel still holds resting whose latest finding of the GTT follower
+  is not RESTING (it went from the book, fired, ended with the leg's units not held, or
+  its terms or its fate cannot be told) is not confirmed: an ERROR alert names it once,
+  the books to check first, and the lines, the result and the record report it so.
+- **The day-close record** (`write`): `_carry_record`.
 
 Times are UTC nanoseconds, quantities signed whole units, prices rupees. Used by the loop
 only.
@@ -46,31 +46,24 @@ only.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
-from .._engine import call
 from .._layout import NANOS_PER_SECOND
-from ..errors import JournalError
-from ._broker_units import broker_units
+from ._broker_units import broker_units, strategy_units
+from ._carry_record import LegReference, write_day_close
+from ._carry_start import REFERENCES_KEY, UNCONFIRMED_KEY
 from ._gtt_types import GttBookSeen, GttEvent, GttOutcome, ReadGtts
 from ._own_fills import POSITION_BOOK_LAG_S
 from ._session_expiry import settles_today
 from ._session_trader import Trader
-from ._stops_gtt import RESTING, overnight, resting_gtts, stop_gtt, stop_gtts
+from ._stops_gtt import PLACE_GTT_BY_HAND, RESTING, overnight, resting_gtts, stop_gtt, stop_gtts
 from ._stops_kernel import protect
 from ._types import LOGGER_NAME, AlertKind, Purpose
-from ._venue_gtts import KernelGtt
+from ._venue_gtt_known import KernelGtt
 from .inbox import Books
 
 logger = logging.getLogger(LOGGER_NAME)
 
-#: The key of the day-close record that holds each carried leg's reference (module
-#: docstring), beside the kernel's carried state.
-REFERENCES_KEY = "gtt_references"
-#: The key of the day-close record that names each stop GTT the close's read did not
-#: confirm (module docstring), beside the kernel's carried state.
-UNCONFIRMED_KEY = "gtts_not_confirmed"
 #: Half a paisa: two trigger prices closer than it are the same price.
 _PAISA = 0.005
 #: The follower's findings, after the close, of a GTT that holds no carried leg's stop
@@ -79,7 +72,7 @@ _CHECK_BY_HAND = frozenset(
     {GttEvent.TRIGGERED, GttEvent.CHILD_MISSED, GttEvent.MISMATCH, GttEvent.OTHER_TERMS}
 )
 #: The follower's findings after the close in an alert's words (RESTING alerts nothing).
-_AFTER_CLOSE = {
+FINDING_WORDS = {
     GttEvent.IN_FLIGHT: "is no longer resting",
     GttEvent.TRIGGERED: "fired",
     GttEvent.CHILD_MISSED: "fired with no child order found",
@@ -94,30 +87,7 @@ _AFTER_CLOSE = {
 _MAY_HAVE_FIRED = frozenset(
     {GttEvent.IN_FLIGHT, GttEvent.TRIGGERED, GttEvent.CHILD_MISSED, GttEvent.MISMATCH}
 )
-#: What a carried leg's stop GTT not confirmed asks of the operator.
-_PLACE_BY_HAND = "place its stop GTT in OpenAlgo by hand before the next open"
 _LAG_NS = round(POSITION_BOOK_LAG_S * NANOS_PER_SECOND)
-
-
-@dataclass(frozen=True)
-class LegReference:
-    """A GTT leg's units at the broker (signed), when they were read (UTC ns) and whether
-    the session's own fills on the leg had settled then (module docstring)."""
-
-    units: int
-    read_ns: int
-    settled: bool
-
-    def record(self, trader: Trader) -> dict[str, Any]:
-        """The reference as the day-close record keeps it."""
-        return {
-            "symbol": trader.symbol,
-            "exchange": trader.exchange,
-            "product": trader.product,
-            "units": self.units,
-            "read_ns": self.read_ns,
-            "settled": self.settled,
-        }
 
 
 class CarriedLegs:
@@ -164,7 +134,7 @@ class CarriedLegs:
             leg = (trader.symbol, trader.exchange, trader.product)
             units = message.units.get(leg)
             if units is not None:
-                settled = leg in message.settled
+                settled = leg in message.settled and _holds_leg(trader, units)
                 self.references[trader.name] = LegReference(units, message.read_ns, settled)
             gtt_id, why, fired = self._unconfirmed(trader, message)
             if why:
@@ -182,10 +152,9 @@ class CarriedLegs:
         if known is None or known.purpose is not Purpose.STOP or trader.open_units() == 0:
             self._other_after_close(trader, known, outcome)
             return
-        found = _AFTER_CLOSE[outcome.event]
-        why = f"its stop GTT {outcome.trigger_id} {found} after the close"
+        why = f"it {FINDING_WORDS[outcome.event]} after the close"
         if outcome.message:
-            why += f" ({outcome.message})"
+            why += f": {outcome.message}"
         fired = outcome.event in _MAY_HAVE_FIRED
         self._not_confirmed(trader, outcome.gtt_id, why, fired=fired)
 
@@ -204,7 +173,7 @@ class CarriedLegs:
         kind = "GTT order" if known is not None and known.purpose is not Purpose.STOP else "GTT"
         text = (
             f"{trader.name}: {kind} {outcome.trigger_id} of {trader.symbol} {trader.exchange} "
-            f"{_AFTER_CLOSE[event]} after the session's close: the session follows it no more"
+            f"{FINDING_WORDS[event]} after the session's close: the session follows it no more"
         )
         if event in _CHECK_BY_HAND:
             self._session.alert(AlertKind.ERROR, f"{text}; check the GTT and order books")
@@ -231,44 +200,13 @@ class CarriedLegs:
                 trader.product,
             )
             if units is not None:
-                settled = self._settled(trader, message.started_ns)
+                settled = self._settled(trader, message.started_ns) and _holds_leg(trader, units)
                 self.references[trader.name] = LegReference(units, message.started_ns, settled)
 
     def write(self, trader: Trader) -> None:
-        """Write `trader`'s day-close record when it carries a position or a resting GTT
-        order (module docstring); its kernel session has stopped. A journal that cannot
-        take it is a warning of the result."""
-        session = self._session
-        if not overnight(trader):
-            return
-        carried = call(trader.engine.carried_state)
-        flat = not carried.get("positions") and not carried.get("orders")
-        if flat and not self._recorded_today(trader):
-            return
-        reference = self.references.get(trader.name)
-        carried[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]
-        carried[UNCONFIRMED_KEY] = _unconfirmed_gtts(trader)
-        version = trader.part.spec.version.version_id
-        state = dict(trader.part.strategy.state)
-        try:
-            session.parts.journal.put_day_close(
-                trader.name, carried, state, version, day=session.parts.spec.day
-            )
-        except JournalError as error:
-            session.warn(f"{trader.name}: the day-close record was not written ({error})")
-            return
-        session.event("day_close", strategy=trader.name, references=len(carried[REFERENCES_KEY]))
-
-    def _recorded_today(self, trader: Trader) -> bool:
-        """Whether the journal holds a day-close record of `trader` of the session's day.
-        A journal that cannot be read is a warning of the result (and no record)."""
-        session = self._session
-        try:
-            record = session.parts.journal.day_close(trader.name)
-        except JournalError as error:
-            session.warn(f"{trader.name}: the day-close record could not be read ({error})")
-            return False
-        return record is not None and record.day == session.parts.spec.day
+        """Write `trader`'s day-close record (`_carry_record.write_day_close`) with the
+        reference of its leg; its kernel session has stopped."""
+        write_day_close(self._session, trader, self.references.get(trader.name))
 
     def _unconfirmed(self, trader: Trader, message: GttBookSeen) -> tuple[int | None, str, bool]:
         """(the kernel's stop GTT the read does not confirm, None for none; why, "" when
@@ -286,44 +224,65 @@ class CarriedLegs:
             gtt_id = int(gtt["gtt_id"])
             row = message.resting.get(known.trigger_id)
             if row is None:
-                why = f"its stop GTT {known.trigger_id} does not rest in the GTT book"
-                return gtt_id, why, True
+                return gtt_id, "it does not rest in the GTT book", True
             triggers, quantity = row
             if quantity == units == round(gtt["quantity_units"]) and any(
                 abs(trigger - gtt["trigger_price"]) < _PAISA for trigger in triggers
             ):
                 return None, "", False
             why = (
-                f"its stop GTT {known.trigger_id} rests for {quantity} units at "
-                f"{', '.join(f'{t:.2f}' for t in triggers)}, not for {units} at "
-                f"{gtt['trigger_price']:.2f}"
+                f"it rests for {quantity} units at {', '.join(f'{t:.2f}' for t in triggers)}, "
+                f"not for {units} at {gtt['trigger_price']:.2f}"
             )
             return gtt_id, why, False
         return None, "no stop GTT of it rests at the broker", False
 
-    def _not_confirmed(self, trader: Trader, gtt_id: int | None, why: str, *, fired: bool) -> None:
+    def unresolved_at_close(self) -> None:
+        """Name each carried leg's stop GTT whose latest finding the close leaves open
+        (module docstring), before the close names what it leaves. The kernel's session
+        may still run (a Ctrl+C): nothing is asked of it."""
+        for trader in self.carried():
+            for gtt in resting_gtts(trader):
+                known = trader.gtts.gtt(int(gtt["gtt_id"])) if trader.gtts is not None else None
+                if known is None or known.finding in (None, GttEvent.RESTING):
+                    continue
+                why = (
+                    f"the GTT follower found that it {FINDING_WORDS[known.finding]}, and the "
+                    "session ended before that was resolved"
+                )
+                self._not_confirmed(trader, int(gtt["gtt_id"]), why, fired=True, closed=False)
+
+    def _not_confirmed(
+        self, trader: Trader, gtt_id: int | None, why: str, *, fired: bool, closed: bool = True
+    ) -> None:
         """Note on the GTT map that the close did not confirm `trader`'s stop GTT `gtt_id`
         (when known) and why, and alert it once per leg, the books checked first when it
-        may have `fired` (module docstring)."""
+        may have `fired` (module docstring); `closed` when the kernel's session has
+        closed: it is then asked to `protect` the leg, and answers nothing."""
         known = None if trader.gtts is None or gtt_id is None else trader.gtts.gtt(gtt_id)
         if known is not None and not known.unconfirmed:
             known.unconfirmed = why
         if trader.name in self._alerted:
             return
         self._alerted.add(trader.name)
-        outcome = protect(trader)
-        self._session.event("protect", strategy=trader.name, outcome=outcome)
-        advice = f": {_PLACE_BY_HAND}"
+        if closed:
+            outcome = protect(trader)
+            self._session.event("protect", strategy=trader.name, outcome=outcome)
+        advice = f": {PLACE_GTT_BY_HAND}"
         if fired:
             advice = (
                 "; it may have fired: check the order book and the position first, then "
-                f"{_PLACE_BY_HAND}"
+                f"{PLACE_GTT_BY_HAND}"
             )
-        self._session.alert(
-            AlertKind.ERROR,
+        held = (
             f"{trader.name}: {trader.symbol} {trader.exchange} {trader.open_units():g} units "
-            f"carried overnight, but {why}{advice}",
+            "carried overnight"
         )
+        if known is None:
+            text = f"{held}, but {why}{advice}"
+        else:
+            text = f"{held}, and its stop GTT {known.trigger_id} is not confirmed ({why}){advice}"
+        self._session.alert(AlertKind.ERROR, text)
 
     def _settled(self, trader: Trader, read_ns: int) -> bool:
         """Whether `trader`'s own fills had settled for a read begun at `read_ns`: no order
@@ -334,19 +293,10 @@ class CarriedLegs:
         return not fills or max(fills) <= read_ns - _LAG_NS
 
 
-def _unconfirmed_gtts(trader: Trader) -> list[dict[str, Any]]:
-    """Each stop GTT of `trader` the close did not confirm, as the day-close record keeps
-    it (module docstring)."""
-    gtts = trader.gtts
-    if gtts is None:
-        return []
-    named = []
-    for gtt in stop_gtts(trader):
-        known = gtts.gtt(int(gtt["gtt_id"]))
-        if known is not None and known.unconfirmed:
-            gtt_id, trigger_id = int(gtt["gtt_id"]), known.trigger_id
-            named.append({"gtt": gtt_id, "trigger_id": trigger_id, "why": known.unconfirmed})
-    return named
+def _holds_leg(trader: Trader, broker: int) -> bool:
+    """Whether the broker's `broker` units are the leg's units (module docstring)."""
+    units = round(trader.open_units())
+    return strategy_units(trader.product, units, broker) == units
 
 
-__all__ = ["REFERENCES_KEY", "UNCONFIRMED_KEY", "CarriedLegs", "LegReference"]
+__all__ = ["FINDING_WORDS", "REFERENCES_KEY", "UNCONFIRMED_KEY", "CarriedLegs"]

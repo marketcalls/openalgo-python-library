@@ -1,0 +1,368 @@
+"""What a strategy holds from an earlier day that no day-close record carries, judged at the
+start before the preflight (20-positional-live 4.2 step 2; the lead's ruling N5a-1 and
+review round 1 of unit N5a). Split from `_carry_open` so each module keeps one job.
+
+- **An unrecorded save** (`_save`): the strategy's latest session, of an earlier day,
+  ended without writing its day-close record (the process ended before the close: a crash,
+  a power cut) while its last save of that day, made after the strategy's latest record
+  (if any: a record that save outdates is never continued, `_carry_start`), holds a CNC or
+  NRML position, a CNC or NRML order working (it may have filled after the save), or a GTT
+  that has not ended. An MIS position never counts: the broker squares MIS off at its
+  close and nothing of it is carried, so an MIS strategy starts as in 2.4.1 whatever its
+  last save holds (20-positional-live 1). A strategy whose outdated record is set aside
+  with nothing of the later session left to judge starts flat, the banner saying so
+  (`set_aside`), and its close writes its record of the day.
+- **A loose GTT**: a GTT of the journal from an earlier day that has not ended and that
+  neither the strategy's continued record nor its set-aside one binds (one a session placed
+  and never recorded at a close). Started afresh beside it, the strategy would trade beside
+  a GTT no engine follows. A GTT the set-aside record binds is named with that record, so
+  the refusal never says that no record carries it (review round 4 of unit N5a).
+
+Such a strategy is judged against the broker's books, read once for every such strategy of
+the start (`BookReads`: the position book, the holdings when a CNC leg is judged, the
+order and trade books, and the GTT book of every status). When the broker holds none of
+any leg involved (each saved CNC or NRML position's and order's, each GTT's) in its
+product, no order of those legs works, and none of the strategy's GTTs of earlier days
+rests (ended, expired, rejected, fired, or gone from a book that was read), the operator
+settled it by hand: each
+of those journal GTTs is ended (`NOT_PLACED` for one whose place was never answered) with a
+note, so no later start follows it, and it starts flat, the banner saying so
+(`Unrecorded.settled`); its close writes its record of the day when an older one is set
+aside. Anything else refuses the start (PreflightError) naming what may still be held and
+what to do (`CHECK_BY_HAND`); a CNC leg the books show held may be held with units of the
+user's own, which the books cannot tell from the strategy's (7.2), so the refusal names
+those units and the way out that remains: another account name.
+
+A strategy with a save of today (`resumed_today`) is not judged at all, and no set-aside
+line is shown for it: an earlier start today passed this judgement (anything loose was
+refused, or found settled and ended), and a restart today resumes today's save, whose GTT
+bindings take back each GTT of an earlier day it follows (`_session_restore_gtts`). Its
+latest record may be of today (a Ctrl+C that kept the leg, or the day's close), which the
+carry of earlier days never reads (review round 3 of unit N5a).
+
+Continuing such a leg from the last save of its day, with the journal's updates newer than
+it (the lead's ruling N5a-1 (5)), needs the engine's state of a day carried to a later
+day's session from a mid-session save, which the kernel gives only from a closed session
+(`carried_state`): not built in this release (the lead accepted the departure in review
+round 4; unit N5c builds it). So a crash before the close record, on the day a position was
+entered or on a later day that continued it, refuses the next start of a later day while
+the leg may be held, and the refusal says so; a restart the same day, before the close,
+resumes the leg from that save (16-session-design 3.6) and its close writes the record.
+
+Days are IST trading days, quantities signed whole units. Run by the main thread at the
+start, before the order worker follows any GTT.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any
+
+from .._products import CNC, OVERNIGHT_PRODUCTS
+from ._answers import server_answer
+from ._carry_start import CarryAtStart, gtt_seqs
+from ._gtt_book import Seen, gtt_rows, seen_of
+from ._gtt_reads import ALL_GTTS
+from ._journal_carry import DayClose
+from ._journal_gtt_rows import GttBinding, GttState
+from ._reconcile_rules import LegBooks, leg_books
+from ._types import Purpose
+from .journal import Journal
+
+#: What a start refused for what a strategy may still hold from an earlier day asks of the
+#: operator.
+CHECK_BY_HAND = (
+    "check the position and its GTTs in OpenAlgo: close the position and cancel its GTTs "
+    "by hand, and the next start finds them closed and begins flat; or start under another "
+    "account name (account=) to leave them as they are"
+)
+#: The kernel's states of a saved GTT that has not ended (the binding's `GTT_STATES`).
+_LIVE_GTT_STATES = frozenset({"Requested", "Active", "ModifyPending", "CancelPending", "Triggered"})
+#: The books the judgement reads, by the SDK call that reads each.
+_BOOKS = ("positionbook", "orderbook", "tradebook")
+
+#: A leg: (symbol, exchange, product).
+Leg = tuple[str, str, str]
+
+
+@dataclass(frozen=True)
+class Unrecorded:
+    """What strategy `name` holds from an earlier day that no day-close record carries
+    (module docstring): `save_day`, the day of its unrecorded save (None for none),
+    `legs`, the legs its save and its GTTs are on, `gtts`, the journal's GTTs of earlier
+    days of it that have not ended (every one with an unrecorded save, else the loose
+    ones), `loose`, those of them no record binds, and `record_day`, the day of the
+    set-aside record that binds the others (None for none)."""
+
+    name: str
+    save_day: dt.date | None
+    legs: frozenset[Leg]
+    gtts: tuple[GttBinding, ...]
+    loose: tuple[GttBinding, ...]
+    record_day: dt.date | None = None
+
+    def words(self) -> str:
+        """What it holds, in a refusal's words."""
+        held = []
+        if self.save_day is not None:
+            held.append(
+                f"its session of {self.save_day} stopped without its day-close record (the "
+                "process ended before the close) while holding a position, an order or a GTT, "
+                "which this version continues only by a restart of bt.live that same day, "
+                "before the close"
+            )
+        loose = {gtt.seq for gtt in self.loose}
+        for gtt in self.gtts:
+            if gtt.seq in loose:
+                held.append(f"{_gtt_words(gtt)} and no day-close record carries it")
+            else:
+                held.append(
+                    f"{_gtt_words(gtt)}: its day-close record of {self.record_day} binds it, "
+                    f"and a later session of {self.save_day} outdates that record"
+                )
+        return f"{self.name}: {'; '.join(held)}"
+
+    def settled(self, today: dt.date) -> str:
+        """The banner's line of it once the books show it settled by hand."""
+        since = self.save_day or min(gtt.day for gtt in self.gtts)
+        legs = ", ".join(f"{s} {e} ({p})" for s, e, p in sorted(self.legs))
+        return (
+            f"{self.name}: what it held since {since} with no day-close record is closed at "
+            f"the broker (none of {legs} held, none of its GTTs resting): it starts flat "
+            f"on {today}"
+        )
+
+
+@dataclass(frozen=True)
+class BookReads:
+    """The broker's books the judgement reads (module docstring), as the SDK answered
+    them; a book not read, or not a success, is None."""
+
+    positionbook: Mapping[str, Any] | None
+    holdings: Mapping[str, Any] | None
+    orderbook: Mapping[str, Any] | None
+    tradebook: Mapping[str, Any] | None
+    gttbook: Mapping[str, Any] | None
+
+
+def resumed_today(journal: Journal, names: Sequence[str], day: dt.date) -> frozenset[str]:
+    """The strategies of `names` with a save of `day`, which this start resumes and never
+    judges (module docstring). Raises JournalError when the journal cannot be read."""
+    return frozenset(name for name in names if journal.rms_state(name, day=day) is not None)
+
+
+def unrecorded(
+    journal: Journal,
+    names: Sequence[str],
+    day: dt.date,
+    carry: CarryAtStart,
+    *,
+    resumed: frozenset[str],
+) -> list[Unrecorded]:
+    """What each of the strategies `names` holds from before `day` that no record carries
+    (module docstring), for those that hold any; those `resumed` today (`resumed_today`)
+    are not judged. Raises JournalError when the journal cannot be read."""
+    open_gtts = [gtt for gtt in journal.open_gtts() if gtt.day < day]
+    found = []
+    for name in names:
+        if name in resumed:
+            continue
+        record = _binding_record(journal, carry, name)
+        save_day, legs = _save(journal, name, day)
+        bound = set() if record is None else set(gtt_seqs(record).values())
+        own = tuple(gtt for gtt in open_gtts if gtt.strategy == name)
+        loose = tuple(gtt for gtt in own if gtt.seq not in bound)
+        if save_day is None and not loose:
+            continue
+        gtts = own if save_day is not None else loose
+        legs |= {(gtt.symbol, gtt.exchange, gtt.product) for gtt in gtts}
+        record_day = None if record is None else record.day
+        found.append(Unrecorded(name, save_day, frozenset(legs), gtts, loose, record_day))
+    return found
+
+
+def _binding_record(journal: Journal, carry: CarryAtStart, name: str) -> DayClose | None:
+    """Strategy `name`'s day-close record whose GTT bindings count (module docstring): the
+    record the start continues, else the one a later save set aside, else None."""
+    carried = carry.of(name)
+    if carried is not None:
+        return carried.record
+    return journal.day_close(name) if name in carry.superseded else None
+
+
+def read_books(client: Any, held: Iterable[Unrecorded]) -> BookReads:
+    """The broker's books for judging `held` (module docstring), read through `client`
+    (the session's data client); only reads."""
+    answers = {name: _answer(client, name) for name in _BOOKS}
+    cnc = any(leg[2] == CNC for each in held for leg in each.legs)
+    holdings = _answer(client, "holdings") if cnc else None
+    gttbook = _answer(client, "gttorderbook", status=ALL_GTTS)
+    return BookReads(holdings=holdings, gttbook=gttbook, **answers)
+
+
+def judge(
+    held: Sequence[Unrecorded], books: BookReads, journal: Journal, carry: CarryAtStart
+) -> tuple[CarryAtStart, list[str]]:
+    """Judge `held` against `books` (module docstring): (the carry with the banner's line
+    of each settled strategy, a refusal for each other). A settled strategy's journal GTTs
+    are ended through `journal`. Raises JournalError when the journal cannot write them."""
+    settled: list[str] = []
+    refusals: list[str] = []
+    for each in held:
+        if not _closed(each, books):
+            refusals.append(f"{each.words()}: {CHECK_BY_HAND}{_own_units_words(each, books)}")
+            continue
+        for gtt in each.gtts:
+            _end(journal, gtt, carry.day)
+        settled.append(each.settled(carry.day))
+    return replace(carry, settled=(*carry.settled, *settled)), refusals
+
+
+def set_aside(
+    carry: CarryAtStart, held: Sequence[Unrecorded], *, resumed: frozenset[str]
+) -> CarryAtStart:
+    """The carry with the banner's line of each strategy whose outdated day-close record
+    (`CarryAtStart.superseded`) is not continued and whose later save left nothing to
+    judge (`held` names none of its saves): it starts flat (module docstring). A strategy
+    `resumed` today has none: an earlier start today said so, and it resumes today's save."""
+    judged = {each.name for each in held if each.save_day is not None}
+    lines = [
+        f"{name}: its day-close record of {outdated.record_day} is not continued, since its "
+        f"session of {outdated.saved_day} changed what it held and ended without a record of "
+        f"its own, and nothing of that session is left to carry: it starts flat on {carry.day}"
+        for name, outdated in carry.superseded.items()
+        if name not in judged and name not in resumed
+    ]
+    return replace(carry, settled=(*carry.settled, *lines))
+
+
+def _save(journal: Journal, name: str, day: dt.date) -> tuple[dt.date | None, set[Leg]]:
+    """(the day of strategy `name`'s unrecorded save, the legs of the CNC and NRML
+    positions and working orders it holds), or (None, none) when it has none (module
+    docstring): its latest session's save, made after its latest day-close record. A
+    working order counts: it may have filled after the save."""
+    last = journal.last_ran(name, day)
+    if last is None:
+        return None, set()
+    record = journal.day_close(name)
+    if record is not None and journal.saved_after(record, day) != last:
+        return None, set()
+    saved = journal.rms_state(name, day=last)
+    state = {} if saved is None else dict(saved.get("live_state", {}))
+    instruments = state.get("instruments", [])
+    held = [p for p in state.get("positions", []) if float(p["quantity_units"])]
+    held += [order["request"] for order in state.get("orders", [])]
+    legs = {
+        _leg_of(instruments, terms) for terms in held if terms.get("product") in OVERNIGHT_PRODUCTS
+    }
+    gtts = [g for g in state.get("gtts", []) if g.get("status") in _LIVE_GTT_STATES]
+    return (last, legs) if legs or gtts else (None, set())
+
+
+def _leg_of(instruments: Sequence[Mapping[str, Any]], terms: Mapping[str, Any]) -> Leg:
+    """The leg (symbol, exchange, product) of a saved position or order request."""
+    instrument = instruments[int(terms["instrument"])]
+    return str(instrument["symbol"]), str(instrument["exchange"]), str(terms["product"])
+
+
+def _closed(held: Unrecorded, books: BookReads) -> bool:
+    """Whether the books show everything `held` names closed at the broker (module
+    docstring): every book read, no leg held or worked, no GTT resting."""
+    if books.positionbook is None or books.orderbook is None or books.tradebook is None:
+        return False
+    rows = None if books.gttbook is None else gtt_rows(books.gttbook)
+    if rows is None:
+        return False
+    for leg in held.legs:
+        found = _leg_books(books, leg)
+        if found.units != 0 or found.rows is None or any(row.working for row in found.rows):
+            return False
+    return all(_not_resting(gtt, rows) for gtt in held.gtts)
+
+
+def _leg_books(books: BookReads, leg: Leg) -> LegBooks:
+    """The books' view of `leg` (symbol, exchange, product): its units at the broker (a
+    CNC leg's with the holdings) and its order rows."""
+    symbol, exchange, product = leg
+    return leg_books(
+        books.positionbook,
+        books.tradebook,
+        books.orderbook,
+        symbol,
+        exchange,
+        product=product,
+        holdings=books.holdings,
+    )
+
+
+def _own_units_words(held: Unrecorded, books: BookReads) -> str:
+    """What a refusal of `held` adds when a CNC leg of it shows units at the broker: they
+    may be the user's own (20-positional-live 7.2), which the books cannot tell from the
+    strategy's, so the check above never finds such a leg closed; "" for none."""
+    if books.positionbook is None or books.orderbook is None or books.tradebook is None:
+        return ""
+    shown = []
+    for leg in sorted(held.legs):
+        units = _leg_books(books, leg).units if leg[2] == CNC else 0
+        if units:
+            shown.append(f"{units} {leg[0]} {leg[1]} (CNC)")
+    if not shown:
+        return ""
+    return (
+        f". The books show {', '.join(shown)} held: if any of them are units of your own, "
+        "the start cannot tell them from the strategy's and never finds the leg closed, so "
+        "once the strategy's units are sold and its GTTs cancelled, start it under another "
+        "account name (account=)"
+    )
+
+
+def _not_resting(gtt: GttBinding, rows: Mapping[str, Any]) -> bool:
+    """Whether the GTT book `rows` (by trigger ID) shows journal GTT `gtt` not resting: by
+    its trigger ID, or, for one whose place was never answered, no GTT of its instrument
+    resting at all."""
+    if gtt.trigger_id is None:
+        return not any(
+            (row.symbol, row.exchange) == (gtt.symbol, gtt.exchange)
+            and seen_of(rows, trigger_id).rests
+            for trigger_id, row in rows.items()
+        )
+    seen = seen_of(rows, gtt.trigger_id)
+    return not seen.rests and seen is not Seen.UNREADABLE
+
+
+def _end(journal: Journal, gtt: GttBinding, day: dt.date) -> None:
+    """End journal GTT `gtt`, found not resting at the start of `day`'s session."""
+    if gtt.trigger_id is None:
+        note = f"not resting at the broker at the start of {day}, its place never answered"
+        journal.set_gtt_state(gtt.seq, GttState.NOT_PLACED, note=note)
+        return
+    note = f"not resting at the broker at the start of {day}, its leg closed by hand"
+    journal.set_gtt_state(gtt.seq, GttState.ENDED, note=note)
+
+
+def _answer(client: Any, name: str, **fields: Any) -> Mapping[str, Any] | None:
+    """The SDK's answer to read `name`, or None when it is not a success."""
+    answer = server_answer(getattr(client, name)(**fields))
+    return answer if answer.get("status") == "success" else None
+
+
+def _gtt_words(gtt: GttBinding) -> str:
+    """A GTT of an earlier day that has not ended, in a refusal's words."""
+    kind = "stop GTT" if gtt.purpose is Purpose.STOP else "GTT order"
+    name = gtt.trigger_id or f"g{gtt.gtt_id} (its place was not answered)"
+    leg = f"{gtt.exchange}:{gtt.symbol} ({gtt.product})"
+    return f"its {kind} {name} of {gtt.day} on {leg} has not ended"
+
+
+__all__ = [
+    "CHECK_BY_HAND",
+    "BookReads",
+    "Unrecorded",
+    "judge",
+    "read_books",
+    "resumed_today",
+    "set_aside",
+    "unrecorded",
+]

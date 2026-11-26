@@ -2,7 +2,10 @@
 strategy's kernel session given its saved state once the plan's catch-up is done, the
 venue map rebuilt from the kernel's (saved id, new id) pairs, every restored order checked
 against the journal and the start's books, the day-long locks set again, the start's
-differences acted on, and then, before the banner, the protective start phase.
+differences acted on, and then, before the banner, the protective start phase. A strategy
+with nothing saved today that carries a position or a GTT from an earlier day is given
+its day-close record instead (`_carry_restore`, 20-positional-live 4.2), and its start's
+difference is acted on as any (`_restart_carried` judged it).
 
 **The restored-order check** (`_check`, 3.6), for each order the saved state worked:
 
@@ -26,7 +29,9 @@ broker locked from the start and, when other orders' trades explain the differen
 adopted; the exit guard opened for a leg whose broker holds fewer units (a leg whose
 restored engine holds other units than the start judged waits for a fresh read instead:
 `Reconciler.differs_at_start`); a CNC or NRML leg's GTTs taken back by the journal
-(`_session_restore_gtts`); each leg with a position given its stop again (`protect`, R7:
+(`_session_restore_gtts`, for a saved state of today: a carry's are taken back by
+`_carry_restore`, and a GTT its kernel places since, as a stop again, goes out once with
+the loop's commands); each leg with a position given its stop again (`protect`, R7:
 nothing when one works), or, for an MIS leg past its square-off, exited
 (`request_exit("square_off")`: a CNC or NRML leg is never squared off, it is carried at
 the close, 20-positional-live 7.3); the reconciler told what was adopted and which orders
@@ -50,6 +55,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
+from ._carry_restore import report_settled, restore_carried
 from ._fill_ledger import VENUE_REJECT_CODE
 from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
@@ -100,11 +106,17 @@ def restore(session: Any, restart: Restart, sleep: Sleep) -> None:
         name: leg.saved.adopted for name, leg in restart.legs.items() if leg.saved is not None
     }
     session.reconcile.start(adopted, restart.own)
+    carry = session.parts.carry
     for trader in session.traders:
         leg = restart.legs[trader.name]
+        carried = None if carry is None else carry.of(trader.name)
         if leg.saved is not None:
             _catch_up_to(session, trader, int(leg.saved.live_state["slice"]), sleep)
             _restore(session, trader, leg.saved, restart)
+        elif carried is not None:
+            restore_carried(session, trader, carried)
+        elif carry is not None and trader.name in carry.expired:
+            report_settled(session, carry.expired[trader.name])
         _after(session, trader, leg, restart)
     if adopted:
         # Every order taken back is polled once: the stream may have missed its words.
@@ -269,7 +281,10 @@ def _after(session: Any, trader: Trader, leg: LegStart, restart: Restart) -> Non
     if leg.kind not in (Kind.AGREE, Kind.UNREADABLE):
         reconcile = session.reconcile
         reconcile.differs_at_start(trader, leg.kind, leg.journal_units, leg.books, leg.group)
-    restore_gtts(session, trader)
+    if leg.saved is not None:
+        # A carry's GTTs were all taken back by `_carry_restore`; any other GTT of its
+        # kernel is one the kernel made since, whose place the loop sends (`commands`).
+        restore_gtts(session, trader, leg.saved.bindings)
     units = trader.open_units()
     if units == 0:
         return

@@ -111,8 +111,13 @@ def test_an_mcx_delivery_contract_the_table_gives_no_tender_period_for_is_named_
         warnings.simplefilter("ignore", ReferenceDataWarning)
         day, warning = exit_day(GOLD, default_calendar())
     assert day is None
-    assert warning.startswith("GOLD05FEB26FUT is settled by delivery")
-    assert "mcx_contracts" in warning and "tender_days" in warning
+    # No run takes reference tables of the user's, so the advice is the one a user can follow
+    # (the lead's ruling 9a of review round 4 of unit N5a).
+    assert warning == (
+        "GOLD05FEB26FUT is settled by delivery, and the reference table mcx_contracts gives no "
+        "tender period for it: a position held into its tender period is settled at expiry in "
+        "cash, where MCX would mark it for delivery. Exit it before its tender period"
+    )
 
 
 def test_the_exit_days_and_warnings_of_a_run_are_in_registration_order():

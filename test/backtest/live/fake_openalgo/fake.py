@@ -30,7 +30,7 @@ from .faults import Faults
 from .feed import Feed
 from .feed_server import FeedServer
 from .gtts import FakeGtt
-from .hidden_rows import GTT_BOOK, ORDER_BOOK
+from .hidden_rows import GTT_BOOK, ORDER_BOOK, TRADE_BOOK
 from .log import FakeLog
 from .market import Candle, Instrument
 from .orders import FakeOrder, Fill
@@ -264,6 +264,13 @@ class FakeOpenAlgo:
         with self._venue.lock:
             self._venue.hidden.hide(ORDER_BOOK, order_id, reads)
 
+    def hide_trades(self, order_id: str, *, reads: int = 1) -> None:
+        """The next `reads` answers of the trade book leave out the fills of order
+        `order_id`, placed already or not yet: a trade book that does not list them
+        (`hidden_rows`). Raises ValueError for fewer than 1 read."""
+        with self._venue.lock:
+            self._venue.hidden.hide(TRADE_BOOK, order_id, reads)
+
     def catch_up_positionbook(self) -> None:
         """The position book shows every fill again after `lag_positionbook`."""
         with self._venue.lock:
@@ -301,6 +308,17 @@ class FakeOpenAlgo:
         with self._venue.lock:
             for book in self._venue.books.values():
                 book.end_day()
+
+    def settle_contract(self, symbol: str, exchange: str) -> None:
+        """The exchange settles an expired contract between two days, in both books: its
+        positions leave the position book and its active GTTs end ("deleted"), as a
+        broker ends the GTTs of a contract that no longer trades."""
+        with self._venue.lock:
+            for book in self._venue.books.values():
+                book.positions.drop(symbol, exchange)
+                for gtt in book.gtts.values():
+                    if (gtt.symbol, gtt.exchange) == (symbol, exchange) and gtt.active:
+                        gtt.status = "deleted"
 
     # -- GTT orders ---------------------------------------------------------
 
@@ -377,6 +395,13 @@ class FakeOpenAlgo:
         """A book's net position in an instrument, signed units."""
         with self._venue.lock:
             return self._venue.books[mode or self.mode].positions.net(symbol, exchange)
+
+    def holding(self, symbol: str, exchange: str, mode: Mode | None = None) -> int:
+        """A book's units of an instrument held for delivery (CNC), as `holdings` answers
+        them; 0 for none."""
+        with self._venue.lock:
+            held = self._venue.books[mode or self.mode].holdings.get((symbol, exchange))
+            return 0 if held is None else held[0]
 
     @property
     def telegram_sent(self) -> list[TelegramMessage]:

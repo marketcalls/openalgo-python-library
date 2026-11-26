@@ -219,8 +219,8 @@ def test_an_index_future_on_its_last_trading_day_is_left_to_the_exchange_at_the_
     assert [g.status for g in world.fake.gtts()] == ["cancelled"]
     assert (
         f"FutureHold {FUTURE} NFO {LOT} units: the exchange settles it at its expiry today, so "
-        "its stop GTT was cancelled at the close; the next start records its exit at today's "
-        "last close"
+        "its stop GTT was cancelled at the close; the next start, on the contract traded then, "
+        "names the settlement and today's last close"
     ) in world.lines
     assert alerts(caplog, "error") == []
 
@@ -229,7 +229,7 @@ def test_an_index_future_under_rearm_daily_on_its_last_day_is_left_to_the_exchan
     make_fake_openalgo, monkeypatch, tmp_path, caplog
 ):
     # Its stop is a day stop, not a GTT, and the exchange settles it: neither the line nor
-    # the close's WARNING of legs without a stop until the next start names a GTT or it.
+    # the close's WARN alert of legs without a stop until the next start names a GTT or it.
     world = expiry_world(
         make_fake_openalgo, monkeypatch, tmp_path, symbol=FUTURE, day=FUTURE_DAY, start=(15, 20, 5)
     )
@@ -240,9 +240,10 @@ def test_an_index_future_under_rearm_daily_on_its_last_day_is_left_to_the_exchan
     assert world.fake.gtts() == []
     assert (
         f"FutureHold {FUTURE} NFO {LOT} units: the exchange settles it at its expiry today, so "
-        "it needs no stop from the close; the next start records its exit at today's last close"
+        "it needs no stop from the close; the next start, on the contract traded then, names "
+        "the settlement and today's last close"
     ) in world.lines
-    assert not [text for text in alerts(caplog, "session") if "WARNING" in text]
+    assert alerts(caplog, "warn") == []
     warned = session_result(outcome).warnings
     assert not [w for w in warned if w.endswith("no stop at the broker until your next start")]
     assert alerts(caplog, "error") == []

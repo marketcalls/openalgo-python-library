@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from openalgo.backtest._live import _session_start
+from openalgo.backtest._live._carry_start import CarryAtStart
 from openalgo.backtest._live._group_rules import GroupFigure
 from openalgo.backtest._live._journal_reads import JournalSession
 from openalgo.backtest._live._locked_entries import LockedEntries
@@ -133,6 +134,7 @@ def test_the_preflight_plan_checks_the_product_of_the_sessions_strategies(monkey
 
     monkeypatch.setattr(_session_start, "check_preflight", check)
     strategy = SimpleNamespace(
+        name="Sample",
         symbol="SBIN",
         exchange="NSE",
         interval="5m",
@@ -152,7 +154,9 @@ def test_the_preflight_plan_checks_the_product_of_the_sessions_strategies(monkey
         wait_max_s=1.0,
     )
 
-    _preflight(spec, SimpleNamespace(data=None), Mode.LIVE, None, settings)
+    opened = SimpleNamespace(clients=SimpleNamespace(data=None), mode=Mode.LIVE, shared=None)
+
+    _preflight(spec, opened, settings, CarryAtStart.none(DAY, Mode.LIVE))
 
     assert checked == [product]
 

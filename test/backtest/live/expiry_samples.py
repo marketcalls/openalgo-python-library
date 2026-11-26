@@ -113,9 +113,11 @@ def expiry_world(
     start: tuple[int, int, int],
     analyzer: bool = False,
     lot: int = LOT,
+    expiry: dt.date | None = None,
 ) -> Rig:
     """A rig on `day` started at the IST time `start`, trading `symbol` (module
-    docstring), its lot `lot` units, in the sandbox when `analyzer`."""
+    docstring), its lot `lot` units, in the sandbox when `analyzer`; the master contract
+    gives the contract's `expiry` (`day` unless given: its last trading day)."""
     at = ist(day, *start)
     monkeypatch.setenv("OPENALGO_BT_CACHE", str(tmp_path / "cache"))
     monkeypatch.setattr(HistoryFetcher, "_wait", lambda fetcher, seconds: None)
@@ -129,7 +131,7 @@ def expiry_world(
         tick_size=0.05,
         freeze_qty=1800,
         instrument_type="CE" if option else "FUT",
-        expiry=f"{day:%d-%b-%y}".upper(),
+        expiry=f"{expiry or day:%d-%b-%y}".upper(),
         strike=24000.0 if option else 0.0,
     )
     fake.seed_candles(symbol, "NFO", flat_candles(day, ist(day, *start[:2])))

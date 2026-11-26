@@ -9,7 +9,9 @@ the GTT follower's findings come as `GttOutcome`s. Every GTT is a SINGLE GTT (P6
   against the price it was placed from (`Direction`: OpenAlgo's `triggerprice_sl` below
   it, `triggerprice_tg` above it, 3.6), what the GTT is for (a leg's stop or a strategy's
   GTT entry) and its priority; a modify or cancel names the journal's GTT it is of (`seq`,
-  from the place's answer).
+  from the place's answer). A place that names one (`seq`) is a place the journal shows
+  under way and unbound at a restart: the worker settles it as an unanswered place and
+  sends it only as that rule allows (`_gtt_send`; the lead's ruling N5a-5).
 - **An answer** to a request (`GttAnswerKind`): placed (the broker holds it, a book read
   showed it), refused with the broker's message (kept across starts when it repeats a
   refusal of an earlier day, 3.5), modified, modify refused, cancelled, cancel refused, or
@@ -57,6 +59,10 @@ from ._venue_requests import Priority
 
 #: The flag of a fill whose price the books did not give: the GTT child's limit stands in.
 PRICE_UNVERIFIED = "price_unverified"
+#: The flag of a fill made on a trading day no session ran (20-positional-live 4.3): a
+#: GTT that fired after its last resting read, with a trading day between that read's day
+#: and today; the binding's `VENUE_FILL_FLAGS` hold both.
+MISSED_DAY = "missed_day"
 
 
 class GttAction(enum.Enum):
@@ -80,8 +86,9 @@ class Direction(enum.Enum):
 @dataclass(frozen=True)
 class GttRequest:
     """One GTT call for the order worker (module docstring). `request_id` is the session's
-    request number, `gtt_id` the kernel's; `seq` the journal's GTT a modify or cancel is of
-    (None for a place). Raises LiveError when the request cannot be sent as it stands."""
+    request number, `gtt_id` the kernel's; `seq` the journal's GTT a modify or cancel is of,
+    or a place under way since before a restart is (None for a new place). Raises LiveError
+    when the request cannot be sent as it stands."""
 
     request_id: int
     action: GttAction
@@ -169,7 +176,9 @@ class GttOutcome:
     docstring), of `strategy`'s kernel GTT `gtt_id`, broker GTT `trigger_id`: for
     TRIGGERED the child's broker `order_id`; for CHILD_MISSED the `units` and `price` of
     the fill the position's move stands for, and its `flags`; for MISMATCH the order IDs
-    that could each be its child (`candidates`); `message` says what was seen."""
+    that could each be its child (`candidates`); for ENDED_OUTSIDE the leg's signed units
+    at the broker in the read that judged it (`held`, None for none read); `message` says
+    what was seen."""
 
     seq: int
     strategy: str
@@ -185,6 +194,7 @@ class GttOutcome:
     flags: tuple[str, ...] = ()
     candidates: tuple[str, ...] = ()
     message: str = ""
+    held: int | None = None
 
 
 @dataclass(frozen=True)
@@ -264,13 +274,14 @@ def _problem(request: GttRequest) -> str:
         return f"its units are a whole number, not {request.quantity!r}"
     if request.quantity <= 0:
         return f"its units are above 0, not {request.quantity}"
-    if (request.seq is None) is not (request.action is GttAction.PLACE):
-        return "a place names no journal GTT, and a modify or cancel names the one it is of"
+    if request.seq is None and request.action is not GttAction.PLACE:
+        return "a modify or cancel names the journal GTT it is of"
     return ""
 
 
 __all__ = [
     "GTT_PURPOSES",
+    "MISSED_DAY",
     "PRICE_UNVERIFIED",
     "BindGttChild",
     "Direction",

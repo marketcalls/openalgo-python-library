@@ -85,18 +85,25 @@ def breach_text(breach: ModeBreach) -> str:
     return f"{text} The session sends nothing more. {again} again in the mode you want."
 
 
-def breach_alert(positions: Sequence[str], products: Collection[str] = ()) -> str:
+def breach_alert(
+    positions: Sequence[str],
+    products: Collection[str] = (),
+    *,
+    intraday: bool = True,
+    dropped: Sequence[str] = (),
+) -> str:
     """The session's ERROR alert when the mode guard locked (16-session-design 6.2;
     20-positional-live 10.4): it sends nothing more, each position as last known, in words
-    with its stop (`positions`), and what becomes of them by the `products` they are held
-    in: the broker's MIS square-off closes the MIS positions (said also when none is open),
-    and the CNC and NRML positions stay open overnight, so their stops are to be checked at
-    the broker."""
+    with its stop (`positions`), the orders it now never sends (`dropped`: a pre-open
+    decision's, one line each), and what becomes of the positions by the `products` they
+    are held in: in a session that runs an MIS strategy (`intraday`), the broker's MIS
+    square-off closes the MIS positions (said also when none is open), and the CNC and
+    NRML positions stay open overnight, so their stops are to be checked at the broker."""
     held = "; ".join(positions) if positions else "no open position"
     carried = any(product in OVERNIGHT_PRODUCTS for product in products)
-    intraday = not products or any(product not in OVERNIGHT_PRODUCTS for product in products)
+    squared = not products or any(product not in OVERNIGHT_PRODUCTS for product in products)
     fates = []
-    if intraday:
+    if intraday and squared:
         fates.append(
             "The broker's MIS square-off closes "
             + ("the MIS positions" if carried else "what is left")
@@ -105,9 +112,12 @@ def breach_alert(positions: Sequence[str], products: Collection[str] = ()) -> st
         fates.append(
             "CNC and NRML positions stay open overnight, so check each one's stop at the broker"
         )
+    fates.append("stop the session with Ctrl+C")
+    told = "; ".join(fates)
+    unsent = "".join(f" {line}." for line in dropped)
     return (
         f"OpenAlgo's mode changed: the session sends nothing more. Positions as last known: "
-        f"{held}. {'; '.join(fates)}; stop the session with Ctrl+C"
+        f"{held}.{unsent} {told[0].upper()}{told[1:]}"
     )
 
 

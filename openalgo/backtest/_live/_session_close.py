@@ -19,7 +19,8 @@ to journal L, now that the final fills are in (each strategy's state with its fi
 its `self.state`, the session's counts with the mismatches the close names:
 `_session_figures`); the order worker stopped; each kernel session stopped where it
 stands (`stop_session`, R20) with its last events delivered, `on_stop` called and
-`finish` read; the DAILY_SUMMARY alert; then
+`finish` read; a SESSION alert of the CNC and NRML legs carried (`_carry_close`, named in
+the summary too) and the DAILY_SUMMARY alert; then
 everything the start opened closed in reverse (the feed, the data worker, journal L, the
 logs, the alerts, the lock). A journal failure or another error closes the same way
 without the flatten (journal L is not written after a journal failure). A position left
@@ -55,6 +56,7 @@ from .._driver import deliver
 from .._engine import call
 from ..errors import JournalError
 from ._alerts_summary import SessionSummary, summary_text
+from ._carry_close import alert_carried, carried_lines
 from ._fill_comparison import FillRow, slippage_of, strategy_rows
 from ._plan_args import LiveArguments
 from ._plan_catch_up import StrategyPlan
@@ -178,6 +180,7 @@ def close_session(
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)
         summary = _summary(session, (stopped, slipped), unprotected_s, named, day_warnings)
+        alert_carried(session, summary.carried)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
@@ -193,12 +196,13 @@ def close_session(
 @dataclass(frozen=True)
 class _Named:
     """What the close names, read while the kernel sessions run: the `open_positions`,
-    the legs the summary names (`legs`, `_session_named.NamedLegs`) and each shared
-    instrument (`shared`)."""
+    the legs the summary names (`legs`, `_session_named.NamedLegs`), each shared
+    instrument (`shared`) and each CNC or NRML leg carried (`carried`, `_carry_close`)."""
 
     open_positions: tuple[OpenPosition, ...]
     legs: NamedLegs
     shared: tuple[SharedPosition, ...]
+    carried: tuple[str, ...] = ()
 
     @property
     def flat(self) -> bool:
@@ -222,13 +226,15 @@ def _settle(session: Session, stopped_by: str, *, journal_works: bool) -> None:
         logger.warning("a request held back by the exit guard was not sent: %r", request)
     session.stops.after.alert(session)
     alert_not_confirmed(session)
+    session.news.carry.unresolved_at_close()
 
 
 def _named(session: Session) -> _Named:
     """What the close names (`_Named`): each shared instrument, then the open positions
     with its row, then the legs the summary names."""
     shared = shared_positions(session)
-    return _Named(open_positions(session, shared), named_legs(session), shared)
+    legs = named_legs(session)
+    return _Named(open_positions(session, shared), legs, shared, carried_lines(session))
 
 
 def _outcome(
@@ -334,6 +340,7 @@ def _summary(
         limits=limit_lines(session),
         versions=tuple(session.versions.ids.values()),
         notes_charges=notes_charges(traded.charges, tables) if first_start else None,
+        carried=named.carried,
         warnings=warnings,
     )
 

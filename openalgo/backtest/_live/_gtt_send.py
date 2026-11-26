@@ -5,7 +5,8 @@ as one `GttAnswer` (posted as `inbox.GttNews`).
 
 - **Journal first**: a place is written (`record_gtt`) before its call and bound to the
   broker's trigger ID on success (`bind_gtt`); every other state is noted as it comes
-  (`set_gtt_state`, and `set_gtt_terms` for a confirmed modify).
+  (`set_gtt_state`, and `set_gtt_terms` for a confirmed modify). A place a restart finds
+  under way and unbound is settled as an unanswered place (`_settle_place`).
 - **One call at a time per GTT**: while a call waits for its confirmation, the GTT's
   requests are held in the worker's queue, and the follower leaves the GTT to the
   confirmation (`_gtt_follow.GttFollower.hold`). The confirmation's reads serve the
@@ -101,7 +102,9 @@ class GttSender(Confirmations):
             self._hold_back(request)
             return
         self._notices.pop(request.request_id, None)
-        if request.action is GttAction.PLACE:
+        if request.action is GttAction.PLACE and request.seq is not None:
+            self._settle_place(request, request.seq)
+        elif request.action is GttAction.PLACE:
             self._place(request, Stage.PLACE)
         elif request.action is GttAction.MODIFY:
             self._modify(request)
@@ -138,6 +141,23 @@ class GttSender(Confirmations):
             self._follower.ask()
         else:
             self._answer(request, GttAnswerKind.UNRESOLVED, message=result.message)
+
+    def _settle_place(self, request: GttRequest, seq: int) -> None:
+        """A place the journal shows under way and unbound since before a restart (journal
+        GTT `seq`; the lead's ruling N5a-5): settled as an unanswered place the server may
+        still be working on, sent when the journal recorded it (`_gtt_confirm`): one of its
+        shape resting is bound and answered PLACED; none, and a settled read against a
+        reference from before the place shows no fall, is placed again once; anything else
+        is UNRESOLVED. Nothing is sent for it before that verdict. A GTT the journal no
+        longer shows under way (settled meanwhile) is answered UNRESOLVED."""
+        gtt = self._journal.gtt(seq)
+        if gtt is None or gtt.trigger_id is not None or gtt.state is not GttState.REQUESTED:
+            state = "not in the journal" if gtt is None else gtt.state.value
+            words = f"GTT {seq} is {state}, not a place under way: it is not settled again"
+            self._answer(request, GttAnswerKind.UNRESOLVED, message=words)
+            return
+        under_way = CallResult(CallKind.UNANSWERED, sent_ns=gtt.recorded_ns, finished=False)
+        self._start(Pending(Stage.PLACE, request, seq, answered=False), under_way)
 
     def _modify(self, request: GttRequest) -> None:
         gtt = self._known(request)

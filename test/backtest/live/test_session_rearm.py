@@ -184,8 +184,13 @@ def test_the_close_warns_of_each_carried_leg_without_a_stop_until_the_next_start
 
     line = "CncHold 10 SBIN NSE (CNC), stop 497.00: no stop at the broker until your next start"
     mode = "SANDBOX" if analyzer else "LIVE"
+    assert (f'{mode} (CncHold): positional_stops="rearm_daily": {line}. {SENTENCE}') in alerts(
+        caplog, "warn"
+    )
+    # The carried legs' alert gives the leg's stop in the same words, never one at the broker.
     assert (
-        f'{mode} (CncHold): WARNING: positional_stops="rearm_daily": {line}. {SENTENCE}'
+        f"{mode} (CncHold): Carried overnight:\nCncHold SBIN NSE 10 units entered on 2026-11-16 "
+        "at 500.00, stop 497.00: no stop at the broker until your next start"
     ) in alerts(caplog, "session")
     assert outcome.stopped_by == "session_end"
     result = session_result(outcome)
@@ -226,7 +231,7 @@ def test_a_ctrl_c_before_the_close_says_the_day_stop_works_until_the_close(
     make_fake_openalgo, monkeypatch, tmp_path, caplog
 ):
     # Ctrl+C at 14:46 keeps the CNC leg (on_stop's default) with its day SL-M working: the
-    # close's WARNING says it protects the leg until the close, and nothing after.
+    # close's WARN alert says it protects the leg until the close, and nothing after.
     world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
     world.stop_at(ist(14, 46))
 
@@ -236,8 +241,8 @@ def test_a_ctrl_c_before_the_close_says_the_day_stop_works_until_the_close(
         "CncHold 10 SBIN NSE (CNC), stop 497.00: its day stop works at the broker until the "
         "close, then no stop until your next start"
     )
-    assert f'LIVE (CncHold): WARNING: positional_stops="rearm_daily": {line}. {SENTENCE}' in (
-        alerts(caplog, "session")
+    assert f'LIVE (CncHold): positional_stops="rearm_daily": {line}. {SENTENCE}' in (
+        alerts(caplog, "warn")
     )
     assert line in session_result(outcome).warnings
 

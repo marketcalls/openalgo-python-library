@@ -57,7 +57,15 @@ from typing import Any
 from ._order_state import ENTRY_PURPOSES
 from ._session_trader import Trader
 from ._stops_cover import CLOSE_REJECTED, REFUSED_FOR_MARGIN
-from ._stops_gtt import gtt_cancelling, gtt_trigger_id, gtt_words, stop_gtt
+from ._stops_gtt import (
+    CHECK_THEN_PLACE,
+    gtt_cancelling,
+    gtt_trigger_id,
+    gtt_unconfirmed,
+    gtt_unsettled,
+    gtt_words,
+    stop_gtt,
+)
 from ._stops_kernel import PROTECT_PLACED, order_of
 from ._stops_orders import IN_FLIGHT, Sent, Watched
 from ._types import MARKET, Purpose
@@ -159,6 +167,9 @@ def left_open(stops: Any, trader: Trader, *, books: bool = True) -> str:
     held = stops.day.words(trader, check=advice == _CHECK)
     if held is not None:
         return "; ".join([*parts, held])
+    if stop_gtt(trader) and gtt_unconfirmed(trader):
+        # Carried with no stop GTT the close confirmed: it may have fired (`_stops_gtt`).
+        return "; ".join([*parts, CHECK_THEN_PLACE])
     if advice == _CHECK:
         return "; ".join([*parts, CHECK_FIRST])
     *before, last = parts
@@ -349,9 +360,11 @@ def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
 
 def _covering(stops: Any, trader: Trader) -> int:
     """The units the leg's confirmed stop covers at the broker for a note: none while it
-    is being cancelled (`_being_cancelled`); a stop GTT leg's, its stop GTTs'."""
+    is being cancelled (`_being_cancelled`); a stop GTT leg's, its stop GTTs', none
+    while one is a GTT a restart could not tell where it stands (`_stops_gtt`)."""
     if stop_gtt(trader):
-        return 0 if gtt_cancelling(trader) else int(stops.covered(trader))
+        unsure = gtt_cancelling(trader) or gtt_unsettled(trader)
+        return 0 if unsure else int(stops.covered(trader))
     watched = _stop(stops, trader)
     if watched is None or _being_cancelled(stops, trader, watched):
         return 0

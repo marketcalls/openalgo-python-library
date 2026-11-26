@@ -2,11 +2,10 @@
 runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on it.
 
 1. The arguments and the strategies (`plan.specify`): ConfigError or NotImplementedError.
-2. The session's clients (`clients.derive`), unless given (the test seam).
-3. The mode: the guard reads OpenAlgo's analyzer switch, and the session adopts it.
-4. The alerts, on their own client, shared by every thread.
-5. `ping` names the broker (the default account name); the account and server locks.
-6. The day's logs under the account's folder.
+2. to 6. The session's clients, the mode, the alerts, the broker `ping` names, the account
+   and server locks, and the day's logs (`_session_account`). Then what the session
+   continues from earlier days is read from the journal, and what it cannot continue is
+   refused before anything is sent (`_carry_open`: PreflightError).
 7. The preflight. Started before the open, a preflight that fails only on the broker's
    login is run again every `LOGIN_RETRY_EVERY_S`, its alert test reported again rather
    than sent, with an ERROR alert at `LOGIN_ALERT_AT` IST; at the open it fails. The
@@ -14,9 +13,8 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
    package calendar disagree are the event `CALENDAR_DISAGREES` once the session exists.
 8. The order worker starts journal handle W, the journal's session of the day and the
    order path (on its own thread, or inline under the test seam), and the main thread
-   opens journal handle L (`_session_worker`). A strategy a kept stop GTT refusal names,
-   or one that holds a position or a GTT from an earlier day, is refused now, before
-   anything is sent (`_preflight_carry`: PreflightError).
+   opens journal handle L (`_session_worker`). A strategy a kept stop GTT refusal names
+   is refused now, before anything is sent (`_preflight_carry`: PreflightError).
 9. and 10. Unbound intents of the day resolved first, then the books read and each
    strategy's journal position judged against the broker's (`_restart_books`): a broker
    position on a traded symbol that the journal does not hold, or a journal position the
@@ -25,8 +23,8 @@ runs steps 1 to 11 and returns the loop, `begin_trading` runs steps 12 to 15 on 
    live series and `init`, its saved `self.state` merged, the catch-up to the present.
    Each kernel session's entries are locked ("starting") and its sizing equity capped by
    the funds available (`_session_traders`); each strategy's version and run manifest
-   written to journal L (`_session_versions`); a restart's saved state restored and
-   checked (`_session_restore.restore`).
+   written to journal L (`_session_versions`); a restart's saved state, or a carry from
+   an earlier day, restored and checked (`_session_restore.restore`).
 
 A failure up to step 11 closes what was opened, in reverse, and is raised. Then
 `begin_trading`: 12. the data worker starts and the loop turns (the start phase): with a
@@ -43,19 +41,18 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import pathlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ..calendar import default_calendar
-from ..errors import LiveError
 from ..strategy import Strategy
-from ._alerts_logs import SessionLogs, configure_session_logs
+from ._carry_open import open_carry
+from ._carry_start import CarryAtStart, preflight_terms
 from ._journal_file import DEFAULT_BUSY_TIMEOUT_S
-from ._preflight_carry import refuse_carried, refuse_kept
-from ._preflight_lock import live_root
+from ._preflight_carry import refuse_kept
 from ._preflight_plan import WARNING
 from ._restart_books import judge_start, read_start
+from ._session_account import Opened, open_account
 from ._session_banner import BANNER_ALERT_LINES, banner_lines
 from ._session_figures import DayFigures
 from ._session_loop import Session
@@ -67,17 +64,14 @@ from ._session_trader import ist_instant
 from ._session_traders import build_traders
 from ._session_versions import record_versions
 from ._session_worker import start_worker
-from ._shared_alerts import SharedAlerts
-from ._types import AlertKind, Mode, Now, Sleep
-from .alerts import Alerts
-from .clients import SessionClients, derive
+from ._types import AlertKind, Now, Sleep
+from .clients import SessionClients
 from .data_worker import DataWorker
 from .feedlink import FeedLink, FeedSource
-from .guard import ModeGuard
 from .inbox import Inbox
 from .journal import JOURNAL_FILE_NAME
 from .plan import SessionSpec, build, specify
-from .preflight import COUNTDOWN_SECONDS, AccountLock, PreflightPlan, check_preflight, countdown
+from .preflight import COUNTDOWN_SECONDS, PreflightPlan, check_preflight, countdown
 from .worker import JournalTarget
 
 #: Seconds between two preflights while the broker's login is awaited before the open
@@ -87,8 +81,6 @@ LOGIN_RETRY_EVERY_S = 60.0
 LOGIN_ALERT_AT = "09:00"
 #: The entry lock of the start phase (3.1 steps 11 to 15).
 STARTING_LOCK = "starting"
-#: The folder of the day's logs, under the account's folder.
-LOGS_FOLDER = "logs"
 #: The event naming the later days OpenAlgo's holidays and the package calendar disagree
 #: on (18-multi-strategy 12.2; `_preflight_calendar`).
 CALENDAR_DISAGREES = "calendar_disagrees"
@@ -129,32 +121,20 @@ def open_session(
         raise
 
 
-@dataclasses.dataclass(frozen=True)
-class _Opened:
-    """What steps 2 to 6 opened: the session's `clients`, the `shared` alerts and their
-    `sender`, the mode `guard` and the `mode` it adopted, the `account` and its `folder`,
-    and the day's `logs`."""
-
-    clients: SessionClients
-    shared: SharedAlerts
-    sender: Alerts
-    guard: ModeGuard
-    mode: Mode
-    account: str
-    folder: pathlib.Path
-    logs: SessionLogs
-
-
 def _open(
     spec: SessionSpec, client: Any, settings: StartSettings, stack: contextlib.ExitStack
 ) -> Session:
     """Steps 2 to 11 (module docstring) for the checked `spec`, what each step opens closed
     by `stack`."""
-    opened = _open_account(spec, client, settings, stack)
-    report = _preflight(spec, opened.clients, opened.mode, opened.shared, settings)
+    opened = open_account(spec, client, settings, stack)
+    path = opened.folder / JOURNAL_FILE_NAME
+    where = {"path": path, "account": opened.account, "broker": opened.broker}
+    carry = open_carry(
+        spec, **where, mode=opened.mode, now=settings.now, client=opened.clients.data
+    )
+    report = _preflight(spec, opened, settings, carry)
     banner = opened.guard.banner(report.broker)
     inbox = Inbox(settings.now)
-    path = opened.folder / JOURNAL_FILE_NAME
     target = JournalTarget(
         path, opened.account, report.broker, opened.mode, spec.day, DEFAULT_BUSY_TIMEOUT_S
     )
@@ -174,10 +154,8 @@ def _open(
     )
     journal = started.journal
     refuse_kept(journal.kept_refusals(), spec.positional)
-    names = tuple(each.name for each in spec.strategies)
-    refuse_carried(journal.day_closes(), journal.open_gtts(), names, spec.day)
     start = read_start(started.worker, inbox, settings, journal, spec.day, opened.shared)
-    restart = judge_start(spec, journal, start, opened.shared)
+    restart = judge_start(spec, journal, start, opened.shared, carry)
     snapshot = journal.snapshot(day=spec.day)
     saved = {name: kept.state for name, kept in snapshot.user_states.items()}
     data = opened.clients.data
@@ -200,47 +178,9 @@ def _open(
         worker=started.worker,
         inbox=inbox,
         stack=stack,
+        carry=carry,
     )
     return _ready(parts, settings, start, restart, snapshot)
-
-
-def _open_account(
-    spec: SessionSpec, client: Any, settings: StartSettings, stack: contextlib.ExitStack
-) -> _Opened:
-    """Steps 2 to 6 (module docstring): the clients, the mode, the alerts, the account and
-    server locks and the day's logs, each closed by `stack`. Raises what each step
-    raises."""
-    now, options = settings.now, spec.arguments
-    clients = settings.clients
-    if clients is None:
-        clients = stack.enter_context(derive(client))
-    # Every alert is echoed on the operator's console, with or without a Telegram user.
-    shared = SharedAlerts(echo=settings.emit)
-    guard = ModeGuard(clients.guard, now=now, alerts=shared)
-    mode = guard.start()
-    names = tuple(each.name for each in spec.strategies)
-    sender = stack.enter_context(
-        Alerts(
-            clients.alerts,
-            username=options.alerts_to,
-            mode=mode,
-            now=now,
-            strategies=names,
-            start_sender=settings.threads,
-        )
-    )
-    shared.attach(sender)
-    broker = _broker(clients.data, options.account)
-    account = spec.account_name(broker)
-    stack.enter_context(
-        AccountLock(account, server_url=clients.orders.base_url, folder=options.live_dir)
-    )
-    folder = live_root(account, options.live_dir) / account
-    logs = stack.enter_context(configure_session_logs(folder / LOGS_FOLDER, spec.day, now=now))
-    # The alerts close before the logs (closing them twice is safe), so what they say at
-    # their end is in the day's log.
-    stack.callback(sender.close)
-    return _Opened(clients, shared, sender, guard, mode, account, folder, logs)
 
 
 def _ready(
@@ -288,29 +228,13 @@ def _audit_records(session: Session, report: Any) -> None:
         session.event(CALENDAR_DISAGREES, days=list(report.calendar_disagrees))
 
 
-def _broker(client: Any, account: str | None) -> str:
-    """The broker `ping` names (3.1 step 5). Raises LiveError when OpenAlgo does not
-    answer it."""
-    answer = client.ping()
-    if not isinstance(answer, Mapping):
-        answer = {"message": repr(answer)}
-    data = answer.get("data")
-    broker = data.get("broker") if isinstance(data, Mapping) else None
-    if answer.get("status") == "success" and isinstance(broker, str) and broker.strip():
-        return broker.strip()
-    words = answer.get("message")
-    raise LiveError(
-        f"OpenAlgo did not answer ping with its broker ({words}): check that OpenAlgo is "
-        "running, the API key is valid and the broker is logged in, then start again"
-        + ("" if account is None else f" (account {account!r})")
-    )
-
-
 def _preflight(
-    spec: SessionSpec, clients: SessionClients, mode: Mode, alerts: Any, settings: StartSettings
+    spec: SessionSpec, opened: Opened, settings: StartSettings, carry: CarryAtStart
 ) -> Any:
-    """Step 7, with the wait for the broker's login before the open (3.2). Raises
-    PreflightError as the preflight does."""
+    """Step 7, with the wait for the broker's login before the open (3.2), and the terms
+    of what the session continues from earlier days (`_carry_start.preflight_terms`).
+    Raises PreflightError as the preflight does."""
+    clients, mode, alerts = opened.clients, opened.mode, opened.shared
     now, options = settings.now, spec.arguments
     plan = PreflightPlan(
         instruments=spec.instruments,
@@ -323,6 +247,7 @@ def _preflight(
         alerts=alerts,
         contracts=[i for each in spec.strategies for i in each.instruments if i.expiry is not None],
         gtt=bool(spec.gtt_legs),
+        **preflight_terms(carry, spec),
         positional_stops=spec.positional_stops,
     )
     calendar = default_calendar()
@@ -392,7 +317,6 @@ __all__ = [
     "CALENDAR_DISAGREES",
     "LOGIN_ALERT_AT",
     "LOGIN_RETRY_EVERY_S",
-    "LOGS_FOLDER",
     "STARTING_LOCK",
     "StartSettings",
     "begin_trading",

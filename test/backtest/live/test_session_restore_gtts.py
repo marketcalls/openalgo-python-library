@@ -66,6 +66,8 @@ def row(state, terms=RESTING, trigger_id="261116000001"):
         (view("CancelPending"), row(GttState.ACTIVE), Settle.CANCEL),
         (view("CancelPending"), row(GttState.CANCELLED), Settle.CONFIRM_CANCEL),
         (view("Requested"), row(GttState.NOT_PLACED, trigger_id=None), Settle.PLACE),
+        # Under way when the crash came: settled as an unanswered place (N5a-5).
+        (view("Requested"), row(GttState.REQUESTED, trigger_id=None), Settle.SETTLE_PLACE),
     ],
     ids=[
         "place never sent",
@@ -78,6 +80,7 @@ def row(state, terms=RESTING, trigger_id="261116000001"):
         "cancel never sent",
         "cancelled",
         "place refused or not sent",
+        "place sent, unanswered",
     ],
 )
 def test_a_restored_gtt_the_journal_explains_is_taken_back(kernel, journal, expected):
@@ -87,7 +90,6 @@ def test_a_restored_gtt_the_journal_explains_is_taken_back(kernel, journal, expe
 @pytest.mark.parametrize(
     ("kernel", "journal"),
     [
-        (view("Requested"), row(GttState.REQUESTED, trigger_id=None)),
         (view("Active"), None),
         (view("Active"), row(GttState.ACTIVE, MODIFIED)),
         (view("ModifyPending", MODIFIED), row(GttState.MODIFYING)),
@@ -98,7 +100,6 @@ def test_a_restored_gtt_the_journal_explains_is_taken_back(kernel, journal, expe
         (view("Triggered"), row(GttState.TRIGGERED)),
     ],
     ids=[
-        "place sent, unanswered",
         "resting, not in the journal",
         "resting at other terms",
         "modify sent, unanswered",

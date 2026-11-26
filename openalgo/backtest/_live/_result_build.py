@@ -72,6 +72,7 @@ from ._result_frames import (
     orders_frame,
     reconciliations_frame,
     skipped_frame,
+    trades_frame,
     unprotected_frame,
 )
 from ._result_portfolio import restart_scope, session_portfolio
@@ -153,6 +154,7 @@ def session_result(outcome: SessionOutcome) -> SessionResult:
         summary=outcome.summary,
         orders=orders_frame(outcome.orders),
         fills=fills_frame(outcome.fills),
+        trades=trades_frame({name: result.trades for name, result in results.items()}),
         fill_comparison=fill_comparison_frame(outcome.fill_comparison),
         drift=drift_frame(outcome.drift),
         unprotected=unprotected_frame(outcome.unprotected, outcome.ended_ns),

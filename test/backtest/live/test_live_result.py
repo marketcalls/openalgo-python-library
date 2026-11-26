@@ -72,6 +72,7 @@ COLUMNS = {
         "source",
         "estimated",
         "derived_from_average",
+        "flags",
     ],
     "fill_comparison": [
         "strategy",
@@ -193,6 +194,49 @@ def test_each_table_is_a_dataframe_with_its_columns(day, table):
     frame = getattr(day, table)
     assert isinstance(frame, pd.DataFrame)
     assert list(frame.columns) == COLUMNS[table]
+
+
+def test_the_trades_are_each_strategys_closed_trades_with_its_name_and_entry_day_first(day):
+    trades = day.results["BuyAndHold"].trades
+    assert list(day.trades.columns) == ["strategy", "entry_day", *trades.columns]
+    assert list(day.trades["strategy"]) == ["BuyAndHold"]
+    assert list(day.trades["entry_day"]) == [DAY]
+
+
+#: SessionResult's fields as 2.4.1 published them, in their order: code that builds or
+#: unpacks one by position keeps working, and a field added later comes after them.
+PUBLISHED_FIELDS = [
+    "mode",
+    "broker",
+    "account",
+    "day",
+    "started",
+    "ended",
+    "stopped_by",
+    "restarts",
+    "strategies",
+    "results",
+    "portfolio",
+    "versions",
+    "summary",
+    "orders",
+    "fills",
+    "fill_comparison",
+    "drift",
+    "unprotected",
+    "locks",
+    "reconciliations",
+    "skipped_decisions",
+    "open_positions",
+    "mode_breach",
+    "warnings",
+    "paths",
+]
+
+
+def test_the_published_fields_keep_their_order_and_trades_comes_after_them():
+    names = [field.name for field in dataclasses.fields(bt.SessionResult)]
+    assert names == [*PUBLISHED_FIELDS, "trades"]
 
 
 def test_the_result_is_frozen(day):
