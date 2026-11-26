@@ -27,6 +27,9 @@ and 3.1 step 1; decisions 3 and 9 of its section 10.0; unit 7). Part of `plan`.
   naming each by class name, as in `bt.backtest` given a list; the account's
   (`account_max_trades_per_day`, `account_daily_profit_target`) one value for the session.
   `max_orders_per_second` is the session's order rate (rule 12, `_order_throttle`).
+- `positional_stops` (20-positional-live 6, decision 11.4) is taken as `bt.backtest` takes
+  it, one value or a dict by class name, with each strategy's risk settings: its value is
+  checked where `bt.backtest` checks it, by the same function (`_risk_settings`).
 
 Every other value is checked where `bt.backtest` checks it, when the plan resolves each
 strategy's settings (`_plan_strategies`), so a live session and a backtest refuse the
@@ -159,7 +162,8 @@ class LiveArguments:
     strategy's risk settings the call gave (`_strategy_args.RISK_SETTINGS`), by name; a
     strategy's class attributes of the same names override them as in a backtest, and
     the settings not
-    given take `bt.backtest`'s defaults (`backtest_arguments`). The rest are the session's
+    given take `bt.backtest`'s defaults (`backtest_arguments`); `positional_stops`, when
+    given, is among each strategy's `risk`. The rest are the session's
     own: `account_max_daily_loss` in rupees, `alerts_to`, `account`, `live_dir` and
     `on_stop`; `daily_limits` each strategy's daily limits by name (`DAILY_LIMITS`, None
     where not set), the account's `account_max_trades_per_day` and
@@ -312,6 +316,7 @@ def live_arguments(
     account_max_trades_per_day: int | None = None,
     account_daily_profit_target: Any = None,
     max_orders_per_second: int = DEFAULT_ORDERS_PER_SECOND,
+    positional_stops: Any = BACKTEST_DEFAULT,
     **not_live: Any,
 ) -> LiveArguments:
     """Check the arguments of a `bt.live` call (16-session-design 1.2; module docstring)
@@ -348,6 +353,7 @@ def live_arguments(
         "max_positions": max_positions,
         "drawdown_halt": drawdown_halt,
         "cooldown": cooldown,
+        "positional_stops": positional_stops,
     }
     return LiveArguments(
         strategies=strategies,

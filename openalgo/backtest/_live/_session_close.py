@@ -71,6 +71,7 @@ from ._session_named import (
     shared_positions,
 )
 from ._session_open import OpenPosition, open_positions
+from ._session_rearm import warn_at_close
 from ._session_records import FillRecord, LockRecord, OrderRecord, Restored, order_records
 from ._session_saved import save, save_session
 from ._session_slippage import Slippage
@@ -158,6 +159,9 @@ def close_session(
         _settle(session, stopped_by, journal_works=journal_works)
         # Named while the kernel sessions run: a finished one has no units to read.
         named = _named(session)
+        # The close's WARN of the rearm_daily legs carried, read while the kernels run,
+        # after the stop's own lines for the daily summary.
+        day_warnings = (*session.control.summary_lines, *warn_at_close(session))
         unprotected_s = session.stops.windows.seconds(session.now())
         if journal_works:
             _save_day(session, unprotected_s, named.legs.new_mismatches)
@@ -173,7 +177,7 @@ def close_session(
         stopped = {trader.name: _stop_engine(trader, carry) for trader in session.traders}
         outputs = {name: output for name, (output, _) in stopped.items()}
         orders = order_records(session, outputs)
-        summary = _summary(session, (stopped, slipped), unprotected_s, named)
+        summary = _summary(session, (stopped, slipped), unprotected_s, named, day_warnings)
         session.alert(AlertKind.DAILY_SUMMARY, summary_text(summary))
         if not session.threads:
             # Under the test seam no sender thread posts: the queue goes now, as it would.
@@ -285,6 +289,7 @@ def _summary(
     stopped: tuple[dict[str, Any], dict[str, Slippage]],
     unprotected_s: float,
     named: _Named,
+    warnings: tuple[str, ...] = (),
 ) -> SessionSummary:
     """The day's figures across its restarts (`_session_figures`): the trades the kernel
     sessions closed, their gross P&L and modelled charges (the broker's trade book carries
@@ -295,7 +300,9 @@ def _summary(
     `named` gives (`_session_named.named_legs`), each differing one a mismatch too unless
     the day counted it already, and a line per shared instrument it gives; the strategies
     earlier starts ran and this one does not, the day not flat while a row of `named` holds
-    units or one of them held a position at its last save."""
+    units or one of them held a position at its last save; `warnings`, the stop's lines for
+    the summary (`Control.summary_lines`) and the close's lines of the rearm_daily legs
+    carried (`_session_rearm.warn_at_close`)."""
     parts = session.parts
     figures = session.figures
     outputs, slipped = stopped
@@ -327,6 +334,7 @@ def _summary(
         limits=limit_lines(session),
         versions=tuple(session.versions.ids.values()),
         notes_charges=notes_charges(traded.charges, tables) if first_start else None,
+        warnings=warnings,
     )
 
 

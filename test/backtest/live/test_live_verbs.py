@@ -56,6 +56,7 @@ ARGUMENTS = [
     "account_max_trades_per_day",
     "account_daily_profit_target",
     "max_orders_per_second",
+    "positional_stops",
     "not_live",
 ]
 
@@ -96,8 +97,9 @@ def test_the_settings_shared_with_bt_backtest_take_its_defaults():
         if name in backtest and parameter.default is not inspect.Parameter.empty
     ]
     # The twelve settings of a strategy and the account's daily loss limit, then the three
-    # daily limits of a strategy and the account's two (18-multi-strategy 2.5a).
-    assert len(shared) == 18
+    # daily limits of a strategy and the account's two (18-multi-strategy 2.5a), then how a
+    # CNC or NRML position's stop is held (20-positional-live 6).
+    assert len(shared) == 19
     assert {name: live_parameters[name].default for name in shared} == {
         name: backtest[name].default for name in shared
     }
@@ -150,7 +152,11 @@ REFUSED = {
         {},
         "futures series",
     ),
-    "daily interval": (variant(interval="D"), {}, "a D strategy interval"),
+    "daily interval in MIS": (
+        variant(interval="D", product="MIS"),
+        {},
+        "a D strategy in MIS in a live session",
+    ),
     "two CNC on one symbol": (
         [variant("HoldA", product="CNC"), variant("HoldB", product="CNC")],
         {},

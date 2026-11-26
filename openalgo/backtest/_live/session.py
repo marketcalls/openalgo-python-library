@@ -25,7 +25,8 @@ The sequence:
 5. **The close** (`_session_close.close_session`): the kernel sessions stopped where they
    stand, the summary, everything closed. Returns a `SessionOutcome`.
 
-Errors mid-session (3.5): a strategy's exception stops the session safely by `on_stop`,
+Errors mid-session (3.5): a strategy's exception (in the loop, or at a daily strategy's
+decision before the open, the start's last step) stops the session safely by `on_stop`,
 then is raised again (a failure during that safe stop takes the emergency stop below, and
 the strategy's exception is still the one raised); a journal failure (the worker's or
 journal L's) stops sending at once and closes without the flatten, then is raised again;
@@ -140,6 +141,12 @@ def _run(session: Session, settings: StartSettings, on_stop: str | None) -> Sess
             return close_session(session, CTRL_C)
         session.trading = True
         session.event("stopped_in_start")
+    except StrategyFailed as failed:
+        # A strategy's code raised at its decision before the open, the start's last step:
+        # the safe stop by on_stop, as for an exception in the loop (3.5).
+        session.trading = True
+        session.event("trading")
+        control.strategy_failed(failed)
     except BaseException as error:
         failure = _cause(error)
         _abort(session, failure, journal_works=not isinstance(failure, JournalError))

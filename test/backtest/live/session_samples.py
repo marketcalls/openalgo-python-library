@@ -25,6 +25,7 @@ code.
 
 from __future__ import annotations
 
+import datetime as dt
 import heapq
 import itertools
 from collections.abc import Callable
@@ -178,13 +179,17 @@ def rig(
     trades_until: tuple[int, int] | None = (15, 2),
     analyzer: bool = False,
     symbols: tuple[str, ...] = ("SBIN",),
+    day: dt.date = DAY,
+    rows: list | None = None,
 ) -> Rig:
-    """A rig whose fake starts at the IST time `start` with the candles of `symbols` (on
-    NSE) of today up to that minute, a first trade of each at the start itself (so the
-    broker quotes them to the preflight), and trades from then to `trades_until` (None:
-    none at all)."""
-    at = ist(*start)
-    fake = market(make_fake_openalgo, monkeypatch, tmp_path, at=at, today_until=start[:2])
+    """A rig whose fake starts at the IST time `start` of `day` with the candles of
+    `symbols` (on NSE) of today up to that minute (SBIN's are `rows` when given), a first
+    trade of each at the start itself (so the broker quotes them to the preflight), and
+    trades from then to `trades_until` (None: none at all)."""
+    at = ist(*start, day=day)
+    fake = market(
+        make_fake_openalgo, monkeypatch, tmp_path, at=at, rows=rows, today_until=start[:2]
+    )
     for symbol in symbols[1:]:
         fake.add_instrument(symbol, "NSE")
         fake.seed_candles(symbol, "NSE", candles(today_until=start[:2]))
@@ -194,7 +199,7 @@ def rig(
     if trades_until is not None:
         for symbol in symbols:
             script.trade(symbol)
-        script.trades(at + TRADE_EVERY_S * NS, ist(*trades_until), symbols)
+        script.trades(at + TRADE_EVERY_S * NS, ist(*trades_until, day=day), symbols)
     trace = trace_sessions(fake, monkeypatch, assert_session_invariants)
     return Rig(fake, script, tmp_path, trace)
 

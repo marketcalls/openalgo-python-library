@@ -13,6 +13,7 @@ import numbers
 from dataclasses import dataclass
 from typing import Any
 
+from .._risk_settings import GTT_STOPS
 from ..errors import ConfigError, PreflightError
 from ..reference import Instrument
 from ._types import AlertsLike, Mode
@@ -49,7 +50,9 @@ class PreflightPlan:
     futures and options as the reference tables resolved them, whose expiry is checked
     against OpenAlgo's master contract (`_preflight_expiry`; a list is kept as a tuple).
     `gtt` is True for a session with a CNC or NRML strategy, whose stops rest at the broker
-    as GTTs: the GTT capability check runs (`_preflight_gtt`).
+    as GTTs: the GTT capability check runs (`_preflight_gtt`), with `positional_stops`, how
+    the session holds those stops overnight ("gtt", the default, or "rearm_daily" when
+    every CNC and NRML strategy of the session chose it).
 
     Raises ConfigError when `instruments` is empty or holds anything but pairs of
     non-blank strings, when neither `interval` nor `intervals` names an interval or
@@ -69,6 +72,7 @@ class PreflightPlan:
     tested_alerts: Check | None = None
     contracts: tuple[Instrument, ...] = ()
     gtt: bool = False
+    positional_stops: str = GTT_STOPS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instruments", _instrument_pairs(self.instruments))

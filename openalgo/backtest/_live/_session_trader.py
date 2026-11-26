@@ -213,6 +213,18 @@ class Trader(Bookkeeping, TraderOrders):
         if failure is not None:
             raise failure
 
+    def decide_before_open(self, pause: tuple) -> None:
+        """The kernel's pre-open decision `pause` of a daily or longer strategy (its
+        `pre_open_decision`'s "pause", `_session_pre_open`): its bar revealed, its events
+        delivered and `on_bar` called as at any decision, its indicators ready, though the
+        bar closed before the session began watching; then the kernel driven back to
+        waiting, also when the strategy's code raised (its later pauses run through without
+        it). Raises StrategyFailed for an exception of the strategy's code."""
+        try:
+            self._pause(*pause, deciding=True, pre_open=True)
+        finally:
+            self.drive(deciding=True)
+
     def _pause(
         self,
         kind: str,
@@ -222,8 +234,10 @@ class Trader(Bookkeeping, TraderOrders):
         timers: Any,
         *,
         deciding: bool,
+        pre_open: bool = False,
     ) -> None:
-        """One pause of the kernel: reveal its bars, deliver its events, then decide."""
+        """One pause of the kernel: reveal its bars, deliver its events, then decide (a
+        `pre_open` decision whatever `decide_from_ns`)."""
         part = self.part
         bars = part.context.reveal(decided_at, rows)
         if kind == "finished":
@@ -239,7 +253,8 @@ class Trader(Bookkeeping, TraderOrders):
             return
         decide_from_ns = self.decide_from_ns
         decides = deciding and not self.failed
-        decides = decides and decide_from_ns is not None and decided_at >= decide_from_ns
+        watched = decide_from_ns is not None and decided_at >= decide_from_ns
+        decides = decides and (pre_open or watched)
         if kind == "timers":
             if decides:
                 self._calling(part.context.timers.fire, timers)

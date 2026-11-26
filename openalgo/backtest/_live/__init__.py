@@ -68,7 +68,12 @@ leg's stop GTT as the stops supervisor sees it), `_reconcile_guard_gtt` (the exi
 rules for a leg's GTT calls) and `_session_restore_gtts` (the GTTs a same-day restart
 takes back); the end of the day is
 `_session_day_end`, the legs carried past the close and their day-close records
-`_session_carry`, and the worker's GTT requests `_worker_gtts`. OpenAlgo's product names
+`_session_carry`, and the worker's GTT requests `_worker_gtts`. A CNC or NRML leg under
+`positional_stops="rearm_daily"` (20-positional-live 6; unit N5b) is `_session_rearm`'s (its
+warnings at every start and close), a future the exchange settles on the session's day
+`_session_expiry`'s, and a daily or longer strategy's bars and pre-open decision
+(20-positional-live 8) `_plan_daily`'s and `_session_pre_open`'s, the bar due at a start
+`_pre_open_due`'s. OpenAlgo's product names
 are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module

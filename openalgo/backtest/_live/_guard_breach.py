@@ -5,10 +5,11 @@ section 3). `guard.ModeGuard` builds them; `guard` re-exports `ModeBreach` and `
 from __future__ import annotations
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
 from .._calendar_convert import format_ist
+from .._products import OVERNIGHT_PRODUCTS
 from ._types import Mode
 
 
@@ -84,15 +85,29 @@ def breach_text(breach: ModeBreach) -> str:
     return f"{text} The session sends nothing more. {again} again in the mode you want."
 
 
-def breach_alert(positions: Sequence[str]) -> str:
-    """The session's ERROR alert when the mode guard locked (16-session-design 6.2): it
-    sends nothing more, and each position as last known, in words with its stop
-    (`positions`)."""
+def breach_alert(positions: Sequence[str], products: Collection[str] = ()) -> str:
+    """The session's ERROR alert when the mode guard locked (16-session-design 6.2;
+    20-positional-live 10.4): it sends nothing more, each position as last known, in words
+    with its stop (`positions`), and what becomes of them by the `products` they are held
+    in: the broker's MIS square-off closes the MIS positions (said also when none is open),
+    and the CNC and NRML positions stay open overnight, so their stops are to be checked at
+    the broker."""
     held = "; ".join(positions) if positions else "no open position"
+    carried = any(product in OVERNIGHT_PRODUCTS for product in products)
+    intraday = not products or any(product not in OVERNIGHT_PRODUCTS for product in products)
+    fates = []
+    if intraday:
+        fates.append(
+            "The broker's MIS square-off closes "
+            + ("the MIS positions" if carried else "what is left")
+        )
+    if carried:
+        fates.append(
+            "CNC and NRML positions stay open overnight, so check each one's stop at the broker"
+        )
     return (
         f"OpenAlgo's mode changed: the session sends nothing more. Positions as last known: "
-        f"{held}. The broker's MIS square-off closes what is left; stop the session with "
-        "Ctrl+C"
+        f"{held}. {'; '.join(fates)}; stop the session with Ctrl+C"
     )
 
 

@@ -232,9 +232,8 @@ class Session:
         self.stops.handed(handed)
 
     def guard_locked(self, breach: ModeBreach) -> None:
-        """The mode guard locked (16-session-design 6.2): every strategy's entries are
-        locked, nothing more is handed to the worker, and an ERROR alert lists every
-        position as last known."""
+        """The mode guard locked (16-session-design 6.2): every strategy's entries are locked,
+        nothing goes to the worker, and an ERROR alert lists every position as last known."""
         if self.breach is not None:
             return
         self.breach, self.breach_text = breach, breach_text(breach)
@@ -247,7 +246,8 @@ class Session:
             for trader in self.traders
             if (units := trader.open_units()) != 0
         ]
-        self.alert(AlertKind.ERROR, breach_alert(positions))
+        products = {trader.product for trader in self.traders if trader.open_units()}
+        self.alert(AlertKind.ERROR, breach_alert(positions, products))
 
     # ----- the iteration -------------------------------------------------------------
 

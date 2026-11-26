@@ -24,6 +24,10 @@ backtest's. The live terms differ:
 - **No base-interval probe and no price-slab ticks**: the base is 1 minute (1.1), and
   OpenAlgo's tick replaces any tick the reference tables leave to a price slab (a line
   says so, not a difference: the tables give no tick to differ from).
+- **A daily or longer strategy** (`_plan_daily`): its warm-up history is read on a daily
+  base, as a backtest of it reads it, and the broker's daily candles of the days before
+  today with it (`recent`), the bars its pre-open decision is made on; its kernel session
+  keeps the 1-minute base of every live session.
 
 Times are UTC nanoseconds, prices rupees, quantities units (never lots).
 """
@@ -39,6 +43,7 @@ from typing import Any
 import pandas as pd
 
 from .._market import MarketSettings, market_settings
+from .._risk_settings import rearm_warning
 from .._settings import RunPlan
 from .._warm_up_history import RunHistory, empty_base
 from .._warm_up_load import load_history
@@ -47,6 +52,7 @@ from ..calendar import Calendar
 from ..data import load_bars
 from ..errors import ConfigError, NoDataError
 from ..reference import Instrument
+from ._plan_daily import history_plan, recent_bars
 from ._plan_strategies import StrategySpec
 from ._preflight_plan import InstrumentFacts
 from .data_worker import CANDLE_INTERVAL, HISTORY_SOURCE
@@ -74,7 +80,9 @@ class StrategySetup:
     present of the build), its instruments with OpenAlgo's facts, the market settings
     built on them, the native engine's config, the history kept before today
     (`_warm_up_history.RunHistory`), today's closed 1-minute bars as read at `read_ns`
-    (the bars layout, possibly none) and the warnings, in order."""
+    (the bars layout, possibly none) and the warnings, in order; `recent`, for a daily or
+    longer strategy, the broker's daily candles of the days before today (`_plan_daily`),
+    else None."""
 
     plan: RunPlan
     instruments: tuple[Instrument, ...]
@@ -84,6 +92,7 @@ class StrategySetup:
     today: pd.DataFrame
     read_ns: int
     warnings: tuple[str, ...]
+    recent: pd.DataFrame | None = None
 
 
 def with_facts(
@@ -179,6 +188,14 @@ def read_today(
     return result.bars, tuple(result.meta.warnings)
 
 
+def _live_warnings(plan: RunPlan) -> tuple[str, ...]:
+    """The warnings of `plan` that hold for a live session: all of them but the backtest's
+    note of `positional_stops="rearm_daily"`, which speaks of a backtest; the session says
+    what the setting leaves unprotected in its own words at every start and close
+    (`_session_rearm`)."""
+    return tuple(note for note in plan.warnings if note != rearm_warning(plan.product))
+
+
 def strategy_setup(
     spec: StrategySpec,
     client: Any,
@@ -201,8 +218,15 @@ def strategy_setup(
     today, read_notes = read_today(spec, client, calendar, present_ns)
     origins = {spec.symbol: (HISTORY_SOURCE, None)}
     source = HistorySource(_HISTORY_ARGUMENTS, client, calendar, origins)
-    loaded = load_history(plan, source, [spec.needs])
-    history = loaded.for_run(spec.needs, plan, calendar, {spec.symbol: today})
+    # A daily or longer strategy's history is daily, as a backtest of it reads it.
+    read_plan = history_plan(plan)
+    daily = read_plan is not plan
+    loaded = load_history(read_plan, source, [spec.needs])
+    own = {spec.symbol: empty_base() if daily else today}
+    history = loaded.for_run(spec.needs, read_plan, calendar, own)
+    recent = None
+    if daily:
+        recent = recent_bars(spec.symbol, spec.exchange, plan, client, calendar, present_ns)
     config = plan.native_config(deliver_events=spec.strategy.wants_events()) | market.config
     return StrategySetup(
         plan=plan,
@@ -212,7 +236,8 @@ def strategy_setup(
         history=history,
         today=today,
         read_ns=present_ns,
-        warnings=(*plan.warnings, *read_notes, *market.warnings, *history.warnings, *notes),
+        warnings=(*_live_warnings(plan), *read_notes, *market.warnings, *history.warnings, *notes),
+        recent=recent,
     )
 
 

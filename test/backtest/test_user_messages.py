@@ -55,6 +55,13 @@ class Weekly(bt.Strategy):
     symbol, exchange, interval = "SBIN", "NSE", "W"
 
 
+class WeeklyIntraday(Weekly):
+    """A weekly strategy in MIS, which a live session cannot hold from one decision to the
+    next."""
+
+    product = "MIS"
+
+
 class Universe(bt.Strategy):
     universe, exchange, interval = "NIFTY50", "NSE", "15m"
 
@@ -72,7 +79,9 @@ def _result() -> bt.Result:
 
 
 NOT_BUILT = {
-    "weekly strategy live": lambda: bt.live(Weekly, None, capital=100_000, max_daily_loss=1_000),
+    "weekly strategy in MIS live": lambda: bt.live(
+        WeeklyIntraday, None, capital=100_000, max_daily_loss=1_000
+    ),
     "bt.rebalance": lambda: bt.rebalance(),
     "bt.optimize of a list": lambda: bt.optimize([Quarterly, Weekly], capital=100_000),
     "Result.strategy": lambda: _result().strategy("Quarterly"),

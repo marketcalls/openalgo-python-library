@@ -61,11 +61,13 @@ import pandas as pd
 
 from .._calendar_convert import interval_nanos
 from .._products import CNC, OVERNIGHT_PRODUCTS
+from .._risk_settings import GTT_STOPS, REARM_DAILY
 from ..calendar import Calendar, default_calendar
 from ..strategy import Strategy
 from ._bars_candle import candle_bar
 from ._plan_args import LiveArguments, live_arguments
 from ._plan_catch_up import INSTRUMENT, StrategyPlan
+from ._plan_daily import DAILY, DailySeries, daily_candles, decides_before_open
 from ._plan_engine import bind_strategy, check_grid, session_engine
 from ._plan_release import CANDLE_LAST_READ_S, CANDLE_SETTLE_S, missing_note
 from ._plan_setup import StrategySetup, read_today, strategy_setup
@@ -92,8 +94,15 @@ class SessionSpec:
 
     @property
     def intervals(self) -> tuple[str, ...]:
-        """Every strategy's bar interval, each once, in call order."""
-        return tuple(dict.fromkeys(spec.interval for spec in self.strategies))
+        """The interval of the candles each strategy reads from the broker, each once, in
+        call order, as the preflight checks them: its bar interval, or "D" for a daily or
+        longer strategy, whose bars are built from the broker's daily candles
+        (`_plan_daily`)."""
+        read = (
+            DAILY if decides_before_open(spec.interval) else spec.interval
+            for spec in self.strategies
+        )
+        return tuple(dict.fromkeys(read))
 
     @property
     def product(self) -> str:
@@ -120,14 +129,25 @@ class SessionSpec:
 
     @property
     def positional(self) -> tuple[tuple[str, str, str, str], ...]:
-        """The (name, symbol, exchange, product) of the CNC and NRML strategies, in call
-        order: those a stop GTT refusal kept from an earlier day refuses at start
-        (`_preflight_carry.refuse_kept`)."""
+        """The (name, symbol, exchange, product) of the CNC and NRML strategies whose stop
+        is a GTT, in call order: those a stop GTT refusal kept from an earlier day refuses
+        at start (`_preflight_carry.refuse_kept`); one with `positional_stops="rearm_daily"`
+        places no stop GTT."""
         return tuple(
             (spec.name, spec.symbol, spec.exchange, spec.product)
             for spec in self.strategies
-            if spec.product in OVERNIGHT_PRODUCTS
+            if spec.stop_gtt
         )
+
+    @property
+    def positional_stops(self) -> str:
+        """How the session holds its CNC and NRML stops overnight, for the GTT capability
+        check (`_preflight_gtt`): "rearm_daily" when every CNC and NRML strategy chose it
+        (a broker without GTT orders can run them), else "gtt"."""
+        overnight = [spec for spec in self.strategies if spec.product in OVERNIGHT_PRODUCTS]
+        if overnight and not any(spec.stop_gtt for spec in overnight):
+            return REARM_DAILY
+        return GTT_STOPS
 
     @property
     def capital(self) -> float:
@@ -229,11 +249,21 @@ def _strategy_plan(
     engine = session_engine(setup, calendar)
     kept = setup.history.symbols.get(spec.symbol)
     history = None if kept is None else kept.base
+    # A daily or longer strategy's bars are the broker's daily candles (`_plan_daily`);
+    # the 1-minute series is then the kernel session's slices only.
+    daily = setup.recent is not None
     series = LiveSeries(
-        spec.symbol, spec.exchange, spec.plan.start, history=history, calendar=calendar
+        spec.symbol,
+        spec.exchange,
+        spec.plan.start,
+        history=None if daily else history,
+        calendar=calendar,
     )
     check_grid(setup.config, spec.exchange, spec.plan.start, calendar, series)
-    strategy, context = bind_strategy(spec, setup, engine, series, calendar, saved)
+    bars: Any = series
+    if setup.recent is not None:
+        bars = DailySeries(spec.symbol, spec.exchange, daily_candles(setup, spec.symbol), calendar)
+    strategy, context = bind_strategy(spec, setup, engine, bars, calendar, saved)
     return StrategyPlan(spec, setup, engine, series, strategy, context, calendar)
 
 
