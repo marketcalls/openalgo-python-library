@@ -36,6 +36,8 @@ from openalgo.backtest._live._types import LOGGER_NAME, Mode
 from openalgo.backtest._live.journal import JOURNAL_FILE_NAME, Journal
 
 REARM = {"positional_stops": "rearm_daily"}
+#: A start after NSE's 09:15 open, IST (hour, minute, second).
+AFTER_OPEN = (9, 20, 5)
 #: The carried leg's line at the start, before the open.
 WAITS = "RearmHold 10 SBIN NSE (CNC), stop 497.00: its day stop waits for the open"
 #: The design's sentence for rearm_daily (20-positional-live 6), written out.
@@ -266,6 +268,55 @@ def test_a_restart_of_the_day_says_the_carried_legs_day_stop_is_placed(
         ("BUY", "MARKET", 10, "CNC", 0.0),
         ("SELL", "SL-M", 10, "CNC", 497.0),
     ]
+
+
+@MODES
+def test_a_restart_whose_day_stop_the_broker_has_not_confirmed_says_it_is_sent(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # While the session is down another client cancels the day SL-M. The restart places it
+    # again, and the broker takes 20 s to answer, longer than the start waits for the stop
+    # (`_session_restore.RESTART_PROTECT_WAIT_S`, 10 s): the start says it is sent and not
+    # confirmed yet.
+    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer)
+    world.stop_at(ist(14, 46))
+    world.run(CncHoldOnce, **REARM)
+    (first_stop,) = [o for o in world.orders() if o.price_type == "SL-M"]
+    world.fake.client().cancelorder(order_id=first_stop.order_id, strategy="CncHoldOnce")
+    world.fake.faults.slow("placeorder", 20)
+
+    restart(world, CncHoldOnce, stop_ns=ist(14, 50), **REARM)
+
+    assert (
+        "Warning: CncHoldOnce 10 SBIN NSE (CNC), stop 497.00: its day stop is sent, not "
+        "confirmed by the broker yet"
+    ) in world.lines
+    stops = [(o.quantity, o.trigger_price, o.status) for o in world.orders() if o.action == "SELL"]
+    assert stops == [(10, 497.0, "cancelled"), (10, 497.0, "trigger pending")]
+
+
+@MODES
+def test_a_start_after_the_open_says_the_carried_legs_day_stop_is_not_placed_yet(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # A carried leg's day stop waits for the session's first price, which tells whether the
+    # open is already beyond it; at a start after the open that price comes once trading
+    # begins, after the banner: the start says the stop is not placed yet, and it is
+    # placed then, an SL-M of the 10 units at 497.00.
+    world = rearm_world(
+        make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, start=AFTER_OPEN
+    )
+    world.stop_at(ist(9, 30))
+
+    world.run(RearmHold, **REARM)
+
+    assert (
+        "Warning: RearmHold 10 SBIN NSE (CNC), stop 497.00: its day stop is not placed yet"
+    ) in world.lines
+    (stop,) = world.orders()
+    terms = (stop.action, stop.price_type, stop.quantity, stop.product, stop.trigger_price)
+    assert terms == ("SELL", "SL-M", 10, "CNC", 497.0)
+    assert stop.status == "trigger pending"
 
 
 def test_a_carried_leg_is_uncovered_while_the_market_is_closed_in_the_unprotected_table(

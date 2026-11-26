@@ -97,10 +97,13 @@ def daily_world(
     analyzer: bool = False,
     day: dt.date = DAY,
     sessions: tuple[dt.date, ...] = SESSIONS,
+    symbols: tuple[str, ...] = ("SBIN",),
 ) -> Any:
     """A rig started at the IST time `start` of `day` (module docstring), the broker serving
-    the 1-minute candles of `sessions` only (and the daily candles made from them), in the
-    sandbox when `analyzer`; each strategy's record cleared."""
+    SBIN's 1-minute candles of `sessions` only (and the daily candles made from them), in the
+    sandbox when `analyzer`; each strategy's record cleared. Each other symbol of `symbols`
+    (on NSE) has the candles `session_samples.rig` gives it, Thursday's and Friday's among
+    them, and trades as SBIN does."""
     for strategy in (Recorded, WeeklyRecorded):
         strategy.decided.clear()
     world = rig(
@@ -112,11 +115,13 @@ def daily_world(
         analyzer=analyzer,
         day=day,
         rows=candles(sessions, today_until=None),
+        symbols=symbols,
     )
     world.script.price = lambda now_ns: PRICE
-    world.script.trade()
+    for symbol in symbols:
+        world.script.trade(symbol)
     first = max(open_of(day), ist(*start, day=day) + 10 * 10**9)
-    world.script.trades(first, ist(15, 2, day=day))
+    world.script.trades(first, ist(15, 2, day=day), symbols)
     return world
 
 

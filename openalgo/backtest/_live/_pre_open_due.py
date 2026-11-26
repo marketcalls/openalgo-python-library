@@ -14,7 +14,8 @@ Sunday, a calendar month, quarter or year.
 - **Due and whole**: the kernel decides it (`Engine.pre_open_decision`). When the journal
   says an earlier start decided it (only a start of today can: it closed at the last
   session's close), it is not decided again, and a warning says so (`DECIDED_TODAY`): a
-  stop before the open may have cancelled that decision's orders, and said so then.
+  stop may have cancelled that decision's orders before they reached the broker, and said
+  so then.
 - **Due, its candle missing** (the broker has not served the last session's daily candle
   yet, or its read came back empty): nothing is decided, not an older bar in its place, and
   a warning names the candle (`MISSING_CANDLE`). A start once the broker serves it decides

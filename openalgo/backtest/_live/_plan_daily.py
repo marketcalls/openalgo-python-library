@@ -9,7 +9,8 @@ bars built from the day's ticks, so the decision is a backtest's on the same can
 - **Its bars** (`DailySeries`): the warm-up's history read with a daily base, as a backtest
   of the strategy reads it (`history_plan`), and the broker's daily candles of the days
   before today (`recent_bars`, `RECENT_DAYS` back: enough for the latest whole bar of the
-  strategy's interval); a weekly or longer bar is built from them as a backtest builds it
+  strategy's interval; asked of the broker at every start, never of the local cache alone);
+  a weekly or longer bar is built from them as a backtest builds it
   (`resample.resample_bars`). Today's ticks and 1-minute candles still reach the kernel
   session, on its 1-minute grid, for its stops, targets and exits, through the plan's own
   1-minute series; none of them reaches the strategy's bars, since it decides nothing in
@@ -71,7 +72,13 @@ def recent_bars(
     """The broker's daily candles of `symbol` on `exchange` from `RECENT_DAYS` before the
     plan's day to the day before it (the bars layout, empty when the broker has none),
     read through `client` at `read_ns` (UTC nanoseconds), as a backtest of the strategy
-    loads its own bars. Raises the data layer's errors but NoDataError."""
+    loads its own bars. Raises the data layer's errors but NoDataError.
+
+    The broker is asked again at every start (`refresh`), never answered from the local
+    cache: the cache keeps an empty answer for the last session as settled once it is read
+    on a later day, so a candle the broker serves after an earlier start of the day would
+    stay hidden, and the bar due never decided (`_pre_open_due.MISSING_CANDLE`). The fresh
+    rows replace the cached ones, which mends the cache for later runs too."""
     first = plan.start - dt.timedelta(days=RECENT_DAYS[parse_interval(plan.interval)[0]])
     try:
         result = load_bars(
@@ -83,6 +90,7 @@ def recent_bars(
             source=HISTORY_SOURCE,
             client=client,
             calendar=calendar,
+            refresh=True,
             now=read_ns,
         )
     except NoDataError:

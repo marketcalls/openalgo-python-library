@@ -114,15 +114,17 @@ def rearm_world(
     gtt: bool = True,
     analyzer: bool = False,
     open_price: float = ENTRY,
+    start: tuple[int, int, int] = START,
 ) -> Any:
-    """A rig started at `START` holding Friday's 10 SBIN (module docstring), the broker
-    holding GTT orders or not (`gtt`), in the sandbox when `analyzer`; SBIN trades from the
-    open at `open_price` until a test moves it (`world.script.price`)."""
+    """A rig started at the IST time `start` (`START` by default) holding Friday's 10 SBIN
+    (module docstring), the broker holding GTT orders or not (`gtt`), in the sandbox when
+    `analyzer`; SBIN trades from the open (or the start, after it) at `open_price` until a
+    test moves it (`world.script.price`)."""
     world = rig(
         lambda **o: make_fake_openalgo(gtt=gtt, **o),
         monkeypatch,
         tmp_path,
-        start=START,
+        start=start,
         trades_until=None,
         analyzer=analyzer,
     )
@@ -131,7 +133,7 @@ def rearm_world(
     world.trace.carried(world.fake.mode, "SBIN", "NSE", UNITS)
     world.script.price = lambda now_ns: open_price
     world.script.trade()
-    world.script.trades(OPEN, ist(15, 2))
+    world.script.trades(max(OPEN, ist(*start) + 10 * NS), ist(15, 2))
     world.carried = carry_into(monkeypatch)
     return world
 

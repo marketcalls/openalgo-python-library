@@ -30,7 +30,7 @@ from daily_samples import (
 )
 from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
-from plan_samples import specify
+from plan_samples import candles, specify
 from positional_samples import MODES
 from restart_samples import restart
 from session_samples import WAIT_MAX_S, alerts, ist
@@ -113,9 +113,9 @@ def test_a_daily_bar_is_decided_once_across_two_starts_the_same_morning(
     assert [bar_close for _, bar_close, _ in Recorded.decided] == [close_of(FRIDAY)]
     assert buys(world) == []
     cancelled = (
-        "Recorded: the stop before the open cancels the orders of its decision on its D bar "
-        "closing on 2026-11-13 (BUY 10 MARKET): they never went to the broker, and that bar "
-        "is not decided again today"
+        "Recorded: the stop cancels the orders of its decision on its D bar closing on "
+        "2026-11-13 (BUY 10 MARKET) before they went to the broker, and that bar is not "
+        "decided again today"
     )
     assert f"Warning: {cancelled}" in world.lines
     result = session_result(first)
@@ -203,6 +203,39 @@ def test_a_daily_strategy_whose_last_daily_candle_is_missing_decides_nothing(
     ) in world.lines
     with journal(world) as kept:
         assert kept.decided_bar("Recorded") is None
+
+
+@MODES
+def test_a_start_once_the_broker_serves_the_missing_candle_decides_that_bar_late(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # The 09:05 start finds no candle of Friday and decides nothing, as the test above; the
+    # broker serves it by 09:20, and a start then decides Friday's bar, its entry flagged
+    # late_decision, as the warning promised: each start asks the broker for the recent
+    # daily candles again, so the first start's empty answer kept in the local cache does
+    # not hide the candle served since.
+    world = daily_world(
+        make_fake_openalgo,
+        monkeypatch,
+        tmp_path,
+        analyzer=analyzer,
+        sessions=(MONDAY_BEFORE, WEDNESDAY, THURSDAY),
+    )
+    world.stop_at(ist(9, 20))
+    world.run(Recorded)
+    world.fake.seed_candles("SBIN", "NSE", candles(SESSIONS, today_until=None))
+
+    restart(world, Recorded, stop_ns=ist(9, 40))
+
+    assert Recorded.decided == [(open_of(FRIDAY), close_of(FRIDAY), 4)]
+    assert buys(world) == [("MARKET", UNITS, "CNC", "complete")]
+    (entry,) = alerts(caplog, "entry")
+    (bought,) = world.orders()
+    assert entry.endswith(f"(entry, order {bought.order_id}, flagged late_decision)")
+    missing = [line for line in world.lines if "has not served the daily candle" in line]
+    assert len(missing) == 1
+    with journal(world) as kept:
+        assert kept.decided_bar("Recorded") == close_of(FRIDAY)
 
 
 @MODES

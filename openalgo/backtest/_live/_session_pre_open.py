@@ -25,15 +25,18 @@ session's first open.
   those orders as the session reaches its open; a decision made once the open has passed
   sends them at once, flagged `late_decision` on their fills (the result's trades, the
   fill's alert). A start that finds the latest bar decided decides nothing. A strategy's
-  exception in its `on_bar` is raised once every strategy has decided, as `StrategyFailed`,
-  which stops the session safely as in the loop.
-- **A stop before the open** (Ctrl+C, or a strategy's exception: the safe stop cancels the
-  entries) ends the decision's orders that wait for the open before they reach the broker,
-  and the bar stays decided in the journal, so no later start of the day decides it again
-  (a decided bar is noted before its orders go, so a crash never decides one twice). The
-  stop says so in a line naming the bar and the orders (`cancelled_before_open`), kept in
-  the result's warnings and the daily summary; the day's next start says the bar was
-  decided by an earlier start (`_pre_open_due.DECIDED_TODAY`).
+  exception in its `on_bar` is raised at once, as `StrategyFailed`, which stops the
+  session safely as in the loop: the strategies after it do not decide, so their bars stay
+  undecided for a later start of the day, since the safe stop would withdraw the entries
+  of their decision before they reach the broker.
+- **A stop before the decision's orders reach the broker** (Ctrl+C, or a strategy's
+  exception: the safe stop cancels the entries) withdraws them, before the open as after
+  it (a start after the open sends them at the loop's next turn), and the bar stays
+  decided in the journal, so no later start of the day decides it again (a decided bar is
+  noted before its orders go, so a crash never decides one twice). The stop says so in a
+  line naming the bar and the orders (`cancelled_unsent`), kept in the result's warnings
+  and the daily summary; the day's next start says the bar was decided by an earlier start
+  (`_pre_open_due.DECIDED_TODAY`).
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -49,16 +52,14 @@ from ._plan_catch_up import INSTRUMENT
 from ._plan_daily import daily_candles, decides_before_open, decision_bars
 from ._pre_open_due import DueBar, StrategyBars, due_bar
 from ._session_saved import save
-from ._session_trader import StrategyFailed
 
 #: The event of each strategy's pre-open decision.
 PRE_OPEN_EVENT = "pre_open_decision"
-#: The line of a pre-open decision's orders a stop before the open cancels (module
-#: docstring): they never reached the broker, and the journal holds the bar as decided.
-CANCELLED_BEFORE_OPEN = (
-    "{name}: the stop before the open cancels the orders of its decision on its {interval} "
-    "bar closing on {day} ({orders}): they never went to the broker, and that bar is not "
-    "decided again today"
+#: The line of a pre-open decision's orders a stop cancels before they reach the broker
+#: (module docstring): the journal holds the bar as decided.
+CANCELLED_UNSENT = (
+    "{name}: the stop cancels the orders of its decision on its {interval} bar closing on "
+    "{day} ({orders}) before they went to the broker, and that bar is not decided again today"
 )
 
 
@@ -93,18 +94,12 @@ def warn_missed_bars(session: Any) -> None:
 
 
 def decide_before_open(session: Any) -> None:
-    """Each daily or longer strategy's pre-open decision (module docstring). Raises
-    JournalError when the journal cannot be read or written, StrategyFailed for the first
-    exception of a strategy's code once every strategy has decided, and what the kernel
-    raises."""
-    failure: StrategyFailed | None = None
+    """Each daily or longer strategy's pre-open decision, in order (module docstring).
+    Raises JournalError when the journal cannot be read or written, StrategyFailed for an
+    exception of a strategy's code, at once (the strategies after it do not decide), and
+    what the kernel raises."""
     for trader in daily_traders(session):
-        try:
-            _decide(session, trader)
-        except StrategyFailed as failed:
-            failure = failure or failed
-    if failure is not None:
-        raise failure
+        _decide(session, trader)
 
 
 def _decide(session: Any, trader: Any) -> None:
@@ -127,21 +122,26 @@ def _decide(session: Any, trader: Any) -> None:
     save(session, trader)
 
 
-def cancelled_before_open(session: Any, trader: Any) -> str | None:
+def cancelled_unsent(trader: Any) -> str | None:
     """The line naming the orders of `trader`'s pre-open decision that a stop now cancels
-    before the open (module docstring): its entries decided before the open that wait for
-    it, never sent (DAY orders: a GTT order rests at the broker already). None for a
-    strategy that decides in the session, after the open, or with none waiting. Called
-    before the stop cancels them."""
+    before they reach the broker (module docstring), whatever the clock: its entries
+    decided on a bar that closed before today's open whose placement the venue map has not
+    taken (DAY orders: a GTT order rests at the broker already). None for a strategy that
+    decides in the session, or with none unsent. Called before the stop cancels them."""
     opens = trader.part.slices[0][0]
-    if not decides_before_open(trader.part.spec.interval) or session.now() >= opens:
+    if not decides_before_open(trader.part.spec.interval):
         return None
-    orders = [call(trader.engine.order, kernel_order) for kernel_order in trader.entry_orders()]
+    taken = {kernel_order for kernel_order, _ in trader.venue.placed()}
+    orders = [
+        call(trader.engine.order, kernel_order)
+        for kernel_order in trader.entry_orders()
+        if kernel_order not in taken
+    ]
     waiting = [o for o in orders if o["validity"] == VALIDITIES["day"] and o["decided_at"] < opens]
     if not waiting:
         return None
     named = ", ".join(f"{o['side']} {o['quantity_units']:g} {o['order_type']}" for o in waiting)
-    return CANCELLED_BEFORE_OPEN.format(
+    return CANCELLED_UNSENT.format(
         name=trader.name,
         interval=trader.part.spec.interval,
         day=_day(max(o["decided_at"] for o in waiting)),
@@ -177,9 +177,9 @@ def _day(close_ns: int) -> str:
 
 
 __all__ = [
-    "CANCELLED_BEFORE_OPEN",
+    "CANCELLED_UNSENT",
     "PRE_OPEN_EVENT",
-    "cancelled_before_open",
+    "cancelled_unsent",
     "daily_traders",
     "decide_before_open",
     "warn_missed_bars",
