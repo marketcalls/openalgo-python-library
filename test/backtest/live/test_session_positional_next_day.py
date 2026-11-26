@@ -13,7 +13,6 @@ Tuesday the session starts at 14:40:05 IST; SBIN trades at 500.00, at 503.00 fro
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 
 import pytest
@@ -24,20 +23,17 @@ from carry_samples import (
     CncKeptTrail,
     carried_world,
     held,
-    journal_of,
     on,
     to_day,
 )
-from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import BOOKS, MODES, calls, gtt_world, gtts, sells
+from positional_samples import BOOKS, MODES, calls, gtts, sells
 from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import alerts
 from stops_samples import at_price
 
-from openalgo.backtest._live._journal_gtt_rows import GttTerms
 from openalgo.backtest._live._result_build import session_result
-from openalgo.backtest._live._types import LOGGER_NAME, Mode, Purpose
+from openalgo.backtest._live._types import LOGGER_NAME
 from openalgo.backtest.errors import PreflightError
 
 #: Tuesday's session start.
@@ -84,12 +80,16 @@ def test_a_carried_leg_continues_with_its_stop_gtt_trailed_and_exited_on_its_tar
     assert not alerts(caplog, "error")
 
 
+@MODES
+@BOOKS
 def test_a_restart_on_the_next_day_takes_the_carried_stop_gtt_back_by_its_saved_binding(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
     # The day's saved state holds the carried GTT under the day's kernel id, which no
     # journal GTT of the day has: its saved binding names the journal GTT of Monday.
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail, history=history, analyzer=analyzer
+    )
     world.trace.waive("protected", "a restart: the earlier start's windows are its own")
     world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
     crashing(monkeypatch)
@@ -146,60 +146,3 @@ def test_a_strategy_whose_version_changed_is_carried_with_the_banner_saying_so(
     # Carried with its saved stop: nothing more is bought or placed.
     assert [c for c in calls(world, *GTT_CALLS, "placeorder") if c.ts_ns >= DAY2_START] == []
     assert held(world) == 10
-
-
-#: What a start refused for what a strategy holds from an earlier day asks of the operator.
-CHECK_BY_HAND = (
-    "check the position and its GTTs in OpenAlgo, close or cancel them by hand, then start again"
-)
-
-
-def test_a_session_that_crashed_before_its_close_record_refuses_the_next_days_start(
-    make_fake_openalgo, monkeypatch, tmp_path
-):
-    # Continuing from the last save of an earlier day is not built (the report's departure
-    # from the lead's ruling N5a-1 (5)): the next day's start is refused, nothing sent, the
-    # stop GTT resting at the broker.
-    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 32))
-    world.trace.waive("protected", "the session crashed: its windows end with it")
-    crashing(monkeypatch)
-    crash_at(world, on(DAY1, 14, 46))
-    run_to_crash(world, CncKept)
-    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
-    world.day = DAY1
-    to_day(world, DAY2)
-
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
-
-    assert refused.value.failures == (
-        f"CncKept: its session of {DAY1} stopped without its day-close record (the process "
-        "ended before the close) while holding a position or a GTT, which this version "
-        f"continues only from a day-close record; its stop GTT {trigger_id} of {DAY1} on "
-        f"NSE:SBIN (CNC) has not ended and no day-close record carries it: {CHECK_BY_HAND}",
-    )
-    assert [c for c in calls(world, *GTT_CALLS, "placeorder") if c.ts_ns >= DAY2_START] == []
-    assert gtts(world) == [("active", 10, 497.0, "SELL")]
-
-
-def test_a_gtt_of_an_earlier_day_no_record_carries_refuses_the_strategy(
-    make_fake_openalgo, monkeypatch, tmp_path
-):
-    world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path)
-    earlier = DAY1 - dt.timedelta(days=3)
-    with journal_of(world) as journal:
-        journal.start_session(earlier, Mode.LIVE, BROKER)
-        terms = GttTerms("BUY", 490.0, 490.0, 5)
-        seq = journal.record_gtt(
-            "CncKept", 1, 1, "SBIN", "NSE", "CNC", terms, purpose=Purpose.ENTRY
-        )
-        journal.bind_gtt(seq, "261113000001")
-
-    with pytest.raises(PreflightError) as refused:
-        world.run(CncKept)
-
-    assert refused.value.failures == (
-        f"CncKept: its GTT order 261113000001 of {earlier} on NSE:SBIN (CNC) has not ended "
-        f"and no day-close record carries it: {CHECK_BY_HAND}",
-    )
-    assert calls(world, *GTT_CALLS, "placeorder") == []

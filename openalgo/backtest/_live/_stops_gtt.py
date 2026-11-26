@@ -7,7 +7,7 @@ its stop is named in an alert or a line are read from the kernel's GTTs of the p
 - **Covered**: the units of the leg's stop GTTs that rest confirmed (the kernel's
   "Active", and "ModifyPending", whose old terms rest until the modify's answer). One
   whose cancel was handed to the order worker covers nothing (the broker may have
-  cancelled it already; `_venue_gtts.KernelGtt.cancel_sent`), nor one not confirmed yet
+  cancelled it already; `_venue_gtt_known.KernelGtt.cancel_sent`), nor one not confirmed yet
   ("Requested"), nor one the close's read of the GTT book did not confirm after the
   kernel's session closed (`KernelGtt.unconfirmed`, `_session_carry`: the kernel still
   holds it as resting); one whose cancel the kernel decided and the session never handed

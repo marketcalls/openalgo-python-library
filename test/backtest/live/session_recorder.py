@@ -34,7 +34,7 @@ from session_record import (
     run_output,
 )
 
-from openalgo.backtest._live import _session_close, _session_start
+from openalgo.backtest._live import _session_account, _session_close, _session_start
 from openalgo.backtest._live import plan as plan_module
 from openalgo.backtest._live._plan_catch_up import StrategyPlan
 from openalgo.backtest._live._session_news import News
@@ -139,7 +139,7 @@ class _RecordingEngine:
 def record_sessions(monkeypatch: Any) -> SessionRecorder:
     """Record every session run in the test from now on (module docstring)."""
     recorder = SessionRecorder()
-    specify, build, broker = _session_start.specify, _session_start.build, _session_start._broker
+    specify, build, broker = _session_start.specify, _session_start.build, _session_account._broker
     start = ModeGuard.start
 
     def specified(strategy: Any, *, clock: Any, **arguments: Any) -> Any:
@@ -196,7 +196,7 @@ def record_sessions(monkeypatch: Any) -> SessionRecorder:
 
     monkeypatch.setattr(_session_start, "specify", specified)
     monkeypatch.setattr(ModeGuard, "start", started)
-    monkeypatch.setattr(_session_start, "_broker", named)
+    monkeypatch.setattr(_session_account, "_broker", named)
     monkeypatch.setattr(_session_start, "build", built)
     monkeypatch.setattr(plan_module, "_strategy_plan", planned)
     _record_units(recorder, monkeypatch)

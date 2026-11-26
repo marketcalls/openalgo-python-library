@@ -96,6 +96,7 @@ def outcome_of(
     flags: tuple[str, ...] = (),
     candidates: tuple[str, ...] = (),
     message: str = "",
+    held: int | None = None,
 ) -> GttOutcome:
     """The outcome `event` of `followed`'s GTT, with what `GttOutcome` says it carries."""
     gtt = followed.gtt
@@ -114,6 +115,7 @@ def outcome_of(
         flags=flags,
         candidates=candidates,
         message=message,
+        held=held,
     )
 
 

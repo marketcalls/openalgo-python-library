@@ -103,11 +103,12 @@ class GttOutcomes:
         self._stop(followed.gtt.seq)
         self.post(followed, GttEvent.MISMATCH, candidates=candidates, message=words)
 
-    def end(self, followed: Followed, event: GttEvent, note: str) -> None:
-        """`followed`'s GTT ended without firing (`event`): ENDED in the journal."""
+    def end(self, followed: Followed, event: GttEvent, note: str, held: int | None = None) -> None:
+        """`followed`'s GTT ended without firing (`event`): ENDED in the journal; `held`
+        is its leg's units at the broker in the read that judged it, when one did."""
         self._journal.set_gtt_state(followed.gtt.seq, GttState.ENDED, note=note)
         self._stop(followed.gtt.seq)
-        self.post(followed, event, message=note)
+        self.post(followed, event, message=note, held=held)
 
     def gone(
         self,
@@ -133,7 +134,7 @@ class GttOutcomes:
             self.unresolved(followed, words)
         elif found.sign is UnitsSign.UNCHANGED:
             note = "gone with no child found and the position unchanged: ended outside the session"
-            self.end(followed, GttEvent.ENDED_OUTSIDE, note)
+            self.end(followed, GttEvent.ENDED_OUTSIDE, note, held=found.units)
         elif found.sign is UnitsSign.OTHER:
             self.unresolved(followed, went(found))
         elif found.sign is UnitsSign.NO_REFERENCE or waited_out:

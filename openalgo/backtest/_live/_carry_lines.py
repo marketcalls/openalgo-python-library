@@ -10,7 +10,9 @@ restart's lines and before the funds:
 - a strategy whose version changed since its record: carried all the same, its leg keeps
   the levels and rules saved with it (`version_line`, review L4);
 - each position the other mode's ledger carries, named and never restored
-  (`_preflight_carry.other_ledger_lines`: "... held in sandbox, not continued in live").
+  (`_preflight_carry.other_ledger_lines`: "... held in sandbox, not continued in live");
+- each strategy whose holdings of an earlier day no record carried were found closed at
+  the broker, so it starts flat (`_carry_unrecorded`).
 
 Days are IST trading days. Used by the loop at the start.
 """
@@ -43,7 +45,7 @@ def carry_lines(session: Any) -> list[str]:
         version = version_line(trader, carried)
         lines += [version] if version else []
     lines += other_ledger_lines(carry.other, carry.mode)
-    return lines
+    return [*lines, *carry.settled]
 
 
 def continued_line(session: Any, trader: Trader, carried: Carried) -> str:

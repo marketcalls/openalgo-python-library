@@ -222,6 +222,7 @@ def _settle(session: Session, stopped_by: str, *, journal_works: bool) -> None:
         logger.warning("a request held back by the exit guard was not sent: %r", request)
     session.stops.after.alert(session)
     alert_not_confirmed(session)
+    session.news.carry.unresolved_at_close()
 
 
 def _named(session: Session) -> _Named:

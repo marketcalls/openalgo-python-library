@@ -176,7 +176,9 @@ class GttOutcome:
     docstring), of `strategy`'s kernel GTT `gtt_id`, broker GTT `trigger_id`: for
     TRIGGERED the child's broker `order_id`; for CHILD_MISSED the `units` and `price` of
     the fill the position's move stands for, and its `flags`; for MISMATCH the order IDs
-    that could each be its child (`candidates`); `message` says what was seen."""
+    that could each be its child (`candidates`); for ENDED_OUTSIDE the leg's signed units
+    at the broker in the read that judged it (`held`, None for none read); `message` says
+    what was seen."""
 
     seq: int
     strategy: str
@@ -192,6 +194,7 @@ class GttOutcome:
     flags: tuple[str, ...] = ()
     candidates: tuple[str, ...] = ()
     message: str = ""
+    held: int | None = None
 
 
 @dataclass(frozen=True)

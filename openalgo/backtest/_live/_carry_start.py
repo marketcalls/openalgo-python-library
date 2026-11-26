@@ -39,10 +39,11 @@ from .journal import Journal
 
 #: The keys of a day-close record the session adds beside the kernel's carried state
 #: (`_session_carry`): each carried leg's reference of the broker's units read at the close,
-#: each stop GTT the close's read did not confirm, and the journal's GTT (its `seq`) each
-#: carried kernel GTT is bound to.
+#: each stop GTT the close did not confirm, each one it did (by kernel id), and the
+#: journal's GTT (its `seq`) each carried kernel GTT is bound to.
 REFERENCES_KEY = "gtt_references"
 UNCONFIRMED_KEY = "gtts_not_confirmed"
+CONFIRMED_KEY = "gtts_confirmed"
 BINDINGS_KEY = "gtt_bindings"
 #: Half a paisa: two capitals closer than it are the same capital.
 _PAISA = 0.005
@@ -73,13 +74,16 @@ class Carried:
 @dataclass(frozen=True)
 class CarryAtStart:
     """What a session of trading `day` in `mode` continues (module docstring): `carried`,
-    by strategy name in call order, and `other`, the other ledger's latest records of the
-    session's strategies that carry a position, by name."""
+    by strategy name in call order, `other`, the other ledger's latest records of the
+    session's strategies that carry a position, by name, and `settled`, the banner's line
+    of each strategy whose holdings of an earlier day no record carried were found closed
+    at the broker (`_carry_unrecorded`)."""
 
     day: dt.date
     mode: Mode
     carried: Mapping[str, Carried]
     other: Mapping[str, DayClose]
+    settled: tuple[str, ...] = ()
 
     @classmethod
     def none(cls, day: dt.date, mode: Mode) -> CarryAtStart:
@@ -191,14 +195,15 @@ def carried_references(journal: Journal, day: dt.date) -> list[CarriedReference]
     """Each carried GTT's reference (`CarriedReference`), from the latest day-close record,
     of a day before `day`, of every strategy of `journal`'s ledger: only from a record that
     is `Carried.current` (no session of the strategy ran after it) whose reference was
-    settled, the lead's ruling N5a-1 (3). Raises JournalError when the journal cannot be
-    read."""
+    settled, the lead's ruling N5a-1 (3); `confirmed` only for a GTT the record names as
+    confirmed at the close (`CONFIRMED_KEY`), never inferred from one it does not name as
+    unconfirmed. Raises JournalError when the journal cannot be read."""
     found = []
     for name, record in journal.day_closes().items():
         if record.day >= day or not Carried(record, journal.last_ran(name, day)).current:
             continue
         state = record.carried
-        unconfirmed = {int(row["gtt"]) for row in state.get(UNCONFIRMED_KEY, [])}
+        confirmed_ids = {int(gtt_id) for gtt_id in state.get(CONFIRMED_KEY, [])}
         legs = {int(gtt["gtt"]): _gtt_leg(state, gtt) for gtt in state.get("gtts", [])}
         for reference in state.get(REFERENCES_KEY, []):
             leg = (reference["symbol"], reference["exchange"], reference["product"])
@@ -207,7 +212,7 @@ def carried_references(journal: Journal, day: dt.date) -> list[CarriedReference]
             units, read_ns = int(reference["units"]), int(reference["read_ns"])
             for gtt_id, seq in gtt_seqs(record).items():
                 if legs.get(gtt_id) == leg:
-                    confirmed = gtt_id not in unconfirmed
+                    confirmed = gtt_id in confirmed_ids
                     found.append(CarriedReference(seq, leg, units, read_ns, confirmed))
     return found
 
@@ -233,6 +238,7 @@ def _amount(rupees: float) -> str:
 
 __all__ = [
     "BINDINGS_KEY",
+    "CONFIRMED_KEY",
     "REFERENCES_KEY",
     "UNCONFIRMED_KEY",
     "CarryAtStart",

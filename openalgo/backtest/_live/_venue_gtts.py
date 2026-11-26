@@ -10,26 +10,24 @@ the style of the venue map's orders (`venue_map`).
   place's answer bound (`seq`): one made before that answer waits here, in order, and
   goes with it. A trailing modify (the same units) is ADJUST, any other change of a stop
   PROTECT, as an order's (`_venue_requests`); every change of a GTT entry is ADJUST.
-- **Answers to kernel calls.** PLACED `apply_gtt_placed` (a place a restart settled: none
-  for a GTT the kernel restored resting, one carried with its place under way, and
-  `apply_gtt_modified` for one restored with its modify pending, a replace's place);
-  REFUSED of a place `apply_gtt_refused` (a leg's stop: the kernel exits the leg and locks
-  the day's entries, decision 11.7); REFUSED of a modify (its replacement refused, the old
-  GTT cancelled) `apply_gtt_modify_refused`, then `apply_gtt_cancelled` (the kernel places
-  the stop again); MODIFIED, MODIFY_REFUSED, CANCELLED and CANCEL_REFUSED their calls;
-  UNRESOLVED none: the session locks the strategy's entries and alerts, never an exit.
+- **Answers to kernel calls.** PLACED `apply_gtt_placed` (a place a restart settled as
+  the kernel holds it: `_venue_gtt_known.GttTakeBack.placed`); REFUSED of a place
+  `apply_gtt_refused` (a leg's stop: the kernel exits the leg and locks the day's entries,
+  decision 11.7); REFUSED of a modify (its replacement was refused, the old GTT
+  cancelled: nothing rests) `apply_gtt_modify_refused`, then `apply_gtt_cancelled`, after
+  which the kernel places the leg's stop again (a second refusal exits it); MODIFIED,
+  MODIFY_REFUSED, CANCELLED and CANCEL_REFUSED their calls; UNRESOLVED none: the session
+  locks the strategy's entries and alerts (`_session_gtts`), never an exit.
 - **Findings to kernel calls.** TRIGGERED and CHILD_MISSED `apply_gtt_triggered`, whose
-  child the session binds (`_session_gtts`); EXPIRED and REJECTED `apply_gtt_ended`;
-  ENDED_OUTSIDE `apply_gtt_cancelled` as not asked for (the kernel places the stop again
-  or exits flagged `stop_crossed`); IN_FLIGHT and RESTING none; MISMATCH and OTHER_TERMS
-  none: the session locks and alerts. A finding is about a kernel GTT only when it names
-  the journal's GTT bound to it (`gtt_found`): kernel GTT ids start again at 1 with each
-  kernel session, and the follower follows the journal's GTTs of every day.
-- **A restart** (`take_back`): each GTT the kernel restores is taken back with the
-  journal's GTT and the broker's trigger ID it is bound to (`_session_restore_gtts`,
-  `_carry_restore`); one whose state the restart cannot tell is unsettled: its commands
-  are not sent and its findings apply nothing (the session has locked and alerted). A GTT
-  carried from an earlier day keeps its journal GTT under a new kernel id (`local`).
+  child order the session binds (`_session_gtts`); EXPIRED and REJECTED
+  `apply_gtt_ended`; ENDED_OUTSIDE `apply_gtt_cancelled` as not asked for, after which
+  the kernel places the stop again or exits flagged `stop_crossed`; IN_FLIGHT and
+  RESTING none; MISMATCH and OTHER_TERMS none: the session locks and alerts. A finding
+  is about a kernel GTT only when it names the kernel's GTT id and the journal's GTT bound
+  to it (`gtt_found`): kernel GTT ids start again at 1 with each kernel session, and the
+  follower follows the journal's GTTs of every day. Each finding is kept as the GTT's
+  latest (`KernelGtt.finding`).
+- **A restart** and a GTT carried from an earlier day: `_venue_gtt_known.GttTakeBack`.
 
 A result call the kernel refuses (`VenueRefusalError`) is reported in the result
 (`GttHandled.refused`), never swallowed: the session alerts and locks. Quantities are
@@ -41,7 +39,7 @@ from __future__ import annotations
 import enum
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Any
 
 from ..errors import LiveError, VenueRefusalError
@@ -57,6 +55,7 @@ from ._gtt_types import (
 )
 from ._journal_gtt_rows import GttTerms
 from ._types import LOGGER_NAME, Now, Purpose
+from ._venue_gtt_known import GttTakeBack, KernelGtt, gtt_terms
 from ._venue_requests import Priority
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -114,32 +113,11 @@ class GttHandled:
     refused: str = ""
 
 
-@dataclass
-class KernelGtt:
-    """What the session knows of one of the kernel's GTTs: its purpose, the journal's GTT
-    and the broker's trigger ID once a place was answered, the commands waiting for them,
-    the terms last asked for, since when (UTC ns) a place handed over waits for its answer
-    (None before and after), its child's kernel order once it fired, whether a cancel was
-    handed over and not answered (`cancel_sent`), whether a restart could not tell where it
-    stands (`unsettled`), and why the close's read did not confirm it once the kernel's
-    session had closed (`unconfirmed`, `_session_carry`; "" for none)."""
-
-    purpose: Purpose
-    asked: GttTerms
-    seq: int | None = None
-    trigger_id: str = ""
-    deferred: list[Mapping[str, Any]] = field(default_factory=list)
-    placing_ns: int | None = None
-    child: int | None = None
-    cancel_sent: bool = False
-    unsettled: bool = False
-    unconfirmed: str = ""
-
-
-class GttMap:
-    """The GTT map of `engine` (an `Engine.session`) of strategy `strategy` (module
-    docstring): `markets` its instruments' (symbol, exchange) in registration order,
-    `product` the strategy's, `request_ids` the session's request numbers, `now` UTC ns."""
+class GttMap(GttTakeBack):
+    """The GTT map of `engine` (an `Engine.session`), the session of strategy `strategy`
+    (module docstring): `markets` are its instruments' (symbol, exchange) in registration
+    order, `product` the strategy's, `request_ids` the session's request numbers (shared
+    with every venue map), `now` gives UTC nanoseconds."""
 
     def __init__(
         self,
@@ -183,13 +161,6 @@ class GttMap:
         known = self._gtts.get(outcome.gtt_id)
         return known if known is not None and known.seq == outcome.seq else None
 
-    def local(self, outcome: GttOutcome) -> GttOutcome:
-        """`outcome` naming the kernel GTT holding its journal GTT here (module docstring)."""
-        for gtt_id, known in self._gtts.items():
-            if known.seq == outcome.seq and gtt_id != outcome.gtt_id:
-                return replace(outcome, gtt_id=gtt_id)
-        return outcome
-
     def gtt_of_child(self, kernel_order: int) -> KernelGtt | None:
         """The GTT whose child the kernel follows as `kernel_order`, or None."""
         return next((known for known in self._gtts.values() if known.child == kernel_order), None)
@@ -202,17 +173,6 @@ class GttMap:
             for gtt_id, known in self._gtts.items()
             if known.placing_ns is not None and known.purpose is Purpose.STOP
         )
-
-    def take_back(
-        self, view: Mapping[str, Any], *, seq: int | None, trigger_id: str, unsettled: bool
-    ) -> None:
-        """Take back at a restart the kernel's GTT `view` (an `Engine.gtt` dict): the
-        journal's GTT `seq` bound to the broker's `trigger_id`, or `unsettled` (module
-        docstring)."""
-        purpose = Purpose.STOP if view["purpose"] == "stop" else Purpose.ENTRY
-        known = KernelGtt(purpose, _terms(view), seq=seq, trigger_id=trigger_id)
-        known.unsettled = unsettled
-        self._gtts[int(view["gtt_id"])] = known
 
     # ----- commands to requests --------------------------------------------------------
 
@@ -235,7 +195,7 @@ class GttMap:
             if gtt_id in self._gtts:
                 raise LiveError(f"kernel GTT g{gtt_id} of {self._strategy} is placed twice")
             purpose = Purpose.STOP if command.get("order_id") is None else Purpose.ENTRY
-            self._gtts[gtt_id] = KernelGtt(purpose, _terms(command))
+            self._gtts[gtt_id] = KernelGtt(purpose, gtt_terms(command))
             return [self._request(command, None)]
         known = self._gtts.get(gtt_id)
         if known is None or kind not in ("modify_gtt", "cancel_gtt"):
@@ -248,7 +208,7 @@ class GttMap:
     def _request(self, command: Mapping[str, Any], seq: int | None) -> GttRequest:
         gtt_id = int(command["gtt_id"])
         known = self._gtts[gtt_id]
-        terms = _terms(command)
+        terms = gtt_terms(command)
         action = _ACTIONS.get(str(command["command"]), GttAction.CANCEL)
         symbol, exchange = self._markets[int(command["instrument"])]
         request = GttRequest(
@@ -290,7 +250,7 @@ class GttMap:
         if kind in (GttAnswerKind.PLACED, GttAnswerKind.MODIFIED):
             known.seq, known.trigger_id, known.placing_ns = answer.seq, answer.trigger_id, None
             placed = kind is GttAnswerKind.PLACED
-            call = self._placed if placed else self._engine.apply_gtt_modified
+            call = self.placed if placed else self._engine.apply_gtt_modified
             applied = GttApplied.PLACED if placed else GttApplied.MODIFIED
             return GttHandled(applied, self._released(known), refused=self._call(call, gtt_id))
         if kind is GttAnswerKind.REFUSED:
@@ -312,6 +272,8 @@ class GttMap:
         changes nothing in the kernel."""
         known = self.gtt_found(outcome)
         event, gtt_id = outcome.event, outcome.gtt_id
+        if known is not None:
+            known.finding = event
         if known is None or known.unsettled:
             logger.warning(
                 "%s: GTT %s (%s) is not one this session placed: nothing applied",
@@ -348,13 +310,6 @@ class GttMap:
     def _refused(self, gtt_id: int) -> None:
         self._engine.apply_gtt_refused(gtt_id)
 
-    def _placed(self, gtt_id: int) -> None:
-        state = self._engine.gtt(gtt_id)["state"]  # a restart's settled place: docstring
-        if state == "ModifyPending":
-            self._engine.apply_gtt_modified(gtt_id)
-        elif state != "Active":
-            self._engine.apply_gtt_placed(gtt_id)
-
     def _released(self, known: KernelGtt) -> tuple[GttRequest, ...]:
         deferred, known.deferred = known.deferred, []
         return tuple(self._request(command, known.seq) for command in deferred)
@@ -375,19 +330,6 @@ def _words(gtt_id: int, error: VenueRefusalError) -> str:
     return words
 
 
-def _terms(command: Mapping[str, Any]) -> GttTerms:
-    """The terms of a GTT command. Raises LiveError for units that are not whole."""
-    units = float(command["quantity_units"])
-    if not units.is_integer():
-        raise LiveError(f"kernel GTT g{command['gtt_id']} is for {units} units: whole units only")
-    return GttTerms(
-        str(command["side"]),
-        float(command["trigger_price"]),
-        float(command["price"]),
-        int(units),
-    )
-
-
 def _priority(known: KernelGtt, action: GttAction, terms: GttTerms) -> Priority:
     """A strategy's GTT order is ADJUST (its place ENTER); a leg's stop PROTECT, but a
     trailing modify (the same units) ADJUST."""
@@ -397,4 +339,4 @@ def _priority(known: KernelGtt, action: GttAction, terms: GttTerms) -> Priority:
     return Priority.ADJUST if trailing else Priority.PROTECT
 
 
-__all__ = ["GTT_COMMANDS", "GttApplied", "GttHandled", "GttMap", "KernelGtt"]
+__all__ = ["GTT_COMMANDS", "GttApplied", "GttHandled", "GttMap"]

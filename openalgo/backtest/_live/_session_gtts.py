@@ -25,7 +25,12 @@ GTT map (`_venue_gtts`), then what the session must do around it.
   the stop again (or exits flagged `stop_crossed`), the session asks `protect` for the leg
   too (it answers that the stop works when the kernel placed it), and a REJECT alert
   says what ended. A strategy's GTT order that ended so ends in the kernel too, with a
-  REJECT alert and no protect.
+  REJECT alert and no protect. A leg's stop GTT found gone with no child while the read
+  that judged it shows the broker holding other units than the leg (one-sided for CNC,
+  `_broker_units.strategy_units`) may have fired, its fall hidden by a reference that was
+  not the leg's: nothing is applied, so no stop is placed for units the account may not
+  hold; the strategy's entries are locked with an ERROR alert, as for an unresolved GTT,
+  and the close names the GTT not confirmed (review round 1 of unit N5a).
 
 Quantities are whole units, prices rupees, times UTC nanoseconds. Used by the loop only.
 """
@@ -37,6 +42,7 @@ from typing import Any
 
 from .._engine import call
 from ..errors import LiveError
+from ._broker_units import strategy_units
 from ._gtt_types import MISSED_DAY, PRICE_UNVERIFIED, GttAction, GttAnswer, GttEvent, GttOutcome
 from ._journal_gtt_rows import GttTerms
 from ._session_carry import FINDING_WORDS
@@ -91,6 +97,8 @@ class GttNewsHandler:
         if isinstance(news, GttAnswer):
             handled = trader.gtts.answered(news)
             self._answered(trader, news, handled)
+        elif self._unheld(trader, news):
+            return
         else:
             handled = trader.gtts.found(news)
             self._found(trader, news, handled)
@@ -160,6 +168,27 @@ class GttNewsHandler:
                 f"broker with no request from the session ({outcome.event.value}): the "
                 "engine places it again, or exits if the price is past the stop",
             )
+
+    def _unheld(self, trader: Trader, outcome: GttOutcome) -> bool:
+        """Whether `outcome` is a leg's stop GTT ended outside the session while the broker
+        held other units than the leg (module docstring): then it is not applied, and the
+        strategy's entries are locked with an ERROR alert."""
+        if outcome.event is not GttEvent.ENDED_OUTSIDE or outcome.held is None:
+            return False
+        known = trader.gtts.gtt_found(outcome) if trader.gtts is not None else None
+        if known is None or known.unsettled or known.purpose is not Purpose.STOP:
+            return False
+        units = round(trader.open_units())
+        if strategy_units(trader.product, units, outcome.held) == units:
+            return False
+        known.finding = outcome.event
+        self._unresolved(
+            trader,
+            f"{_named(outcome.trigger_id, Purpose.STOP)} ended at the broker with no child "
+            f"found while OpenAlgo's books show {outcome.held} of the leg's {units} units: it "
+            "may have fired, so it is not placed again",
+        )
+        return True
 
     def _child(self, trader: Trader, handled: GttHandled) -> tuple[GttTerms, Purpose]:
         """The terms and the purpose of a fired GTT's child, as the kernel follows it."""
