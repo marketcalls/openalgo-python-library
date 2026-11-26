@@ -3,7 +3,9 @@
 from an earlier day writes the day's record, and a restart that day resumes the leg from the
 day's save with its stop GTT of the earlier day taken back, never judged as a GTT no record
 carries; a start after that day's close is refused for the hour alone, and the next day
-continues the day's record. Nothing is sent.
+continues the day's record. A crash on that day restarted before the close is continued the
+next day from the record the restart's close writes: the way to keep a leg the crash would
+otherwise leave without a record. Nothing is sent.
 
 The days and the strategies are `carry_samples`': on Monday `CncKept` buys 10 SBIN CNC at
 500.00 at 14:42:01 IST with its stop GTT at 497.00, or `FutKept` one lot (65 units) of
@@ -30,7 +32,7 @@ from carry_samples import (
 )
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, MODES, calls, gtts
-from restart_samples import restart
+from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import StopFlag, alerts
 
 from openalgo.backtest._live._types import LOGGER_NAME
@@ -170,4 +172,34 @@ def test_a_start_after_the_close_of_a_continued_day_is_refused_only_for_the_hour
     assert world.run(strategy).stopped_by == "ctrl_c"
     assert calls(world, *SENDS)[sent:] == []
     assert gtts(world) == [("active", units, trigger, "SELL")]
+    assert not alerts(caplog, "error")
+
+
+@MODES
+@BOOKS
+def test_a_crash_on_a_continued_day_restarted_before_the_close_is_continued_the_next_day(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
+):
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, CncKept, analyzer=analyzer, history=history
+    )
+    world.trace.waive("protected", "the session crashed: its windows end with it")
+    world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
+    crashing(monkeypatch)
+    world.stop, world.feed = StopFlag(), None
+    to_day(world, DAY2)
+    crash_at(world, on(DAY2, 14, 46))
+    run_to_crash(world, CncKept)
+    assert restart(world, CncKept).stopped_by == "session_end"
+    with journal_of(world) as journal:
+        assert journal.day_close("CncKept").day == DAY2
+    sent = len(calls(world, *SENDS))
+    world.stop, world.feed = StopFlag(), None
+    to_day(world, DAY3)
+    world.stop_at(on(DAY3, 14, 46))
+    caplog.clear()
+
+    assert world.run(CncKept).stopped_by == "ctrl_c"
+    assert calls(world, *SENDS)[sent:] == []
+    assert gtts(world) == [("active", 10, 497.0, "SELL")]
     assert not alerts(caplog, "error")
