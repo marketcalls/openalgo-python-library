@@ -12,6 +12,7 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from .reference._store import run_wording
 from .session_result import SessionResult
 from .strategy import Strategy
 from .units import Distance
@@ -153,8 +154,10 @@ def live(
     from ._live._result_build import session_result
 
     # Checked here first, so that no argument of the session's own reaches it from a call.
-    live_arguments(strategy, **arguments, **not_live)
-    outcome = live_session.run_session(strategy, client, **arguments, **not_live)
+    # A run reads the built-in tables only: its reference words give the run's advice.
+    with run_wording():
+        live_arguments(strategy, **arguments, **not_live)
+        outcome = live_session.run_session(strategy, client, **arguments, **not_live)
     return session_result(outcome)
 
 

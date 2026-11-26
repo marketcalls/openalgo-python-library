@@ -21,16 +21,12 @@ with why it was not.
   read of the books judges what it did. One never recorded never reached the broker.
 - *GTTs*: `_carry_rebuild_gtts`.
 
-**The record.** The kernel's carried state with what a close's record adds: the journal's
-GTT each carried GTT is bound to (the save's bindings, and the day's GTTs by kernel id);
-the leg's reference of the broker's units from the save's last reconciliation read when it
-still holds (settled, no order of the session working when it stopped, the units the
-leg's, and nothing of the day's orders filled after the read): with none, a stop GTT gone
-from the next start's book is a mismatch, as for any record without one; and each carried
-GTT that reference confirms (the journal shows a read of the GTT book found it resting on
-the terms it kept since before the reference's read: it had not fired then), the others
-named not confirmed (no close read was made: the start's first read of the GTT book judges
-them). Under `REBUILT_KEY`: when the session stopped (the latest of its save and the
+**The record.** The kernel's carried state with what a close's record adds
+(`_carry_rebuild_record`: the leg's reference of the broker's units from the save's last
+reconciliation read when it still holds, the carried GTTs it confirms, and the journal's
+GTT each carried GTT is bound to, by the save's bindings and the day's GTTs by kernel id).
+A GTT that fired before the session stopped is not carried, and `write` ends its journal
+GTT. Under `REBUILT_KEY`: when the session stopped (the latest of its save and the
 journal's updates read), when it last saved, how many updates were applied and the words
 of those named. The strategy's `self.state` is the last it saved, its version id the one
 its session of that day started with. `write` writes it; `Rebuilt.opening` names each order
@@ -38,9 +34,9 @@ that opens or adds that still worked when the session stopped, which the start j
 against the books (`_carry_unrecorded`).
 
 **Refused** (`LiveError`, the words naming what and what to do): a save that cannot be read
-or names no instruments (one an earlier version wrote), one the kernel refuses (another
-instrument than the strategy trades now, a save the kernel cannot read), and an update that
-cannot be accounted for.
+or names no instruments (one an earlier version wrote), one of another instrument than the
+strategy trades now, one the kernel refuses (naming why), and an update that cannot be
+accounted for.
 
 Days are IST trading days, times UTC nanoseconds, quantities whole units, prices rupees.
 Run by the main thread at the start, before the preflight.
@@ -60,11 +56,11 @@ from .._market import market_settings
 from .._series import ist_time
 from ..calendar import Calendar
 from ..errors import ConfigError, LiveError
-from ._broker_units import strategy_units
 from ._carry_rebuild_gtts import GttContext, NamedWords, apply, unsent
-from ._carry_start import BINDINGS_KEY, CONFIRMED_KEY, REFERENCES_KEY, UNCONFIRMED_KEY
+from ._carry_rebuild_record import add_record_parts
+from ._carry_start import BINDINGS_KEY
 from ._fill_ledger import FillLedger
-from ._journal_gtt_rows import GttBinding, GttState
+from ._journal_gtt_rows import GttState
 from ._order_state import ENTRY_PURPOSES
 from ._plan_catch_up import INSTRUMENT
 from ._plan_engine import session_engine
@@ -76,8 +72,12 @@ from .journal import Journal
 
 #: The key of a rebuilt day-close record's account of its rebuild (module docstring).
 REBUILT_KEY = "rebuilt_after_stop"
-#: Why a rebuilt record's stop GTTs are not confirmed.
-NOT_CONFIRMED = "the session stopped before its close read the GTT book"
+#: The journal's note of a GTT that fired before the session stopped, which the rebuilt
+#: record leaves out (`_carry_rebuild_gtts`), as `write` ends it.
+FIRED_BEFORE_STOP = (
+    "fired before the session stopped: the day-close record rebuilt after the stop carries "
+    "the position without it"
+)
 
 
 @dataclass(frozen=True)
@@ -86,9 +86,10 @@ class Rebuilt:
     trading `day` its session stopped on, when it stopped and when it last saved (UTC
     nanoseconds), the updates applied, the words of each one named, the day-close
     record's carried state (`carried`, with what a close's record adds), the strategy's
-    `self.state` and version id, and the words of each order that opens or adds and still
+    `self.state` and version id, the words of each order that opens or adds and still
     worked when the session stopped (`opening`: it may have filled after the stop, which
-    the journal cannot tell)."""
+    the journal cannot tell), and the journal's GTTs (their `seq`) that fired before the
+    session stopped (`fired`): the record leaves them out, and `write` ends them."""
 
     name: str
     day: dt.date
@@ -100,6 +101,7 @@ class Rebuilt:
     user_state: Mapping[str, Any] = field(default_factory=dict)
     version_id: str = ""
     opening: tuple[str, ...] = ()
+    fired: tuple[int, ...] = ()
 
     @property
     def units(self) -> int:
@@ -151,9 +153,10 @@ def rebuild(
             "wrote it), so what it holds cannot be rebuilt"
         )
     rows = journal_rows(journal, name, day, saved.bindings)
-    views = _gtt_views(_engine(spec, day, saved, instruments, calendar), saved, today, [])
+    days = (day, today)
+    views = _gtt_views(_engine(spec, day, saved, instruments, calendar), saved, days, name)
     engine = _engine(spec, day, saved, instruments, calendar)
-    pairs = _restore(engine, saved, today, unsent(views, rows), name)
+    pairs = _restore(engine, saved, days, unsent(views, rows), name)
     tick = float(instruments[INSTRUMENT]["tick_size"])
     orders = _orders(engine, saved, pairs, journal, day, tick)
     gtts = apply(engine, views, rows, GttContext(journal, tick, orders.handled))
@@ -167,7 +170,7 @@ def rebuild(
     opening = _opening(saved, pairs, working)
     call(engine.stop_session)
     carried = dict(call(engine.carried_state))
-    _add_record_parts(carried, rows, _reference(found.state, carried, journal, day, working))
+    add_record_parts(carried, rows, found.state, journal, day, working)
     kept = journal.user_state(name)
     versions = [v for v in journal.versions(day=day) if v.strategy == name]
     rebuilt = Rebuilt(
@@ -181,6 +184,7 @@ def rebuild(
         user_state={} if kept is None else dict(kept.state),
         version_id=versions[-1].version_id if versions else spec.version.version_id,
         opening=opening,
+        fired=tuple(gtts.fired),
     )
     carried[REBUILT_KEY] = {
         "stopped_ns": rebuilt.stopped_ns,
@@ -192,8 +196,11 @@ def rebuild(
 
 
 def write(journal: Journal, rebuilt: Rebuilt) -> None:
-    """Write `rebuilt`'s day-close record of its day (module docstring). Raises
-    JournalError when the journal cannot write it."""
+    """Write `rebuilt`'s day-close record of its day (module docstring), then end each
+    journal GTT that fired before the session stopped (`Rebuilt.fired`), noted
+    `FIRED_BEFORE_STOP`: the record first, so a start that finds a GTT ended finds the
+    record that carries its position. Raises JournalError when the journal cannot write
+    them."""
     journal.put_day_close(
         rebuilt.name,
         dict(rebuilt.carried),
@@ -201,6 +208,8 @@ def write(journal: Journal, rebuilt: Rebuilt) -> None:
         rebuilt.version_id,
         day=rebuilt.day,
     )
+    for seq in rebuilt.fired:
+        journal.set_gtt_state(seq, GttState.FIRED, note=FIRED_BEFORE_STOP)
 
 
 def _opening(saved: Saved, pairs: Mapping[int, int], working: set[int]) -> tuple[str, ...]:
@@ -224,7 +233,15 @@ def _engine(
 ) -> Any:
     """A kernel session of `day` for `spec` on the saved `instruments`, with the save's
     capital (module docstring). Raises LiveError for a save of another instrument than the
-    strategy trades now."""
+    strategy trades now, and for saved facts its market settings refuse."""
+    saved_on = ", ".join(f"{i['exchange']}:{i['symbol']}" for i in instruments)
+    traded = {(i.symbol, i.exchange) for i in spec.instruments}
+    if traded != {(str(i["symbol"]), str(i["exchange"])) for i in instruments}:
+        now_on = ", ".join(f"{i.exchange}:{i.symbol}" for i in spec.instruments)
+        raise LiveError(
+            f"{spec.name}: its save of {day} is of {saved_on}, and it trades {now_on} now, "
+            "so what it holds cannot be rebuilt"
+        )
     capital = float(saved.live_state["account"]["capital_rupees"])
     plan = dataclasses.replace(spec.plan, start=day, end=day, capital=capital)
     facts = [
@@ -247,7 +264,6 @@ def _engine(
             announce=False,
         )
     except ConfigError as error:
-        saved_on = ", ".join(f"{i['exchange']}:{i['symbol']}" for i in instruments)
         raise LiveError(
             f"{spec.name}: its save of {day} is of {saved_on}, which it no longer trades as "
             f"saved ({error}): what it holds cannot be rebuilt"
@@ -257,24 +273,32 @@ def _engine(
 
 
 def _restore(
-    engine: Any, saved: Saved, today: dt.date, never_sent: list[int], name: str
+    engine: Any,
+    saved: Saved,
+    days: tuple[dt.date, dt.date],
+    never_sent: list[int],
+    name: str,
 ) -> dict[int, int]:
-    """Give `engine` the save, standing where it stood; the kernel's (saved id, new id)
-    pairs. Raises LiveError naming why the kernel refuses it."""
+    """Give `engine` strategy `name`'s save of its session of `days[0]`, carried to
+    `days[1]`, standing where it stood; the kernel's (saved id, new id) pairs. Raises
+    LiveError naming why the kernel refuses it."""
+    day, today = days
     try:
         pairs = call(engine.restore_stopped_state, saved.live_state, to_day(today), never_sent)
     except Exception as error:
         raise LiveError(
-            f"{name}: the engine refuses its last save of its session of "
-            f"{saved.live_state.get('day')} ({error}), so what it holds cannot be rebuilt"
+            f"{name}: the engine refuses its last save of its session of {day} ({error}), "
+            "so what it holds cannot be rebuilt"
         ) from error
     return {int(old): int(new) for old, new in pairs.items()}
 
 
-def _gtt_views(probe: Any, saved: Saved, today: dt.date, never_sent: list[int]) -> list[dict]:
-    """The kernel's GTTs of the save as `Engine.gtts` dicts, read from `probe`, a session
-    given the save with no update (the views the GTT step judges by)."""
-    _restore(probe, saved, today, never_sent, "the save")
+def _gtt_views(probe: Any, saved: Saved, days: tuple[dt.date, dt.date], name: str) -> list[dict]:
+    """The kernel's GTTs of strategy `name`'s save as `Engine.gtts` dicts, read from
+    `probe`, a session given the save with no update (the views the GTT step judges by;
+    `days` as `_restore` takes them). Raises LiveError naming why the kernel refuses the
+    save."""
+    _restore(probe, saved, days, [], name)
     return [dict(view) for view in call(probe.gtts, INSTRUMENT, saved.product)]
 
 
@@ -322,73 +346,9 @@ def _orders(
     return done
 
 
-def _reference(
-    state: Mapping[str, Any],
-    carried: Mapping[str, Any],
-    journal: Journal,
-    day: dt.date,
-    working: set[int],
-) -> list[dict[str, Any]]:
-    """The leg's reference of the broker's units the rebuilt record keeps (module
-    docstring): the save's, when it still holds (no order of the session's still `working`
-    when it stopped); else none."""
-    references = list(state.get(REFERENCES_KEY) or [])
-    if len(references) != 1 or working:
-        return []
-    reference = dict(references[0])
-    if not reference.get("settled"):
-        return []
-    held = sum(round(float(p["quantity_units"])) for p in carried.get("positions", []))
-    broker = int(reference["units"])
-    if strategy_units(str(reference["product"]), held, broker) != held:
-        return []
-    read_ns = int(reference["read_ns"])
-    for order in journal.bound_orders(day=day):
-        if _filled_after(journal.updates(order.order_id, day=day), read_ns):
-            return []
-    return [reference]
-
-
-def _filled_after(words: Sequence[Any], read_ns: int) -> bool:
-    """Whether an order's journal `words` (its updates, cumulative) show units filled after
-    `read_ns` (UTC nanoseconds): more filled in all of them than in those received by then
-    (a later word of a fill made before, a poll's, moves nothing)."""
-    before = max((w.filled_quantity for w in words if w.ts_recv_ns <= read_ns), default=0)
-    return max((w.filled_quantity for w in words), default=0) > before
-
-
-def _add_record_parts(
-    carried: dict[str, Any], rows: Mapping[int, GttBinding], reference: list[dict[str, Any]]
-) -> None:
-    """Add to `carried` what a close's record adds (module docstring): the leg's
-    `reference`; each carried GTT the reference confirms (`_confirmed`), and each other
-    named not confirmed; and the journal's GTT each carried GTT is bound to (`rows`, by
-    kernel id)."""
-    gtts = [int(gtt["gtt"]) for gtt in carried.get("gtts", []) if int(gtt["gtt"]) in rows]
-    read_ns = int(reference[0]["read_ns"]) if reference else None
-    confirmed = [gtt for gtt in gtts if _confirmed(rows[gtt], read_ns)]
-    carried[REFERENCES_KEY] = reference
-    carried[CONFIRMED_KEY] = confirmed
-    carried[UNCONFIRMED_KEY] = [
-        {"gtt": gtt, "trigger_id": rows[gtt].trigger_id or "", "why": NOT_CONFIRMED}
-        for gtt in gtts
-        if gtt not in confirmed
-    ]
-    carried[BINDINGS_KEY] = [{"gtt": gtt, "seq": rows[gtt].seq} for gtt in gtts]
-
-
-def _confirmed(row: GttBinding, read_ns: int | None) -> bool:
-    """Whether the leg's reference read at `read_ns` (None for none) confirms the GTT the
-    journal's `row` is: a read of the GTT book showed it resting (ACTIVE) on terms it kept
-    from before the reference's read, so it had not fired by then (the reference's units
-    hold the leg's, which a fire would have lowered)."""
-    resting = row.state is GttState.ACTIVE and row.trigger_id is not None
-    return read_ns is not None and resting and row.changed_ns <= read_ns
-
-
 def _clock(ns: int) -> str:
     """IST wall-clock time of `ns` (UTC nanoseconds), HH:MM:SS."""
     return ist_time(ns).strftime("%H:%M:%S")
 
 
-__all__ = ["NOT_CONFIRMED", "REBUILT_KEY", "Rebuilt", "rebuild", "write"]
+__all__ = ["FIRED_BEFORE_STOP", "REBUILT_KEY", "Rebuilt", "rebuild", "write"]

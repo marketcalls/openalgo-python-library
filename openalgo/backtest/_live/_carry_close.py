@@ -9,7 +9,10 @@ A stop GTT the close's read did not confirm asks the operator to check the order
 the position, then place it by hand (`_stops_gtt.CHECK_THEN_PLACE`): it may have fired. A
 `positional_stops="rearm_daily"` leg has no stop GTT: its line gives its stop level and
 what the broker holds from the close on in the words of the close's WARN alert of such legs
-(`_session_rearm.stop_at_close`), never a stop resting overnight.
+(`_session_rearm.stop_at_close`), never a stop resting overnight. A future the exchange
+settles today (its last trading day, `_session_expiry.settles_today`) is named so on either
+stop mode (`settles_words`): the exchange settles it at its expiry, so it needs no stop from
+the close, and the next start names the settlement.
 
 Quantities are signed units, prices rupees, days IST. Used by the loop at the close.
 """

@@ -6,12 +6,19 @@ values. (Symbol-master snapshots are reconciled with the tables in `_terms`; the
 never held here.) Nothing is chosen silently beyond that: a lookup no row covers raises
 `ReferenceDataError`; an unverified row warns on every use; a built-in row used for a
 date after its table's as-of date warns the first time.
+
+The messages advise a caller of this API to supply data with `load_tables` (a user file or
+a symbol-master snapshot). A run (`bt.backtest`, `bt.live`) reads the built-in tables only,
+so inside `run_wording` its warnings and errors give the advice a run can follow
+(`run_advice`): one wording rule, here.
 """
 
+import contextlib
+import contextvars
 import datetime as _dt
 import re
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 from ..errors import ReferenceDataError
 from ._rows import RefRow, status_counts, uncovered_ranges
@@ -43,6 +50,22 @@ RUN_ADVICE = (
 _HOW_TO_SUPPLY_PATTERN = re.compile(
     re.escape(_HOW_TO_SUPPLY).replace(re.escape("{table}"), "[^']+")
 )
+#: The advice of an unverified row's warning, and of a row used past its table's as-of date
+#: (`RowStore.note_use`), to a caller of the API.
+_UNVERIFIED_ADVICE = (
+    "Confirm it against the exchange circular, or override it with a user file or a "
+    "symbol-master snapshot."
+)
+_PAST_AS_OF_ADVICE = "update openalgo, or supply a user file or a symbol-master snapshot."
+#: Each of those as a run says it (`run_advice`).
+_RUN_WORDS = (
+    (_UNVERIFIED_ADVICE, f"Confirm it against the exchange circular. {RUN_ADVICE}"),
+    (_PAST_AS_OF_ADVICE, f"update openalgo. {RUN_ADVICE}"),
+)
+#: Whether the present context is a run's (`run_wording`). A context variable, set and
+#: reset by `run_wording` only, so a run's wording never reaches a caller of the API
+#: after the run, nor another thread.
+_IN_RUN: contextvars.ContextVar[bool] = contextvars.ContextVar("reference_run", default=False)
 
 
 def run_advice(message: str) -> str:
@@ -50,7 +73,27 @@ def run_advice(message: str) -> str:
     the public reference API (`load_tables` with a user file or a symbol-master snapshot,
     which no run reads) replaced by the advice a run can follow (`RUN_ADVICE`). The one
     rule of the two wordings: the store's messages keep the API's advice."""
-    return _HOW_TO_SUPPLY_PATTERN.sub(RUN_ADVICE, message)
+    message = _HOW_TO_SUPPLY_PATTERN.sub(lambda _: RUN_ADVICE, message)
+    for api, run in _RUN_WORDS:
+        message = message.replace(api, run)
+    return message
+
+
+@contextlib.contextmanager
+def run_wording() -> Iterator[None]:
+    """The context of a run (`bt.backtest`, `bt.live`): a `ReferenceDataWarning` issued in
+    it, and a `ReferenceDataError` raised out of it, give the run's advice (`run_advice`).
+    Raises that ReferenceDataError reworded, from the original."""
+    token = _IN_RUN.set(True)
+    try:
+        yield
+    except ReferenceDataError as error:
+        words = run_advice(str(error))
+        if words == str(error):
+            raise
+        raise ReferenceDataError(words) from error
+    finally:
+        _IN_RUN.reset(token)
 
 
 class ReferenceDataWarning(UserWarning):
@@ -63,8 +106,9 @@ def how_to_supply(table: str) -> str:
 
 
 def warn(message: str, stacklevel: int = WARNING_STACK_LEVEL) -> None:
-    """Issue a `ReferenceDataWarning`."""
-    warnings.warn(message, ReferenceDataWarning, stacklevel=stacklevel)
+    """Issue a `ReferenceDataWarning`, in a run's words inside `run_wording`."""
+    words = run_advice(message) if _IN_RUN.get() else message
+    warnings.warn(words, ReferenceDataWarning, stacklevel=stacklevel)
 
 
 def best_origin(rows: Sequence[RefRow]) -> list[RefRow]:
@@ -225,8 +269,7 @@ class RowStore:
         if row.status == "unverified":
             warn(
                 f"reference data: {row.describe()} is unverified "
-                f"(source: {row.source or 'none'}). Confirm it against the exchange circular, "
-                "or override it with a user file or a symbol-master snapshot."
+                f"(source: {row.source or 'none'}). {_UNVERIFIED_ADVICE}"
             )
         as_of = self._as_of.get(row.table)
         past = as_of is not None and day > as_of and row.origin_class == "builtin"
@@ -236,7 +279,7 @@ class RowStore:
             warn(
                 f"reference data: {row.describe()} was last checked on {as_of.isoformat()} "
                 f"and is being used for {day.isoformat()}. The exchange may have changed it "
-                "since: update openalgo, or supply a user file or a symbol-master snapshot."
+                f"since: {_PAST_AS_OF_ADVICE}"
             )
         return row
 
@@ -254,5 +297,6 @@ __all__ = [
     "best_origin",
     "how_to_supply",
     "run_advice",
+    "run_wording",
     "warn",
 ]

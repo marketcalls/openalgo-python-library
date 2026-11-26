@@ -53,7 +53,7 @@ from ._stops_after import AfterLines
 from ._stops_alerts import held_back, instrument_held_by, stop_moved, unbound_add
 from ._stops_bare import BareLegs
 from ._stops_cancels import CancelRetries
-from ._stops_cover import MARKET_CLOSED, Windows, reason_of
+from ._stops_cover import MARKET_CLOSED, Windows, gtt_held_back, reason_of, warn_once
 from ._stops_deadline import UNPROTECTED, UNPROTECTED_EXIT_AFTER_S, Deadlines
 from ._stops_gtt import gtt_cover, gtt_guarded, stop_gtt
 from ._stops_held import HeldWords
@@ -278,17 +278,21 @@ class StopsSupervisor:
             # An entry the order book cannot tell apart: its units count whatever the rules.
             unsure = abs(leg.ambiguous_entry_units())
             key = (trader.name, trader.symbol, trader.exchange)
+            held_back = gtt_held_back(trader, self._session.reconcile.guard.guards(trader.name))
             guarded = (
                 leg.guarded
                 or (stop_gtt(trader) and gtt_guarded(trader))
-                # A rearm_daily leg with a stop level, its day stop not placed yet.
+                # Held back by the exit guard, or a rearm_daily leg's day stop not placed yet.
+                or held_back
                 or rearm_guarded(trader)
             )
             if units == 0 and not leg.unbound_add_units and not unsure:
                 leg.flat()
             elif not guarded and not unsure:
-                self._warn_unguarded(trader, units)
+                warn_once(self._session, self._unguarded, trader, units, held_back=False)
             else:
+                if held_back:
+                    warn_once(self._session, self._unguarded, trader, units, held_back=True)
                 uncovered = units + leg.unbound_add_units + unsure - self.covered(trader)
                 stop = leg.orders.get(leg.stop) if leg.stop is not None else None
                 held = stop is not None and self.held.held_cancel(trader, stop.kernel_order)
@@ -300,6 +304,7 @@ class StopsSupervisor:
                     held_by_other=instrument_held_by(self._session, self, trader) is not None,
                     closing_rejected=self._session.margin.unprotected_reason(trader),
                     gtt_asked=stop_gtt(trader) and gtt_guarded(trader),
+                    gtt_held=held_back,
                 )
                 # A rearm_daily leg has no day stop while the market is closed (`_session_rearm`).
                 if rearm_daily(trader) and market_closed(trader, now_ns):
@@ -385,16 +390,6 @@ class StopsSupervisor:
             trader, request.kernel_order
         ):
             self.prices.refused(trader, request.kernel_order)
-
-    def _warn_unguarded(self, trader: Trader, units: int) -> None:
-        if trader.name in self._unguarded:
-            return
-        self._unguarded.add(trader.name)
-        self._session.warn(
-            f"{trader.name}: a position of {units} {trader.symbol} {trader.exchange} was "
-            "opened with no stop at the broker (no stop=, or a trail or breakeven not "
-            "armed yet)"
-        )
 
 
 __all__ = ["UNPROTECTED", "UNPROTECTED_EXIT_AFTER_S", "StopsSupervisor"]

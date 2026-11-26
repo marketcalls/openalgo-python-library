@@ -236,3 +236,26 @@ def test_a_restart_after_the_open_sends_the_exit_a_stop_left_unsent_flagged_late
     (fill,) = [fill for fill in second.fills if fill.action == "SELL"]
     assert "late_decision" in fill.flags
     assert not alerts(caplog, "error")
+
+
+@MODES
+def test_a_restart_in_the_opens_first_minute_sends_the_exit_left_unsent_flagged_late_decision(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # As above, the restart at 09:15:30, before its catch-up has released the 09:15
+    # slice: the open has passed, so the exit goes at once flagged late_decision, as a
+    # start at 09:15:30 decides late (the lead's ruling N5c-4 (j); review finding 4).
+    world = monday(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, history=True)
+    to_tuesday(world)
+    world.stop_at(ist(9, 8, day=TUESDAY))
+    assert world.run(DailyInOut).stopped_by == "ctrl_c"
+    world.script.sleep((ist(9, 15, 30, day=TUESDAY) - world.fake.clock.now()) / NS)
+
+    second = restart(world, DailyInOut, stop_ns=ist(9, 40, day=TUESDAY))
+
+    assert DailyInOut.decided[1:] == [(close_of(MONDAY), UNITS)]
+    (sold,) = [o for o in world.orders() if o.action == "SELL"]
+    assert (sold.price_type, sold.quantity, sold.status) == ("MARKET", UNITS, "complete")
+    (fill,) = [fill for fill in second.fills if fill.action == "SELL"]
+    assert "late_decision" in fill.flags
+    assert not alerts(caplog, "error")

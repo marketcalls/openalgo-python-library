@@ -239,8 +239,16 @@ def test_a_crash_inside_a_stop_gtt_place_then_units_sold_by_hand_is_unresolved_p
 
     assert [c for c in calls(world, *SENDS) if c.ts_ns >= DAY2_START] == []
     assert held(world) == 6
-    assert alerts(caplog, "error")
-    assert any(lock.reason for lock in outcome.locks)
+    mode = world.fake.mode.name
+    assert (
+        f"{mode} (CncKept): CncKept: stop GTT place: its place was unanswered and the position "
+        "went from 10 to 6 units since, not by its units alone: it may have landed and fired, "
+        "so it is not placed again. Its entries are locked and nothing is exited: check the "
+        "GTT and order books in OpenAlgo for SBIN NSE, settle it by hand, then start the "
+        "session again"
+    ) in alerts(caplog, "error")
+    held_locks = {lock.reason for lock in outcome.locks if lock.lifted_ns is None}
+    assert {"gtt_unresolved", "reconciliation"} <= held_locks
 
 
 # (g) ------------------------------------------------------------------------------------------

@@ -16,15 +16,28 @@ Then each GTT's later fate (`apply`), by the kernel's state at the save and the 
   trigger ID): nothing, it is carried on the terms asked and the next start settles the
   place by the book.
 - ModifyPending, modifying: nothing, carried on the terms asked. Resting on the
-  modification's terms: `apply_gtt_modified`, then its later fate.
+  modification's terms: `apply_gtt_modified`, then its later fate. Its replacement's
+  place under way (a modify that could not be told, cancelled and placed again: the
+  journal's requested, bound to no trigger ID): nothing, carried on the terms asked, and
+  the next start settles the place by the GTT book, as a same-day restart settles it
+  (`_session_restore_gtts`).
 - CancelPending, cancelling: nothing, it rests until the next start's read. Cancelled:
   `apply_gtt_cancelled`.
 - Resting or waiting, fired with its child bound: `apply_gtt_triggered`, then the child's
   fills from the journal; fired with no child found (the fall applied as its fill):
   `apply_gtt_triggered`, the child filled at the GTT's limit, flagged `price_unverified`.
-  Fired before the save with its child bound after it: the child's fills.
-- Triggered (gone, its child not resolved): nothing, the next start's follower judges it,
-  as a record's.
+  Fired before the save (Triggered) with its child bound after it: the child's fills.
+- Triggered, the journal's still triggered with no child bound (the session took the fire
+  and its child, and stopped before the order worker bound that child in the journal):
+  nothing, since the journal holds no word of the child. The kernel ends the child at the
+  stop as the close does, the position is carried as the save and the updates leave it,
+  without that GTT, and the journal's GTT is ended (FIRED, noted) once the record is
+  written (`GttsApplied.fired`). This start's read of the books judges what the child
+  filled: the units the books show held get a stop GTT from `protect`, and a leg the books
+  show other than the record holds it is a mismatch that locks entries.
+- Resting or waiting, gone from the GTT book after the save with its child not found (the
+  journal's triggered): nothing, carried resting, and this start's follower judges it, as a
+  record's.
 - Resting or waiting, ended outside the session: `apply_gtt_ended` (expired, rejected) or
   `apply_gtt_cancelled`.
 - Anything else is not accounted for: the start is refused.
@@ -45,14 +58,13 @@ from .._engine import call
 from ._fill_ledger import FillLedger
 from ._gtt_book import Seen
 from ._gtt_followed import ENDINGS
+from ._gtt_types import PRICE_UNVERIFIED
 from ._journal_gtt_rows import GttBinding, GttState
 from ._session_restore_gtts import same_terms
 from ._types import Purpose
 from ._venue_children import missed_child_id
 from .journal import Journal
 
-#: The flag of a fired GTT's child fill priced at the GTT's limit (20-positional-live 3.3).
-PRICE_UNVERIFIED = "price_unverified"
 #: The kernel's states of a GTT whose request waits for the broker's answer.
 _WAITING = frozenset({"Requested", "ModifyPending", "CancelPending"})
 #: The kernel's states of a GTT that rests or waits (not ended, not fired).
@@ -68,13 +80,16 @@ _ENDED_HOW = {ENDINGS[Seen.EXPIRED][1]: "expired", ENDINGS[Seen.REJECTED][1]: "r
 @dataclass
 class GttsApplied:
     """What `apply` did: the updates applied, the words of each one left to the next
-    start, the words of each one not accounted for, and the latest journal time read (UTC
-    nanoseconds)."""
+    start, the words of each one not accounted for, the latest journal time read (UTC
+    nanoseconds), and the journal's GTTs (their `seq`) that fired before the session
+    stopped with their child not recorded (module docstring), which the record leaves out
+    and its writing ends."""
 
     applied: int = 0
     left: list[str] = field(default_factory=list)
     unaccounted: list[str] = field(default_factory=list)
     latest_ns: int = 0
+    fired: list[int] = field(default_factory=list)
 
 
 class _Step(enum.Enum):
@@ -123,6 +138,9 @@ def apply(
         if row is not None:
             done.latest_ns = max(done.latest_ns, row.changed_ns)
         if view["state"] == "Triggered" and row is not None:
+            if row.state is GttState.TRIGGERED:
+                # It fired before the save: the record leaves it out, and its writing ends it.
+                done.fired.append(row.seq)
             _child_fills(engine, view, row, context, done)
             continue
         if view["state"] not in _AT_VENUE:
@@ -161,6 +179,9 @@ def _waiting(view: Mapping[str, Any], row: GttBinding | None) -> tuple[_Step, st
     journal_state, what = under_way[state]
     if row.state is journal_state:
         return _Step.UNDER_WAY, f"{what} was under way when the session stopped"
+    if state == "ModifyPending" and row.state is GttState.REQUESTED and row.trigger_id is None:
+        why = "the place that replaces it after its cancel was under way when the session stopped"
+        return _Step.UNDER_WAY, why
     if state == "ModifyPending" and row.state in _RESTING:
         modified = same_terms(view["pending"], row)
         return (_Step.ANSWERED, "") if modified else (_Step.NEVER_SENT, "")
@@ -218,8 +239,9 @@ def _child_fills(
     """The fills of the child of fired GTT `view` (its kernel order `child_order_id`): from
     the journal's updates of the child bound to its journal GTT `row`, or, for a child
     never found (none bound, or the session's own ID for one it could not find), its units
-    at the GTT's limit, flagged (module docstring). None for a child the order step gave
-    its fills already, or one the save holds filled."""
+    at the GTT's limit, flagged (module docstring); a child the journal never recorded is
+    named. None for a child the order step gave its fills already, or one the save holds
+    filled."""
     child = view.get("child_order_id")
     if child is None or int(child) in context.handled:
         return
@@ -228,12 +250,19 @@ def _child_fills(
         return
     bound = context.journal.gtt_child(row.seq)
     missed = row.trigger_id is not None and missed_child_id(row.trigger_id)
+    if bound is None and row.state is GttState.TRIGGERED:
+        done.left.append(
+            f"{_name(view, row)} fired before the session stopped, its child order not "
+            "recorded: the position is carried without that GTT, and this start's read of "
+            "the books judges what the child filled"
+        )
+        return
     if bound is None or bound.order_id == missed:
         if row.state is not GttState.FIRED:
             return
         fired_ns = _state_ns(context.journal, row, _FIRED)
         units, price = float(row.terms.quantity), row.terms.limit_price
-        call(engine.apply_fill, int(child), units, price, fired_ns, flags=[PRICE_UNVERIFIED])
+        call(engine.apply_fill, int(child), units, price, fired_ns, [PRICE_UNVERIFIED])
         done.applied += 1
         done.left.append(
             f"{_name(view, row)}: it fired after the save with its child order not found: "
@@ -292,4 +321,4 @@ def _name(view: Mapping[str, Any], row: GttBinding | None) -> str:
     return f"its {kind} {trigger or 'g' + str(view['gtt_id'])}"
 
 
-__all__ = ["PRICE_UNVERIFIED", "GttContext", "GttsApplied", "NamedWords", "apply", "unsent"]
+__all__ = ["GttContext", "GttsApplied", "NamedWords", "apply", "unsent"]

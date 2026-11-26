@@ -11,16 +11,22 @@ test.
 
 from __future__ import annotations
 
+import datetime as dt
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from carry_samples import CncKept
+from fake_openalgo.fixtures import *  # noqa: F403
 from plan_samples import specify
+from positional_samples import STOP_AT, gtt_world
 from preflight_fakes import ist_ns
 
 import openalgo.backtest as bt
 from openalgo.backtest._live._exit_reasons import alert_label
+from openalgo.backtest._live._plan_stock import stock_derivative
 from openalgo.backtest._live._preflight_local import trading_day_checks
+from openalgo.backtest._live._result_build import session_result
 from openalgo.backtest._live._stops_cover import (
     STOP_ENDED,
     STOP_GTT_UNCONFIRMED,
@@ -61,6 +67,25 @@ def test_a_gtt_legs_window_before_its_stop_gtt_is_confirmed_is_named_for_that():
 
     assert reason_of(leg, held_cancel=False, retries=False, gtt_asked=True) == STOP_GTT_UNCONFIRMED
     assert STOP_GTT_UNCONFIRMED == "stop GTT not confirmed yet"
+
+
+@pytest.mark.parametrize("analyzer", [False, True], ids=["broker", "sandbox"])
+def test_a_cnc_entrys_window_before_its_stop_gtt_is_confirmed_is_named_so_on_the_fake(
+    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+):
+    # CncKept buys 10 SBIN CNC at 14:42:01 IST, filled at 14:42:02; the order worker places
+    # its stop GTT and the next read of the GTT book, at 14:42:04, shows it resting.
+    world = gtt_world(
+        make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 32), analyzer=analyzer
+    )
+    world.stop_at(STOP_AT)
+
+    outcome = world.run(CncKept)
+
+    windows = session_result(outcome).unprotected
+    assert windows[["units", "reason", "seconds"]].to_dict("records") == [
+        {"units": 10, "reason": "stop GTT not confirmed yet", "seconds": 2.0}
+    ]
 
 
 def test_a_leg_with_no_stop_order_and_no_stop_gtt_asked_keeps_its_stop_ended():
@@ -186,3 +211,24 @@ def test_a_stock_derivative_in_bt_live_is_refused_with_advice_a_run_can_follow()
     assert 'settlement="physical"' in words
     assert "load_tables" not in words
     assert "write_symbol_master_snapshot" not in words
+
+
+@pytest.mark.parametrize(
+    ("symbol", "exchange", "stock"),
+    [
+        ("SBIN24NOV26600CE", "NFO", True),
+        ("SBIN24NOV26FUT", "NFO", True),
+        ("NIFTY29DEC26FUT", "NFO", False),
+        ("GOLDM05DEC26FUT", "MCX", False),
+        ("CRUDEOIL18DEC26FUT", "MCX", False),
+        ("USDINR29DEC26FUT", "CDS", False),
+    ],
+)
+def test_only_a_stock_future_or_option_on_nfo_or_bfo_is_named_a_stock_derivative(
+    symbol, exchange, stock
+):
+    # A commodity or currency contract is never a stock derivative, so a reference error
+    # of one keeps its own words (review round 1 of unit N5c, finding 5).
+    plan = SimpleNamespace(symbols=[symbol], exchange=exchange, start=dt.date(2026, 11, 27))
+
+    assert (stock_derivative(plan) == symbol) is stock

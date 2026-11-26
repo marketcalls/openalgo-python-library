@@ -39,7 +39,8 @@ order and trade books, and the GTT book of every status).
 - **Refused** (PreflightError) where nothing safe can be continued, each naming what may
   still be held and what to do (`CHECK_BY_HAND`): a save the rebuild refuses (a save the
   kernel refuses, one an earlier version wrote, an update that cannot be accounted for), a
-  loose GTT (with no save, or one the rebuilt record binds none of), and an order that
+  loose GTT (with no save, or one the rebuilt record neither binds nor found fired before
+  the session stopped), and an order that
   opens or adds still working when the session stopped while the books show the leg other
   than the record holds it. A CNC leg the books show held may hold units of the user's own,
   which the books cannot tell from the strategy's (7.2): the refusal names them and the way
@@ -203,8 +204,9 @@ def _not_continued(held: Unrecorded, done: Rebuilt, books: BookReads) -> str:
     """Why the record `done` rebuilt for `held` is not continued, "" when it is (module
     docstring): an order that opens or adds still worked when the session stopped while
     the books show the leg other than the record holds it (its fills after the stop cannot
-    be told from units of the user's own), or loose GTTs."""
-    loose = [gtt for gtt in held.gtts if gtt.seq not in done.bound]
+    be told from units of the user's own), or loose GTTs (neither bound by the record nor
+    fired before the session stopped, `Rebuilt.fired`)."""
+    loose = [gtt for gtt in held.gtts if gtt.seq not in done.bound and gtt.seq not in done.fired]
     if loose:
         return _loose_words(loose)
     if not done.opening:
