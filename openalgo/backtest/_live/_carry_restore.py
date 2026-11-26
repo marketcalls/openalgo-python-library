@@ -7,10 +7,9 @@ step 11 once the plan's catch-up is done, for a strategy with nothing saved toda
   with them (new parameters apply to new entries), the GTTs and GTT orders under new ids,
   the daily loss measure starting the day as a backtest's does. A state the kernel
   refuses (another capital, other instruments) stops the start with its words.
-- **Expired contracts**: a position on a contract whose last trading day has passed is
-  recorded exited at its carried last close (reason expiry, flagged
-  `filled_at_last_close`) and its instrument is never traded; a SESSION alert and a
-  warning of the result name it (`expired_words`).
+- **Expired contracts**: a carried contract the exchange settled never reaches the
+  kernel (`_carry_contracts` dropped it from the carry); the strategy starts flat and a
+  SESSION alert and a warning of the result name the settlement (`report_settled`).
 - **The GTTs** are taken back into the strategy's GTT map by the journal's GTT the record
   binds each to (`_carry_start.BINDINGS_KEY`): one still bound at the broker is followed
   as before; one whose place was under way at the close is settled by the order worker as
@@ -33,7 +32,6 @@ from dataclasses import replace
 from typing import Any
 
 from .._engine import call
-from .._futures_contracts import last_day
 from .._series import ist_time
 from ..errors import LiveError
 from ._carry_start import Carried, gtt_seqs
@@ -65,11 +63,6 @@ def restore_carried(session: Any, trader: Trader, carried: Carried) -> None:
             "the session cannot continue it. Check its position in OpenAlgo"
         ) from error
     session.event("carried", strategy=trader.name, day=str(record.day), gtts=len(ids["gtts"]))
-    for index in ids["expired"]:
-        words = expired_words(trader, carried, int(index))
-        trader.settled = True
-        session.warn(words)
-        session.alert(AlertKind.SESSION, words)
     seqs = gtt_seqs(record)
     requests = []
     for old, new in sorted(ids["gtts"].items(), key=lambda pair: int(pair[1])):
@@ -124,22 +117,11 @@ def settle_place(gtts: GttMap, view: Mapping[str, Any], row: GttBinding) -> list
     return [replace(request, seq=row.seq)]
 
 
-def expired_words(trader: Trader, carried: Carried, index: int) -> str:
-    """The words of a carried position on a contract that expired before today (module
-    docstring): its units, the day it was carried from, the contract's last trading day and
-    its last close."""
-    state = carried.record.carried
-    instrument = state["instruments"][index]
-    symbol, exchange = instrument["symbol"], instrument["exchange"]
-    units = sum(p.units for p in carried.positions if (p.symbol, p.exchange) == (symbol, exchange))
-    closes = {int(row["instrument"]): float(row["close_rupees"]) for row in state["last_closes"]}
-    ended = [last_day(i) for i in trader.part.spec.instruments if i.symbol == symbol]
-    when = f" on {ended[0]}" if ended else ""
-    return (
-        f"{trader.name}: {units:g} {symbol} {exchange} carried from {carried.record.day} "
-        f"expired{when}: the exchange settled it, and the engine records it exited at its "
-        f"last close, {closes.get(index, 0.0):.2f}; the session does not trade it"
-    )
+def report_settled(session: Any, words: str) -> None:
+    """Name a carried contract the exchange settled (module docstring): a warning of the
+    result and a SESSION alert, in `words` (`CarryAtStart.expired`)."""
+    session.warn(words)
+    session.alert(AlertKind.SESSION, words)
 
 
 def gtt_bindings(trader: Trader) -> list[dict[str, int]]:
@@ -155,4 +137,4 @@ def gtt_bindings(trader: Trader) -> list[dict[str, int]]:
     return bindings
 
 
-__all__ = ["expired_words", "gtt_bindings", "restore_carried", "settle_place"]
+__all__ = ["gtt_bindings", "report_settled", "restore_carried", "settle_place"]

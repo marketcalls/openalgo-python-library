@@ -62,6 +62,7 @@ from ._stops_gtt import (
     gtt_cancelling,
     gtt_trigger_id,
     gtt_unconfirmed,
+    gtt_unsettled,
     gtt_words,
     overnight,
 )
@@ -359,9 +360,11 @@ def _being_cancelled(stops: Any, trader: Trader, watched: Watched) -> bool:
 
 def _covering(stops: Any, trader: Trader) -> int:
     """The units the leg's confirmed stop covers at the broker for a note: none while it
-    is being cancelled (`_being_cancelled`); a CNC or NRML leg's, its stop GTTs'."""
+    is being cancelled (`_being_cancelled`); a CNC or NRML leg's, its stop GTTs', none
+    while one is a GTT a restart could not tell where it stands (`_stops_gtt`)."""
     if overnight(trader):
-        return 0 if gtt_cancelling(trader) else int(stops.covered(trader))
+        unsure = gtt_cancelling(trader) or gtt_unsettled(trader)
+        return 0 if unsure else int(stops.covered(trader))
     watched = _stop(stops, trader)
     if watched is None or _being_cancelled(stops, trader, watched):
         return 0

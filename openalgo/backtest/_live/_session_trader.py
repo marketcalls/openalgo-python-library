@@ -143,9 +143,6 @@ class Trader(Bookkeeping, TraderOrders):
         self.failed = False
         #: True once the kernel session has finished: it takes no call that changes it.
         self.finished = False
-        #: True when its carried contract had expired by today: the exchange settled it
-        #: and the broker ended its GTTs (`_carry_restore`).
-        self.settled = False
         #: Its entry locks and the round trips it closed, for the result.
         self.records = StrategyRecords(self.name)
         self._slow_warned = self._state_warned = False

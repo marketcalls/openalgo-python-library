@@ -22,7 +22,7 @@ from carry_samples import DAY1, DAY2, DAY3, CncKept, held, journal_of, on, to_da
 from fake_openalgo import BROKER
 from fake_openalgo.fixtures import *  # noqa: F403
 from positional_samples import BOOKS, MODES, STOP_AT, MisHold, calls, gtt_world, gtts
-from restart_samples import crash_at, crashing, run_to_crash
+from restart_samples import crash_at, crashing, restart, run_to_crash
 from session_samples import StopFlag, alerts
 
 from openalgo.backtest._live._carry_unrecorded import CHECK_BY_HAND
@@ -241,3 +241,33 @@ def test_a_gtt_of_an_earlier_day_gone_from_the_broker_is_ended_and_the_start_goe
 
     with journal_of(world) as journal:
         assert journal.gtt(seq).state is GttState.ENDED
+
+
+def test_a_restart_the_day_a_crash_was_settled_is_not_judged_by_the_earlier_save_again(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # Tuesday's first start found Monday's leg closed and began flat; later that day the
+    # account holds 10 SBIN of the user's own (bought by hand), and the session restarts:
+    # it resumes Tuesday's save, and Monday's save is not set against the books again.
+    world = crashed_monday(make_fake_openalgo, monkeypatch, tmp_path)
+    world.trace.waive("books agree", "Monday's leg was closed by hand; the user's own units")
+    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
+    world.fake.client().cancelgttorder(trigger_id=trigger_id)
+    sell_by_hand(world)
+    world.stop_at(on(DAY2, 14, 46))
+    world.run(CncKept)
+    world.fake.client().placeorder(
+        strategy="manual",
+        symbol="SBIN",
+        action="BUY",
+        exchange="NSE",
+        price_type="MARKET",
+        product="CNC",
+        quantity=10,
+    )
+    by_hand = len(calls(world, *SENDS))
+
+    outcome = restart(world, CncKept, stop_ns=on(DAY2, 14, 55))
+
+    assert outcome.stopped_by == "ctrl_c"
+    assert calls(world, *SENDS)[by_hand:] == []

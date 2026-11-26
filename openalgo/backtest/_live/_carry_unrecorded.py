@@ -2,12 +2,13 @@
 start before the preflight (20-positional-live 4.2 step 2; the lead's ruling N5a-1 and
 review round 1 of unit N5a). Split from `_carry_open` so each module keeps one job.
 
-- **An unrecorded save** (`_save_day`): the strategy's latest session, of an earlier day,
+- **An unrecorded save** (`_save`): the strategy's latest session, of an earlier day,
   ended without writing its day-close record (the process ended before the close: a crash,
   a power cut) while its last save of that day holds a CNC or NRML position, or a GTT that
   has not ended. An MIS position never counts: the broker squares MIS off at its close and
   nothing of it is carried, so an MIS strategy starts as in 2.4.1 whatever its last save
-  holds (20-positional-live 1).
+  holds (20-positional-live 1). Nor does it once the strategy has a save of today: an
+  earlier start today passed this judgement, and a restart today resumes today's save.
 - **A loose GTT**: a GTT of the journal from an earlier day that has not ended and that no
   carried record binds (one a session placed and never recorded at a close). Started
   afresh beside it, the strategy would trade beside a GTT no engine follows.
@@ -70,9 +71,9 @@ Leg = tuple[str, str, str]
 class Unrecorded:
     """What strategy `name` holds from an earlier day that no day-close record carries
     (module docstring): `save_day`, the day of its unrecorded save (None for none),
-    `legs`, the legs its save and its GTTs are on, and `gtts`, the journal's GTTs of
-    earlier days of it that have not ended: every one with an unrecorded save, else the
-    loose ones."""
+    `legs`, the legs its save and its GTTs are on, `gtts`, the journal's GTTs of earlier
+    days of it that have not ended (every one with an unrecorded save, else the loose
+    ones), and `loose`, those of them no carried record binds."""
 
     name: str
     save_day: dt.date | None
@@ -178,6 +179,8 @@ def _save(
     last = journal.last_ran(name, day)
     carried = carry.of(name)
     if last is None or (carried is not None and carried.record.day >= last):
+        return None, set()
+    if journal.rms_state(name, day=day) is not None:
         return None, set()
     record = journal.day_close(name)
     if record is not None and record.day >= last:

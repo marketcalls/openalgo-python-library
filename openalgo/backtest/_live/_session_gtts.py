@@ -84,8 +84,7 @@ class GttNewsHandler:
             return
         if trader.gtts is not None and isinstance(news, GttOutcome):
             news = trader.gtts.local(news)
-            # The GTTs of a settled contract end with it, as its SESSION alert said.
-            known = trader.gtts.gtt_found(news) is not None or trader.settled
+            known = trader.gtts.gtt_found(news) is not None
             if not trader.finished and not known:
                 self._stranger(news, "and the session neither placed it nor continued it")
         if trader.gtts is None or trader.finished:

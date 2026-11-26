@@ -339,3 +339,29 @@ def day_closes(world):
         path, account=BROKER, broker=BROKER, mode=world.fake.mode, now=world.fake.clock.now
     ) as journal:
         return journal.day_closes()
+
+
+def test_a_stop_gtt_a_restart_could_not_take_back_is_never_reported_confirmed(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog
+):
+    # The journal says the stop GTT's cancel was sent, the saved state that it rests: the
+    # restart cannot tell which holds, so neither the lines nor the result call it
+    # confirmed, and the operator is sent to the books first.
+    world = world_to_the_close(make_fake_openalgo, monkeypatch, tmp_path, False)
+    world.stop_at(ist(14, 46))
+    world.run(FlatTarget)
+    path = world.folder / "live" / BROKER / JOURNAL_FILE_NAME
+    with Journal.open(
+        path, account=BROKER, broker=BROKER, mode=world.fake.mode, now=world.fake.clock.now
+    ) as journal:
+        (gtt,) = journal.open_gtts()
+        journal.set_gtt_state(gtt.seq, GttState.CANCELLING, note="a test's cancel under way")
+
+    outcome = restart(world, FlatTarget, stop_ns=ist(14, 55))
+
+    (position,) = outcome.open_positions
+    assert position.stop_confirmed is False
+    assert position.note.startswith(
+        f"stop GTT {gtt.trigger_id} not confirmed at the broker: the restart could not tell "
+        "whether it still rests; check the order book and the position"
+    )

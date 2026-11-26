@@ -4,8 +4,7 @@ N5a-2), split from `_restart_books` so each module keeps one job.
 
 - **Its journal position** (`carried_units`) is what its day-close record carries
   (`_carry_start`), when nothing was saved of it today: its units of its instrument and
-  product, or none for a contract whose last trading day has passed (the exchange settled
-  it; the restore records its exit at its last close).
+  product (a contract the exchange settled is no longer carried: `_carry_contracts`).
 - **Its judgement** (`carried_verdict`). The broker holding its units resumes it. A
   broker position below it by the units of a carried GTT that the start's read of the GTT
   book found fired or gone (its `IN_FLIGHT` finding among what the order worker posted
@@ -24,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ._carry_start import CarryAtStart, expired_instruments, gtt_seqs
+from ._carry_start import CarryAtStart, gtt_seqs
 from ._gtt_types import GttEvent, GttNews, GttOutcome
 from ._plan_strategies import StrategySpec
 from ._reconcile_rules import Kind, RestartKind
@@ -37,8 +36,6 @@ def carried_units(carry: CarryAtStart | None, spec: StrategySpec) -> int | None:
     carried = None if carry is None else carry.of(spec.name)
     if carry is None or carried is None:
         return None
-    if spec.name in expired_instruments(carry, {spec.name: spec.instruments}):
-        return 0
     leg = (spec.symbol, spec.exchange, spec.product)
     held = [p.units for p in carried.positions if (p.symbol, p.exchange, p.product) == leg]
     return round(sum(held))

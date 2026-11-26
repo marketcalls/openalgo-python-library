@@ -203,6 +203,42 @@ def test_the_trades_are_each_strategys_closed_trades_with_its_name_and_entry_day
     assert list(day.trades["entry_day"]) == [DAY]
 
 
+#: SessionResult's fields as 2.4.1 published them, in their order: code that builds or
+#: unpacks one by position keeps working, and a field added later comes after them.
+PUBLISHED_FIELDS = [
+    "mode",
+    "broker",
+    "account",
+    "day",
+    "started",
+    "ended",
+    "stopped_by",
+    "restarts",
+    "strategies",
+    "results",
+    "portfolio",
+    "versions",
+    "summary",
+    "orders",
+    "fills",
+    "fill_comparison",
+    "drift",
+    "unprotected",
+    "locks",
+    "reconciliations",
+    "skipped_decisions",
+    "open_positions",
+    "mode_breach",
+    "warnings",
+    "paths",
+]
+
+
+def test_the_published_fields_keep_their_order_and_trades_comes_after_them():
+    names = [field.name for field in dataclasses.fields(bt.SessionResult)]
+    assert names == [*PUBLISHED_FIELDS, "trades"]
+
+
 def test_the_result_is_frozen(day):
     with pytest.raises(AttributeError):
         day.mode = "sandbox"

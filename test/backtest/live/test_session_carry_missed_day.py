@@ -30,13 +30,14 @@ from carry_samples import (
     to_day,
 )
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import BOOKS, GTT_LIMIT, STOP_AT, calls, gtt_world
+from positional_samples import BOOKS, GTT_LIMIT, MODES, STOP_AT, calls, gtt_world
 from session_samples import alerts
 from stops_samples import at_price
 
 from openalgo.backtest._live._carry_start import REFERENCES_KEY
 from openalgo.backtest._live._result_build import session_result
 from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest._live._venue_children import missed_child_id
 
 #: The calls that send anything to the broker.
 SENDS = ("placeorder", "modifyorder", "cancelorder", "placegttorder", "modifygttorder")
@@ -62,11 +63,14 @@ def sent_on_wednesday(world):
     return [c.what for c in calls(world, *SENDS, "cancelgttorder") if c.ts_ns >= DAY3_START]
 
 
+@MODES
 @BOOKS
 def test_a_stop_gtt_fired_on_a_missed_day_is_recorded_at_its_limit_with_both_flags(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog, history
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, history=history)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     missed_day(world, DAY2, THROUGH_THE_STOP)
     assert held(world) == 0
@@ -76,10 +80,15 @@ def test_a_stop_gtt_fired_on_a_missed_day_is_recorded_at_its_limit_with_both_fla
     assert sent_on_wednesday(world) == []
     (fill,) = outcome.fills
     assert (fill.action, fill.units, fill.price, fill.flags) == ("SELL", 10, GTT_LIMIT, BOTH_FLAGS)
+    mode = world.fake.mode.name
     assert alerts(caplog, "warn") == [
-        f"LIVE (CncKept): CncKept: stop GTT {trigger_id} of SBIN NSE fired on a trading day "
+        f"{mode} (CncKept): CncKept: stop GTT {trigger_id} of SBIN NSE fired on a trading day "
         f"no session ran: its 10 units are recorded sold at the child's limit, {GTT_LIMIT:.2f}, "
         "flagged price_unverified, missed_day; the contract note holds the true price"
+    ]
+    assert alerts(caplog, "exit") == [
+        f"{mode} (CncKept): SELL 10 SBIN NSE at {GTT_LIMIT:.2f} (exit: stop level; flagged "
+        f"price_unverified, missed_day, order {missed_child_id(trigger_id)})"
     ]
     # Counted in today's figures: the trade closes on Wednesday.
     assert outcome.summary.closed_trades == 1

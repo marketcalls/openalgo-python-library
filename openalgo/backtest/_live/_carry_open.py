@@ -2,8 +2,10 @@
 journal handle opened for it before the preflight; `_carry_start`), and what it cannot
 continue, refused before anything is sent (20-positional-live 4.2 step 2; the lead's
 ruling N5a-1): a capital other than a carried strategy's (`_carry_start.capital_refusals`),
-and what a strategy holds from an earlier day that no day-close record carries, unless the
-broker's books show it closed by hand (`_carry_unrecorded`).
+what a strategy holds from an earlier day that no day-close record carries, unless the
+broker's books show it closed by hand (`_carry_unrecorded`), and a carried contract the
+strategy no longer trades that has not expired (`_carry_contracts`: one that expired was
+settled by the exchange, and the strategy starts flat).
 
 Each refusal names what is held and what to do. Days are IST trading days. Run by the
 main thread at the start, before the preflight.
@@ -14,6 +16,7 @@ from __future__ import annotations
 import pathlib
 from typing import Any
 
+from ._carry_contracts import settle_expired
 from ._carry_start import CarryAtStart, capital_refusals, read_carry
 from ._carry_unrecorded import judge, read_books, unrecorded
 from ._preflight_plan import refused
@@ -45,6 +48,8 @@ def open_carry(
         held = unrecorded(journal, names, spec.day, carry)
         if held:
             carry, refusals = judge(held, read_books(client, held), journal, carry)
+        carry, moved = settle_expired(journal, carry, spec.strategies)
+    refusals += moved
     capitals = {each.name: each.capital for each in spec.strategies}
     refusals = capital_refusals(carry, capitals) + refusals
     if refusals:

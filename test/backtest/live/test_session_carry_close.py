@@ -19,7 +19,7 @@ import logging
 import pytest
 from carry_samples import DAY1, DAY2, CncKept, carried_world, on, to_day
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import STOP_AT, gtt_world
+from positional_samples import BOOKS, MODES, STOP_AT, gtt_world
 from session_samples import alerts
 
 import openalgo.backtest as bt
@@ -51,10 +51,7 @@ def test_the_close_alerts_each_carried_leg_and_the_daily_summary_names_it(
 
     assert world.first.stopped_by == "session_end"
     carried = [a for a in alerts(caplog, "session") if "Carried overnight" in a]
-    assert carried == [
-        "LIVE (CncKept): Carried overnight, each with its stop at the broker:\n"
-        + carried_line(trigger_id)
-    ]
+    assert carried == ["LIVE (CncKept): Carried overnight:\n" + carried_line(trigger_id)]
     assert world.first.summary.carried == (carried_line(trigger_id),)
     (summary,) = alerts(caplog, "daily_summary")
     assert f"Carried     : {carried_line(trigger_id)}" in summary.splitlines()
@@ -71,10 +68,7 @@ def test_a_ctrl_c_that_keeps_the_leg_alerts_it_as_carried(
     assert outcome.stopped_by == "ctrl_c"
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     carried = [a for a in alerts(caplog, "session") if "Carried overnight" in a]
-    assert carried == [
-        "LIVE (CncKept): Carried overnight, each with its stop at the broker:\n"
-        + carried_line(trigger_id)
-    ]
+    assert carried == ["LIVE (CncKept): Carried overnight:\n" + carried_line(trigger_id)]
 
 
 def test_a_stop_gtt_the_close_did_not_confirm_is_named_once_with_the_books_checked_first(
@@ -124,10 +118,14 @@ class Idle(bt.Strategy):
         return None
 
 
+@MODES
+@BOOKS
 def test_a_finding_about_a_carried_gtt_of_a_strategy_not_in_the_session_is_an_error_alert(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, history=True)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
     world.trace.waive("books agree", "CncKept's CNC units: no strategy of Tuesday holds them")
     (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
     to_day(world, DAY2)
@@ -137,7 +135,8 @@ def test_a_finding_about_a_carried_gtt_of_a_strategy_not_in_the_session_is_an_er
     world.run(Idle)
 
     assert (
-        f"LIVE (Idle): CncKept: GTT {trigger_id} of SBIN NSE ended at the broker, and "
+        f"{world.fake.mode.name} (Idle): CncKept: GTT {trigger_id} of SBIN NSE ended at the "
+        "broker, and "
         "CncKept does not run in this session: no engine follows it, so check the GTT and "
         "order books in OpenAlgo"
     ) in alerts(caplog, "error")

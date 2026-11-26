@@ -35,6 +35,11 @@ from openalgo.backtest.calendar import default_calendar
 
 #: The trading days of the scenarios: Monday, Tuesday, Wednesday and Thursday.
 DAY1, DAY2, DAY3, DAY4 = (dt.date(2026, 11, d) for d in (16, 17, 18, 19))
+#: The trading days after them to November's last NIFTY future's last trading day
+#: (Monday 2026-11-23), and the next trading day (Wednesday 2026-11-25: Tuesday 2026-11-24
+#: is a holiday).
+TO_NOVEMBERS_LAST = tuple(dt.date(2026, 11, d) for d in (20, 23))
+AFTER_NOVEMBERS_LAST = dt.date(2026, 11, 25)
 #: Where a later day's session starts, and until when SBIN trades then (IST).
 START, TRADES_UNTIL = (14, 40, 5), (15, 32)
 MINUTE_NS = 60 * NS
@@ -116,10 +121,17 @@ def carried_world(
 
 
 def _add_future(world: Any, symbol: str) -> None:
-    """The fake's future `symbol`: its candles of the history days and of today to the
-    start, at a quarter of SBIN's, and its trades every 10 s from the start to 15:32."""
-    fake = world.fake
-    fake.add_instrument(
+    """The fake's future `symbol` (`list_future`) and its trades every 10 s from Monday's
+    start to 15:32."""
+    list_future(world, symbol)
+    _future_trades(world, on(DAY1, *START), on(DAY1, *TRADES_UNTIL))
+
+
+def list_future(world: Any, symbol: str) -> None:
+    """The fake lists the future `symbol` with its candles of the history days and of
+    Monday to the start, at a quarter of SBIN's; from now on the days `to_day` and
+    `missed_day` move to seed and trade it as the world's future."""
+    world.fake.add_instrument(
         symbol,
         "NFO",
         lot_size=FUTURE_LOT,
@@ -129,8 +141,8 @@ def _add_future(world: Any, symbol: str) -> None:
     )
     seeded = candles(today_until=(14, 40))
     rows = [(t, o / 4, h / 4, low / 4, c / 4, v) for t, o, h, low, c, v in seeded]
-    fake.seed_candles(symbol, "NFO", rows)
-    _future_trades(world, on(DAY1, *START), on(DAY1, *TRADES_UNTIL))
+    world.fake.seed_candles(symbol, "NFO", rows)
+    world.future = symbol
 
 
 def _future_trades(world: Any, start_ns: int, end_ns: int) -> None:
@@ -205,6 +217,7 @@ def journal_of(world: Any, mode: Mode | None = None) -> Journal:
 
 
 __all__ = [
+    "AFTER_NOVEMBERS_LAST",
     "DAY1",
     "DAY2",
     "DAY3",
@@ -213,6 +226,7 @@ __all__ = [
     "FUTURE_LOT",
     "FUTURE_PRICE",
     "NOVEMBER_FUTURE",
+    "TO_NOVEMBERS_LAST",
     "CncKept",
     "CncKeptTrail",
     "FutKept",
@@ -221,6 +235,7 @@ __all__ = [
     "flat_minutes",
     "held",
     "journal_of",
+    "list_future",
     "missed_day",
     "on",
     "to_day",

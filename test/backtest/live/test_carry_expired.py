@@ -1,93 +1,164 @@
-"""A carried position on a contract whose last trading day has passed (20-positional-live 9
-and 4.2 step 4; the lead's rulings N5a-1 and N5a-3): its expiry is resolved before any lookup
-in today's master contract, which no longer lists it, so the preflight never refuses the
-start for it; the restart rules take its journal position as none (the exchange settled
-it); and the restore's words name it.
+"""A position carried on a contract whose last trading day has passed, at the start of a later
+day, on the fake OpenAlgo (20-positional-live 9 and 4.2 step 4; the lead's rulings N5a-1 and
+N5a-3, review round 1 of unit N5a): an index future is settled by the exchange, so the
+start ends its stop GTT in the journal, names the settlement (a SESSION alert and a warning
+of the result) and starts the strategy flat on the contract it trades now, never looking
+the expired one up; the close writes its flat day-close record, so the settlement is named
+once. A strategy moved to another contract while its carried one still trades is refused
+before anything is sent, saying what to do.
 
-The contract is November's NIFTY future, `NIFTY23NOV26FUT` (65 units a lot, its last trading
-day Monday 2026-11-23: the month's last Tuesday, 2026-11-24, is a holiday), carried by
-`IdxKept` from Monday 2026-11-16 with 65 units, its last close of the day 120.00; today is
-Wednesday 2026-11-25. Expected values are worked by hand from these figures.
+On Monday 2026-11-16 `NovemberKept` buys one lot of 65 units of November's NIFTY future
+(`NIFTY23NOV26FUT`, its last trading day Monday 2026-11-23) at 120.00 in NRML with a stop
+GTT 10 points below, carried at NSE's close. No session runs until Wednesday 2026-11-25
+(Tuesday 2026-11-24 is a holiday); the exchange settles the contract after its last day,
+which ends its GTT at the broker. On Wednesday the same strategy trades December's future
+(`NIFTY29DEC26FUT`); its `self.state` keeps its entry, so it buys nothing more. The
+session starts at 14:40:05 IST and is stopped at 14:46.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-from types import SimpleNamespace
+import logging
 
-from preflight_fakes import NOW_NS, FakeOpenAlgo, make_plan
-
-from openalgo.backtest._live._carry_restore import expired_words
-from openalgo.backtest._live._carry_start import Carried, CarryAtStart, preflight_terms
-from openalgo.backtest._live._journal_carry import DayClose
-from openalgo.backtest._live._preflight_plan import InstrumentFacts
-from openalgo.backtest._live._restart_carried import carried_units
-from openalgo.backtest._live._types import Mode
-from openalgo.backtest._live.preflight import check_preflight
-from openalgo.backtest.reference import Instrument
-
-CONTRACT = "NIFTY23NOV26FUT"
-MONDAY, LAST_DAY, TODAY = dt.date(2026, 11, 16), dt.date(2026, 11, 23), dt.date(2026, 11, 25)
-NOVEMBER = Instrument(
-    symbol=CONTRACT,
-    exchange="NFO",
-    kind="future",
-    lot_size=65,
-    tick_size=0.05,
-    freeze_qty=1800,
-    expiry=LAST_DAY,
-    underlying="NIFTY",
-    settlement="cash",
-    last_trading_day=LAST_DAY,
+import pytest
+from carry_samples import (
+    AFTER_NOVEMBERS_LAST,
+    DAY1,
+    DAY2,
+    DAY3,
+    DAY4,
+    FUTURE,
+    NOVEMBER_FUTURE,
+    TO_NOVEMBERS_LAST,
+    FutKept,
+    NovemberKept,
+    carried_world,
+    journal_of,
+    list_future,
+    missed_day,
+    on,
+    to_day,
 )
-#: IdxKept's day-close record of Monday: 65 units, the contract's last close 120.00.
-CARRIED = {
-    "instruments": [{"symbol": CONTRACT, "exchange": "NFO"}],
-    "positions": [
-        {"instrument": 0, "product": "NRML", "quantity_units": 65.0, "margin_rupees": 1560.0}
-    ],
-    "orders": [],
-    "gtts": [],
-    "last_closes": [{"instrument": 0, "close_rupees": 120.0}],
-    "account": {"capital_rupees": 100000.0},
-}
-RECORD = DayClose("IdxKept", MONDAY, Mode.LIVE, CARRIED, {}, "v1", 0)
-CARRY = CarryAtStart(TODAY, Mode.LIVE, {"IdxKept": Carried(RECORD, MONDAY)}, {})
-SPEC = SimpleNamespace(
-    name="IdxKept",
-    symbol=CONTRACT,
-    exchange="NFO",
-    product="NRML",
-    instruments=(NOVEMBER,),
-    capital=100000.0,
+from fake_openalgo.fixtures import *  # noqa: F403
+from positional_samples import BOOKS, MODES, calls
+from session_samples import alerts
+
+from openalgo.backtest._live._types import LOGGER_NAME
+from openalgo.backtest.errors import PreflightError
+
+#: November's contract's last trading day.
+LAST_DAY = TO_NOVEMBERS_LAST[-1]
+#: The calls that send anything to the broker.
+SENDS = (
+    "placeorder",
+    "modifyorder",
+    "cancelorder",
+    "placegttorder",
+    "modifygttorder",
+    "cancelgttorder",
 )
 
 
-def test_an_expired_carried_contract_is_not_looked_up_in_todays_master_contract():
-    terms = preflight_terms(CARRY, SimpleNamespace(strategies=(SPEC,)))
-    # Settled by the exchange: it holds none of the account's cash any more.
-    assert terms["carried"] == ()
-    assert terms["expired"] == (InstrumentFacts(CONTRACT, "NFO", 65, 0.05, 1800),)
-    client = FakeOpenAlgo(symbols={})
-    plan = make_plan(instruments=[("SBIN", "NSE"), (CONTRACT, "NFO")], **terms)
-
-    outcome = check_preflight(client, plan, now=lambda: NOW_NS)
-
-    assert ("symbol", CONTRACT, "NFO") not in client.calls
-    assert outcome.check(f"symbol:NFO:{CONTRACT}").ok
+@pytest.fixture(autouse=True)
+def _logs(caplog):
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
 
-def test_the_restart_rules_take_an_expired_carried_position_as_none():
-    assert carried_units(CARRY, SPEC) == 0
+class OnDecember(FutKept):
+    """The strategy `NovemberKept` moved to December's future (its class name is the
+    strategy's name)."""
 
 
-def test_the_restores_words_name_the_contract_its_last_close_and_the_settlement():
-    trader = SimpleNamespace(name="IdxKept", part=SimpleNamespace(spec=SPEC))
+OnDecember.__name__ = OnDecember.__qualname__ = "NovemberKept"
 
-    words = expired_words(trader, CARRY.carried["IdxKept"], 0)
 
-    assert words == (
-        f"IdxKept: 65 {CONTRACT} NFO carried from {MONDAY} expired on {LAST_DAY}: the exchange "
-        "settled it, and the engine records it exited at its last close, 120.00; the session "
-        "does not trade it"
+def wednesday(world, strategy=OnDecember, *, settled=True):
+    """No session from Tuesday to November's last trading day, the contract settled by the
+    exchange after it when `settled`, then Wednesday's session of `strategy`, stopped at
+    14:46."""
+    for day in (DAY2, DAY3, DAY4, *TO_NOVEMBERS_LAST):
+        missed_day(world, day, ())
+    if settled:
+        world.fake.settle_contract(NOVEMBER_FUTURE, "NFO")
+    to_day(world, AFTER_NOVEMBERS_LAST)
+    world.stop_at(on(AFTER_NOVEMBERS_LAST, 14, 46))
+    return world.run(strategy)
+
+
+def november_carried(make_fake_openalgo, monkeypatch, tmp_path, **options):
+    """Monday's session of `NovemberKept` carried at the close; from then on the fake also
+    lists and trades December's future."""
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, NovemberKept, future=NOVEMBER_FUTURE, **options
     )
+    world.trace.waive("protected", "the exchange settles the contract and ends its stop GTT")
+    list_future(world, FUTURE)
+    return world
+
+
+#: The words of the settlement, worked by hand from the scenario.
+SETTLED = (
+    f"NovemberKept: 65 {NOVEMBER_FUTURE} NFO (NRML) carried from {DAY1} expired on "
+    f"{LAST_DAY}: the exchange settled it (its last close in the journal 120.00, of {DAY1}; "
+    f"the contract note holds the settlement price), so it starts flat on {FUTURE} NFO"
+)
+
+
+@MODES
+@BOOKS
+def test_a_carried_index_future_past_its_last_day_is_named_settled_and_the_start_goes_on(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
+):
+    world = november_carried(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
+    (trigger_id,) = [gtt.trigger_id for gtt in world.fake.gtts()]
+    sent_before = len(calls(world, *SENDS))
+
+    outcome = wednesday(world)
+
+    assert outcome.stopped_by == "ctrl_c"
+    assert f"{world.fake.mode.name} (NovemberKept): {SETTLED}" in alerts(caplog, "session")
+    assert SETTLED in outcome.warnings
+    assert calls(world, *SENDS)[sent_before:] == []
+    wednesday_start = on(AFTER_NOVEMBERS_LAST, 14, 40, 5)
+    looked_up = [c for c in calls(world, "symbol") if c.ts_ns >= wednesday_start]
+    assert [c.detail["request"]["symbol"] for c in looked_up] == [FUTURE]
+    with journal_of(world) as journal:
+        assert journal.gtt_by_trigger(trigger_id).state.terminal
+    assert not alerts(caplog, "error")
+
+
+def test_the_close_writes_a_flat_record_so_the_settled_contract_is_not_carried_again(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    world = november_carried(make_fake_openalgo, monkeypatch, tmp_path)
+
+    wednesday(world)
+
+    with journal_of(world) as journal:
+        record = journal.day_closes()["NovemberKept"]
+    assert record.day == AFTER_NOVEMBERS_LAST
+    assert not [p for p in record.carried["positions"] if p["quantity_units"]]
+
+
+def test_a_strategy_moved_off_a_carried_contract_that_still_trades_is_refused(
+    make_fake_openalgo, monkeypatch, tmp_path
+):
+    # Monday's November future still trades on Wednesday 2026-11-18: what it carries
+    # continues only on its own contract.
+    world = november_carried(make_fake_openalgo, monkeypatch, tmp_path)
+    missed_day(world, DAY2, ())
+    to_day(world, DAY3)
+    sent_before = len(calls(world, *SENDS))
+
+    with pytest.raises(PreflightError) as refused:
+        world.run(OnDecember)
+
+    assert refused.value.failures == (
+        f"NovemberKept: what it carries from {DAY1} is 65 {NOVEMBER_FUTURE} NFO (NRML), and "
+        f"this start trades {FUTURE} NFO: a carried position continues only on its own "
+        f"contract, so start it on {NOVEMBER_FUTURE} NFO; or close the position and cancel "
+        "its GTTs in OpenAlgo by hand, then start it under another account name (account=)",
+    )
+    assert calls(world, *SENDS)[sent_before:] == []

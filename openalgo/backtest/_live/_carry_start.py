@@ -14,10 +14,9 @@ preflight, so that every check and refusal of a carry comes before anything is s
 - **The capital** (`capital_refusals`): the engine continues a carried position only with
   the capital it was entered with (`restore_carried_state` refuses another), so a start
   passing another `capital=` is refused before the preflight, naming the figure to pass.
-- **Expired contracts** (`expired_instruments`): a carried position on a contract whose
-  last trading day is before today was settled by the exchange (section 9). The preflight
-  does not look it up in today's master contract, which no longer lists it; the restore
-  records its exit at the contract's last close.
+- **Expired contracts**: a carried position on a contract whose last trading day is
+  before today was settled by the exchange (section 9): `_carry_contracts` drops it from
+  the carry before the preflight, so nothing looks it up in today's master contract.
 
 Days are IST trading days, amounts rupees, quantities signed whole units.
 """
@@ -26,14 +25,11 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from .._futures_contracts import last_day
-from ..reference import Instrument
 from ._journal_carry import DayClose
 from ._preflight_carry import CarriedPosition, carried_positions, held_rupees
-from ._preflight_plan import InstrumentFacts
 from ._types import Mode
 from .journal import Journal
 
@@ -75,15 +71,17 @@ class Carried:
 class CarryAtStart:
     """What a session of trading `day` in `mode` continues (module docstring): `carried`,
     by strategy name in call order, `other`, the other ledger's latest records of the
-    session's strategies that carry a position, by name, and `settled`, the banner's line
+    session's strategies that carry a position, by name, `settled`, the banner's line
     of each strategy whose holdings of an earlier day no record carried were found closed
-    at the broker (`_carry_unrecorded`)."""
+    at the broker (`_carry_unrecorded`), and `expired`, the words of each strategy whose
+    carried contract the exchange settled, by name (`_carry_contracts`): it starts flat."""
 
     day: dt.date
     mode: Mode
     carried: Mapping[str, Carried]
     other: Mapping[str, DayClose]
     settled: tuple[str, ...] = ()
+    expired: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def none(cls, day: dt.date, mode: Mode) -> CarryAtStart:
@@ -131,43 +129,19 @@ def capital_refusals(carry: CarryAtStart, capitals: Mapping[str, float]) -> list
     return refusals
 
 
-def expired_instruments(
-    carry: CarryAtStart, instruments: Mapping[str, Sequence[Instrument]]
-) -> dict[str, Instrument]:
-    """The carried contracts whose last trading day is before the carry's day, by
-    strategy name: those of `instruments` (each strategy's, by name) on which its record
-    carries a position (module docstring)."""
-    expired = {}
-    for name, carried in carry.carried.items():
-        held = {(p.symbol, p.exchange) for p in carried.positions}
-        for instrument in instruments.get(name, ()):
-            ends = instrument.expiry is not None and last_day(instrument) < carry.day
-            if ends and (instrument.symbol, instrument.exchange) in held:
-                expired[name] = instrument
-    return expired
-
-
 def preflight_terms(carry: CarryAtStart, spec: Any) -> dict[str, Any]:
-    """The preflight's terms of a carry (`PreflightPlan.carried` and `expired`): each
-    carried position on a contract still trading with the rupees it holds
-    (`held_rupees`), and the reference tables' facts of each expired carried contract.
-    Raises LiveError for a sold option carried, which this release does not hold
-    overnight."""
+    """The preflight's terms of a carry (`PreflightPlan.carried`): each carried position
+    with the rupees of the account's cash it holds (`held_rupees`). Raises LiveError for a
+    sold option carried, which this release does not hold overnight."""
     instruments = {each.name: each.instruments for each in spec.strategies}
-    expired = expired_instruments(carry, instruments)
     held = []
     for name, carried in carry.carried.items():
         by_pair = {(i.symbol, i.exchange): i for i in instruments.get(name, ())}
         for position in carried.positions:
             instrument = by_pair.get((position.symbol, position.exchange))
-            if instrument is None or expired.get(name) is instrument:
-                continue
-            held.append((position, held_rupees(position, instrument)))
-    facts = tuple(
-        InstrumentFacts(i.symbol, i.exchange, i.lot_size, float(i.tick_size or 0.0), i.freeze_qty)
-        for i in expired.values()
-    )
-    return {"carried": tuple(held), "expired": facts}
+            if instrument is not None:
+                held.append((position, held_rupees(position, instrument)))
+    return {"carried": tuple(held)}
 
 
 @dataclass(frozen=True)
@@ -246,7 +220,6 @@ __all__ = [
     "CarriedReference",
     "capital_refusals",
     "carried_references",
-    "expired_instruments",
     "gtt_seqs",
     "preflight_terms",
     "read_carry",

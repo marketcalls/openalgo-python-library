@@ -12,8 +12,9 @@ of those only, never one it infers from a GTT not named), and the journal's GTT 
 carried kernel GTT is bound to under `BINDINGS_KEY`, by which the next day's session takes
 them back (`_carry_restore`). A strategy that ends flat writes none, but one with a record
 of the same day (an earlier start's Ctrl+C that kept its leg), or one that continued a
-record of an earlier day (`_carry_start`), has its flat state written, so the latest
-record never names a closed position.
+record of an earlier day (`_carry_start`) or whose carried contract the exchange settled
+(`_carry_contracts`), has its flat state written, so the latest record never names a
+closed position.
 
 Each carried leg's reference (`LegReference`) is the one `_session_carry.CarriedLegs`
 took at the close. Times are UTC nanoseconds, quantities signed whole units. Used by the
@@ -63,7 +64,9 @@ def write_day_close(session: Any, trader: Trader, reference: LegReference | None
     carried = call(trader.engine.carried_state)
     flat = not carried.get("positions") and not carried.get("orders")
     carry = session.parts.carry
-    continued = carry is not None and carry.of(trader.name) is not None
+    continued = carry is not None and (
+        carry.of(trader.name) is not None or trader.name in carry.expired
+    )
     if flat and not continued and not _recorded_today(session, trader):
         return
     carried[REFERENCES_KEY] = [] if reference is None else [reference.record(trader)]

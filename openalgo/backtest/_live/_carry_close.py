@@ -23,8 +23,9 @@ from ._stops_gtt import CHECK_THEN_PLACE, gtt_unconfirmed, gtt_words, overnight,
 from ._stops_report import NO_STOP
 from ._types import AlertKind
 
-#: The first line of the close's alert of the carried legs.
-CARRIED_TITLE = "Carried overnight, each with its stop at the broker:"
+#: The first line of the close's alert of the carried legs; each line below it gives its
+#: leg's stop GTT and whether the close confirmed it.
+CARRIED_TITLE = "Carried overnight:"
 
 
 def carried_lines(session: Any) -> tuple[str, ...]:

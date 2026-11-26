@@ -144,7 +144,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -179,7 +179,6 @@ class SessionResult:
     summary: SessionSummary
     orders: pd.DataFrame
     fills: pd.DataFrame
-    trades: pd.DataFrame
     fill_comparison: pd.DataFrame
     drift: pd.DataFrame
     unprotected: pd.DataFrame
@@ -190,6 +189,8 @@ class SessionResult:
     mode_breach: str | None
     warnings: tuple[str, ...]
     paths: Mapping[str, str]
+    #: Added in 2.5.0, after the fields 2.4.1 published, so their order is kept.
+    trades: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def flat(self) -> bool:

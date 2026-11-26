@@ -53,7 +53,7 @@ from typing import Any
 from .._engine import call
 from .._layout import NANOS_PER_SECOND
 from ..errors import LiveError
-from ._carry_restore import restore_carried
+from ._carry_restore import report_settled, restore_carried
 from ._fill_ledger import VENUE_REJECT_CODE
 from ._plan_release import CANDLE_LAST_READ_S
 from ._reconcile_rules import Kind, LegBooks
@@ -113,6 +113,8 @@ def restore(session: Any, restart: Restart, sleep: Sleep) -> None:
             _restore(session, trader, leg.saved, restart)
         elif carried is not None:
             restore_carried(session, trader, carried)
+        elif carry is not None and trader.name in carry.expired:
+            report_settled(session, carry.expired[trader.name])
         _after(session, trader, leg, restart)
     if adopted:
         # Every order taken back is polled once: the stream may have missed its words.

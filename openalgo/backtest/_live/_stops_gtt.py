@@ -12,6 +12,11 @@ its stop is named in an alert or a line are read from the kernel's GTTs of the p
   kernel's session closed (`KernelGtt.unconfirmed`, `_session_carry`: the kernel still
   holds it as resting); one whose cancel the kernel decided and the session never handed
   over (after a guard lock) still rests.
+- **Reported**: a stop GTT a restart could not tell where it stands
+  (`KernelGtt.unsettled`: its entries locked with an ERROR alert) still covers the leg
+  for the stops supervisor, which must not exit or protect around it, but no line, alert
+  or result calls it confirmed: it may have been cancelled or have fired at the broker,
+  so the books come first (`gtt_words`, `gtt_unconfirmed`, `gtt_unsettled`).
 - **Guarded**: the leg was given a stop GTT, resting, ended or fired.
 - **Waiting**: a stop GTT's place or modify waits for its answer; **cancelling**: a stop
   GTT's cancel does.
@@ -80,6 +85,12 @@ def _unconfirmed(trader: Any, gtt: dict[str, Any]) -> str:
     return "" if known is None else known.unconfirmed
 
 
+def _unsettled(trader: Any, gtt: dict[str, Any]) -> bool:
+    """Whether a restart could not tell where `gtt` stands (module docstring)."""
+    known = None if trader.gtts is None else trader.gtts.gtt(int(gtt["gtt_id"]))
+    return known is not None and known.unsettled
+
+
 def _cancel_sent(trader: Any, gtt: dict[str, Any]) -> bool:
     known = None if trader.gtts is None else trader.gtts.gtt(int(gtt["gtt_id"]))
     return known is not None and known.cancel_sent
@@ -99,15 +110,22 @@ def gtt_cancelling(trader: Any) -> bool:
 
 def gtt_words(trader: Any) -> str:
     """The leg's stop GTT in an alert's words: confirmed (its trigger ID, trigger and
-    units), being cancelled, not confirmed yet, or "" for none."""
+    units), one a restart could not tell where it stands, being cancelled, not confirmed
+    yet, or "" for none."""
     gtts = stop_gtts(trader)
     resting = resting_gtts(trader)
-    if resting:
-        gtt = resting[-1]
+    settled = [gtt for gtt in resting if not _unsettled(trader, gtt)]
+    if settled:
+        gtt = settled[-1]
         name = _name(trader, gtt)
         return (
             f"{name} confirmed at the broker, trigger {gtt['trigger_price']:.2f} for "
             f"{round(gtt['quantity_units'])} units"
+        )
+    if resting:
+        return (
+            f"{_name(trader, resting[-1])} not confirmed at the broker: the restart could not "
+            "tell whether it still rests"
         )
     if gtt_cancelling(trader):
         return f"{_name(trader, gtts[-1])} being cancelled, with no final word yet"
@@ -124,10 +142,19 @@ def gtt_words(trader: Any) -> str:
 
 
 def gtt_unconfirmed(trader: Any) -> bool:
-    """Whether the leg has a stop GTT the close's read did not confirm and none resting
-    confirmed: its line asks the operator to check the books, then place it by hand."""
-    gtts = stop_gtts(trader)
-    return not resting_gtts(trader) and any(_unconfirmed(trader, gtt) for gtt in gtts)
+    """Whether the leg has a stop GTT the close's read did not confirm, or one a restart
+    could not tell where it stands, and none resting confirmed: its line asks the operator
+    to check the books, then place it by hand."""
+    resting = resting_gtts(trader)
+    if any(not _unsettled(trader, gtt) for gtt in resting):
+        return False
+    return bool(resting) or any(_unconfirmed(trader, gtt) for gtt in stop_gtts(trader))
+
+
+def gtt_unsettled(trader: Any) -> bool:
+    """Whether a stop GTT of the leg the stops supervisor counts as resting is one a
+    restart could not tell where it stands (module docstring)."""
+    return any(_unsettled(trader, gtt) for gtt in resting_gtts(trader))
 
 
 def gtt_trigger_id(trader: Any) -> str:
@@ -158,6 +185,7 @@ __all__ = [
     "gtt_guarded",
     "gtt_trigger_id",
     "gtt_unconfirmed",
+    "gtt_unsettled",
     "gtt_waiting",
     "gtt_words",
     "overnight",

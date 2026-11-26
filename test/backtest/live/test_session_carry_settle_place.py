@@ -24,7 +24,7 @@ import logging
 import pytest
 from carry_samples import DAY2, CncKept, CncKeptTrail, carried_world, held, on, to_day
 from fake_openalgo.fixtures import *  # noqa: F403
-from positional_samples import calls, gtts
+from positional_samples import BOOKS, MODES, calls, gtts
 from restart_samples import Crash, crashing, restart, run_to_crash
 from session_samples import NS, alerts
 from stops_samples import at_price
@@ -78,14 +78,49 @@ def tuesday_until_the_crash(world, monkeypatch, strategy, *, reached):
     world.script.sleep((RESTART - world.fake.clock.now()) / NS)
 
 
+def tuesday_until_a_replace_crashes(world, monkeypatch):
+    """Tuesday's session of `CncKeptTrail` until it dies inside a replace's place (module
+    docstring), the clock moved to the restart."""
+    world.trace.waive("protected", "a restart: the earlier start's windows are its own")
+    world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
+    crashing(monkeypatch)
+    to_day(world, DAY2)
+    at_price(world, on(DAY2, 14, 41), 503.0)
+    world.fake.faults.timeout("modifygttorder")
+    monkeypatch.setattr(GttCalls, "place", crash_in_place(monkeypatch, reached=False))
+    run_to_crash(world, CncKeptTrail)
+    assert [c.what for c in calls(world, "modifygttorder", "cancelgttorder")][-2:] == [
+        "modifygttorder",
+        "cancelgttorder",
+    ]
+    world.script.sleep((RESTART - world.fake.clock.now()) / NS)
+
+
+def sold_by_hand(world):
+    """Another client of the account sells the leg's 10 SBIN CNC units at market."""
+    world.fake.client().placeorder(
+        strategy="manual",
+        symbol="SBIN",
+        action="SELL",
+        exchange="NSE",
+        price_type="MARKET",
+        product="CNC",
+        quantity=10,
+    )
+
+
 def places_after(world, since_ns):
     return [c for c in calls(world, "placegttorder") if c.ts_ns >= since_ns]
 
 
+@MODES
+@BOOKS
 def test_a_place_that_reached_the_broker_before_the_crash_is_bound_never_placed_again(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, history=True)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
     tuesday_until_the_crash(world, monkeypatch, CncKept, reached=True)
     assert len(places_after(world, DAY2_START)) == 1
 
@@ -102,10 +137,14 @@ def test_a_place_that_reached_the_broker_before_the_crash_is_bound_never_placed_
     assert not [a for a in alerts(caplog, "error") if "entries are locked" in a]
 
 
+@MODES
+@BOOKS
 def test_a_place_that_never_reached_the_broker_is_placed_again_once(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, history=True)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
     tuesday_until_the_crash(world, monkeypatch, CncKept, reached=False)
     assert places_after(world, DAY2_START) == []
 
@@ -119,23 +158,19 @@ def test_a_place_that_never_reached_the_broker_is_placed_again_once(
     assert not [a for a in alerts(caplog, "error") if "entries are locked" in a]
 
 
+@MODES
+@BOOKS
 def test_a_place_never_sent_while_the_position_fell_by_its_units_is_unresolved(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
     # The leg's units fell by the GTT's (a child of its shape may have sold them): it may
     # have landed and fired, so it is never placed again.
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, history=True)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, history=history, analyzer=analyzer
+    )
     world.trace.left_unprotected_by_decision("CncKept", "a place under way that may have fired")
     tuesday_until_the_crash(world, monkeypatch, CncKept, reached=False)
-    world.fake.client().placeorder(
-        strategy="manual",
-        symbol="SBIN",
-        action="SELL",
-        exchange="NSE",
-        price_type="MARKET",
-        product="CNC",
-        quantity=10,
-    )
+    sold_by_hand(world)
     world.script.sleep(60)
 
     restart(world, CncKept, stop_ns=on(DAY2, 14, 57))
@@ -145,26 +180,18 @@ def test_a_place_never_sent_while_the_position_fell_by_its_units_is_unresolved(
     assert "it may have landed and fired, so it is not placed again" in locked
 
 
+@MODES
+@BOOKS
 def test_a_crash_in_a_replaces_place_is_settled_and_the_replacement_placed_once(
-    make_fake_openalgo, monkeypatch, tmp_path, caplog
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
 ):
     # Tuesday's trail moves the stop to 500.00; the modify times out before it reaches
     # OpenAlgo, which may still apply it, so the GTT is cancelled and placed again with the
     # modify's terms, and the process dies inside that place.
-    world = carried_world(make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail, history=True)
-    world.trace.waive("protected", "a restart: the earlier start's windows are its own")
-    world.trace.waive("books agree", "a restart: the earlier start's reads are its own")
-    crashing(monkeypatch)
-    to_day(world, DAY2)
-    at_price(world, on(DAY2, 14, 41), 503.0)
-    world.fake.faults.timeout("modifygttorder")
-    monkeypatch.setattr(GttCalls, "place", crash_in_place(monkeypatch, reached=False))
-    run_to_crash(world, CncKeptTrail)
-    assert [c.what for c in calls(world, "modifygttorder", "cancelgttorder")][-2:] == [
-        "modifygttorder",
-        "cancelgttorder",
-    ]
-    world.script.sleep((RESTART - world.fake.clock.now()) / NS)
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail, history=history, analyzer=analyzer
+    )
+    tuesday_until_a_replace_crashes(world, monkeypatch)
 
     outcome = restart(world, CncKeptTrail, stop_ns=on(DAY2, 14, 55))
 
@@ -173,3 +200,28 @@ def test_a_crash_in_a_replaces_place_is_settled_and_the_replacement_placed_once(
     (position,) = outcome.open_positions
     assert position.stop_confirmed is True
     assert not [a for a in alerts(caplog, "error") if "entries are locked" in a]
+
+
+@MODES
+@BOOKS
+def test_a_crash_in_a_replaces_place_while_the_position_fell_is_unresolved_never_placed(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer, history
+):
+    # The leg's units fell by the GTT's while the process was down (as when the old GTT
+    # fired before its cancel): the replacement may have landed and fired, so it is never
+    # placed again.
+    world = carried_world(
+        make_fake_openalgo, monkeypatch, tmp_path, CncKeptTrail, history=history, analyzer=analyzer
+    )
+    world.trace.left_unprotected_by_decision(
+        "CncKeptTrail", "a replace's place that may have fired"
+    )
+    tuesday_until_a_replace_crashes(world, monkeypatch)
+    sold_by_hand(world)
+    world.script.sleep(60)
+
+    restart(world, CncKeptTrail, stop_ns=on(DAY2, 14, 57))
+
+    assert places_after(world, RESTART) == []
+    (locked,) = [a for a in alerts(caplog, "error") if "entries are locked" in a]
+    assert "it may have landed and fired, so it is not placed again" in locked
