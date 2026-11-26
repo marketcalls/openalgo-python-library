@@ -6,9 +6,10 @@ closed, and, at the close, every order its venue maps placed.
   poll's, a released held fill's, the trade book's at a reconciliation or a restart) and
   each fill of other orders the reconciler adopted (`source` "external"), with whether
   its price was released unconfirmed (`estimated`) or may lie on another tick
-  (`derived_from_average`), and the flags the venue gave it (`flags`: "price_unverified"
-  for a fired GTT's child missed and priced at its limit, "missed_day" for one that fired
-  on a day no session ran; 20-positional-live 3.3, 4.3).
+  (`derived_from_average`), and its `flags`: the kernel's flags of its order
+  (`Engine.order_flags`: "late_decision", "stop_crossed", ...), then the venue's
+  ("price_unverified" for a fired GTT's child missed and priced at its limit, "missed_day"
+  for one that fired on a day no session ran; 20-positional-live 3.3, 4.3), each once.
 - **Locks** (`LockRecord`): each reason a strategy's entries were locked for, when, and
   when it was lifted (None while it stands). The kernel's own halts (its daily loss
   limit, its drawdown halt) are its trading state, in each strategy's result.
@@ -48,7 +49,7 @@ class FillRecord:
     """A fill the kernel took: when (the word's receive time), the strategy, the broker's
     order ID ("" for an adopted fill of other orders), BUY or SELL, whole units, the
     price, the order's purpose ("external" for an adopted fill), where the word came from
-    (`source`), and the two marks and the venue's flags of the module docstring."""
+    (`source`), and the two marks and the flags of the module docstring."""
 
     at_ns: int
     strategy: str
@@ -69,8 +70,8 @@ def fill_record(
     intent: Any, update: Any, increment: Any, *, estimated: bool, flags: tuple[str, ...] = ()
 ) -> FillRecord:
     """The record of `increment` (a `_fill_ledger.Increment`) of the order of `intent`, as
-    `update` gave it; `estimated` when its price was released unconfirmed, with the venue's
-    `flags`."""
+    `update` gave it; `estimated` when its price was released unconfirmed, with its
+    `flags` (the kernel's of its order, then the venue's: module docstring)."""
     return FillRecord(
         at_ns=update.ts_recv_ns,
         strategy=intent.strategy,

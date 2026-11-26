@@ -79,8 +79,9 @@ def trades_frame(trades: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     """Every round trip the strategies closed in this start, each strategy's `Result.trades`
     (by name, in call order) one after the other with `strategy` and `entry_day` (the IST
     date of `entry_time`) first: a trade carried from an earlier day shows the day it was
-    entered (20-positional-live 4; the lead's ruling N5a-4), and its fills' flags
-    ("price_unverified", "missed_day") are in its `flags`."""
+    entered (20-positional-live 4; the lead's ruling N5a-4), and its fills' flags (the
+    kernel's of each order, such as "late_decision", and the venue's, "price_unverified"
+    and "missed_day") are in its `flags`."""
     tables = []
     for name, table in trades.items():
         table = table.copy()

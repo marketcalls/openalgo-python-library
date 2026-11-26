@@ -48,8 +48,9 @@ from ..errors import LiveError
 from ._account_watch import AccountTrades
 from ._exit_reasons import request_reason
 from ._groups import Groups
-from ._guard_breach import ModeBreach, breach_alert, breach_text
+from ._guard_breach import ModeBreach, breach_text
 from ._margin_reject import MarginHolds
+from ._session_breach import alert_breach
 from ._session_candles import ask_candles, ask_first_candles
 from ._session_exits import ExitRetries
 from ._session_figures import DayFigures, SessionFigures, StrategyFigures
@@ -61,7 +62,6 @@ from ._session_saved import save_released, saved_commands
 from ._session_slippage import StopTriggers, TargetLevels
 from ._session_trader import Trader
 from ._shared_alerts import warning_line
-from ._stops_report import stop_words
 from ._types import LOGGER_NAME, AlertKind, Now, Sleep, Tick
 from ._venue_requests import request_fields
 from ._version_id import StartVersions
@@ -233,21 +233,15 @@ class Session:
 
     def guard_locked(self, breach: ModeBreach) -> None:
         """The mode guard locked (16-session-design 6.2): every strategy's entries are locked,
-        nothing goes to the worker, and an ERROR alert lists every position as last known."""
+        nothing goes to the worker, and an ERROR alert lists every position as last known
+        (`_session_breach`)."""
         if self.breach is not None:
             return
         self.breach, self.breach_text = breach, breach_text(breach)
         for trader in self.traders:
             trader.lock(MODE_BREACH_LOCK)
         self.event("guard_locked", text=self.breach_text)
-        positions = [
-            f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units, "
-            f"{stop_words(self.stops, trader)}"
-            for trader in self.traders
-            if (units := trader.open_units()) != 0
-        ]
-        products = {trader.product for trader in self.traders if trader.open_units()}
-        self.alert(AlertKind.ERROR, breach_alert(positions, products))
+        alert_breach(self)
 
     # ----- the iteration -------------------------------------------------------------
 

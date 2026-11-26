@@ -80,12 +80,15 @@ not it has rows.
   final status. `fills`: every
   fill the engine took, with where it was heard (`source`) and whether its price was
   released unconfirmed (`estimated`) or may lie on another tick (`derived_from_average`),
-  and the flags the broker's side gave it (`flags`: "price_unverified" for a fired GTT's
-  child the books did not price, recorded at its limit; "missed_day" for one that fired on
-  a trading day no session ran; the contract note holds the true price). `trades`: every
-  round trip this start's strategies closed, each strategy's `results` trades one after
-  the other with `strategy` and `entry_day` first (a position carried from an earlier day
-  shows the day it was entered) and its fills' `flags` last.
+  and its `flags`: the engine's flags of its order first ("late_decision" for an order of
+  a decision before the open sent once the open had passed, "stop_crossed" for a stop
+  whose level the price had crossed when it was placed, ...), then the broker's side's
+  ("price_unverified" for a fired GTT's child the books did not price, recorded at its
+  limit; "missed_day" for one that fired on a trading day no session ran; the contract
+  note holds the true price), each once. `trades`: every round trip this start's
+  strategies closed, each strategy's `results` trades one after the other with `strategy`
+  and `entry_day` first (a position carried from an earlier day shows the day it was
+  entered) and its fills' `flags` last.
 - `fill_comparison`: each fill of the day's orders (every start's, as `summary`) against
   the price a backtest of the session's own bars fills the same order at: `strategy`,
   `version_id`, `symbol`, `exchange`, `order_id`, `purpose` (entry, add, exit, stop,

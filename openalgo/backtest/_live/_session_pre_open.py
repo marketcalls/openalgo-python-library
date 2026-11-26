@@ -37,6 +37,11 @@ session's first open.
   line naming the bar and the orders (`cancelled_unsent`), kept in the result's warnings
   and the daily summary; the day's next start says the bar was decided by an earlier start
   (`_pre_open_due.DECIDED_TODAY`).
+- **A change of the analyzer switch before the decision's orders reach the broker** locks
+  the mode guard, and the session sends nothing more: every order of the decision still
+  waiting (entries and exits) is dropped. The mode-switch alert and the result's warnings
+  name them (`dropped_unsent`); the bar stays decided in the ledger of the session's mode
+  (a start in the other mode reads the other ledger's).
 
 Times are UTC nanoseconds. Used by the loop only.
 """
@@ -60,6 +65,13 @@ PRE_OPEN_EVENT = "pre_open_decision"
 CANCELLED_UNSENT = (
     "{name}: the stop cancels the orders of its decision on its {interval} bar closing on "
     "{day} ({orders}) before they went to the broker, and that bar is not decided again today"
+)
+#: The line of a pre-open decision's orders a mode switch drops before they reach the broker
+#: (module docstring): the bar is decided in the session's ledger.
+DROPPED_BY_SWITCH = (
+    "{name}: the mode switch drops the orders of its decision on its {interval} bar closing "
+    "on {day} ({orders}) before they went to the broker; a start today in {mode} mode does "
+    "not decide that bar again"
 )
 
 
@@ -128,25 +140,48 @@ def cancelled_unsent(trader: Any) -> str | None:
     decided on a bar that closed before today's open whose placement the venue map has not
     taken (DAY orders: a GTT order rests at the broker already). None for a strategy that
     decides in the session, or with none unsent. Called before the stop cancels them."""
-    opens = trader.part.slices[0][0]
-    if not decides_before_open(trader.part.spec.interval):
+    waiting = _unsent(trader, trader.entry_orders())
+    if not waiting:
         return None
+    return CANCELLED_UNSENT.format(**_named(trader, waiting))
+
+
+def dropped_unsent(trader: Any, mode: Any) -> str | None:
+    """The line naming every order of `trader`'s pre-open decision, entries and exits, that
+    a change of the analyzer switch drops before it reaches the broker (module docstring),
+    as `cancelled_unsent` finds them; `mode` is the session's (`_types.Mode`). None for a
+    strategy that decides in the session, or with none unsent. Called as the guard locks."""
+    waiting = _unsent(trader, trader.working())
+    if not waiting:
+        return None
+    return DROPPED_BY_SWITCH.format(**_named(trader, waiting), mode=mode.name)
+
+
+def _unsent(trader: Any, kernel_orders: Any) -> list[dict[str, Any]]:
+    """The kernel's orders of `kernel_orders` that `trader`'s pre-open decision left waiting
+    and the venue map has not taken: DAY orders decided before today's open."""
+    if not decides_before_open(trader.part.spec.interval):
+        return []
+    opens = trader.part.slices[0][0]
     taken = {kernel_order for kernel_order, _ in trader.venue.placed()}
     orders = [
         call(trader.engine.order, kernel_order)
-        for kernel_order in trader.entry_orders()
+        for kernel_order in kernel_orders
         if kernel_order not in taken
     ]
-    waiting = [o for o in orders if o["validity"] == VALIDITIES["day"] and o["decided_at"] < opens]
-    if not waiting:
-        return None
-    named = ", ".join(f"{o['side']} {o['quantity_units']:g} {o['order_type']}" for o in waiting)
-    return CANCELLED_UNSENT.format(
-        name=trader.name,
-        interval=trader.part.spec.interval,
-        day=_day(max(o["decided_at"] for o in waiting)),
-        orders=named,
-    )
+    return [o for o in orders if o["validity"] == VALIDITIES["day"] and o["decided_at"] < opens]
+
+
+def _named(trader: Any, waiting: list[dict[str, Any]]) -> dict[str, str]:
+    """The fields of a line naming the `waiting` orders of `trader`'s decision."""
+    return {
+        "name": trader.name,
+        "interval": trader.part.spec.interval,
+        "day": _day(max(o["decided_at"] for o in waiting)),
+        "orders": ", ".join(
+            f"{o['side']} {o['quantity_units']:g} {o['order_type']}" for o in waiting
+        ),
+    }
 
 
 def _due(session: Any, trader: Any, last_decided_ns: int | None) -> DueBar:
@@ -178,9 +213,11 @@ def _day(close_ns: int) -> str:
 
 __all__ = [
     "CANCELLED_UNSENT",
+    "DROPPED_BY_SWITCH",
     "PRE_OPEN_EVENT",
     "cancelled_unsent",
     "daily_traders",
     "decide_before_open",
+    "dropped_unsent",
     "warn_missed_bars",
 ]
