@@ -58,14 +58,20 @@ def product_check(product: Any) -> Check:
     )
 
 
-def trading_day_checks(exchanges: Iterable[str], now_ns: int, calendar: Calendar) -> list[Check]:
+def trading_day_checks(
+    exchanges: Iterable[str], now_ns: int, calendar: Calendar, *, mis: bool = True
+) -> list[Check]:
     """One check per exchange (first seen first): the exchange trades on the IST date of
     `now_ns` (UTC nanoseconds) and its session has not closed yet. Before the open is
-    fine, the session waits for it. A pass warns after the day's MIS `entry_until` (no new
-    entries, the session only manages and squares off positions) or square-off, and when
-    the calendar does not confirm the day's holiday data or session hours."""
+    fine, the session waits for it. A pass warns, in a session with an MIS strategy
+    (`mis`), after the day's MIS `entry_until` (no new entries, the session only manages
+    and squares off positions) or square-off, and when the calendar does not confirm the
+    day's holiday data or session hours."""
     day = ist_time(now_ns).date()
-    return [_trading_day(exchange, day, now_ns, calendar) for exchange in dict.fromkeys(exchanges)]
+    return [
+        _trading_day(exchange, day, now_ns, calendar, mis=mis)
+        for exchange in dict.fromkeys(exchanges)
+    ]
 
 
 def alerts_check(alerts: AlertsLike | None, mode: Mode) -> Check:
@@ -122,7 +128,9 @@ def _account_limit(value: Any) -> Check:
     return Check(name, True, words)
 
 
-def _trading_day(exchange: str, day: dt.date, now_ns: int, calendar: Calendar) -> Check:
+def _trading_day(
+    exchange: str, day: dt.date, now_ns: int, calendar: Calendar, *, mis: bool
+) -> Check:
     name = f"trading_day:{exchange}"
     try:
         info = calendar.session_info(exchange, day)
@@ -144,7 +152,7 @@ def _trading_day(exchange: str, day: dt.date, now_ns: int, calendar: Calendar) -
         )
     message = f"{exchange} trades today, {day}, from {_ist_clock(info.open)} to "
     message += f"{_ist_clock(info.close)} IST"
-    notes = [*_mis_notes(times, now_ns), *_calendar_notes(info)]
+    notes = [*(_mis_notes(times, now_ns) if mis else ()), *_calendar_notes(info)]
     if notes:
         message = f"{WARNING}{message}, but {'; '.join(notes)}"
     return Check(name, True, message)

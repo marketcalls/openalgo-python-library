@@ -73,12 +73,18 @@ from earlier days (20-positional-live 4; unit N5a) is read by `_carry_open` (wit
 `_carry_start`'s values) before the preflight, judged against the broker's books by
 `_restart_carried`, restored into the kernel by `_carry_restore`, named in the banner by
 `_carry_lines` and at the close by `_carry_close`; the alert of a resumed leg without its
-stop is `_restart_stops`. A CNC or NRML leg under `positional_stops="rearm_daily"`
-(20-positional-live 6; unit N5b) is `_session_rearm`'s (its warnings at every start and
-close), a future the exchange settles on the session's day `_session_expiry`'s, and a
-daily or longer strategy's bars and pre-open decision (20-positional-live 8)
-`_plan_daily`'s and `_session_pre_open`'s, the bar due at a start `_pre_open_due`'s. The
-alert of a session whose mode guard locked is `_session_breach`'s. OpenAlgo's product
+stop is `_restart_stops`. What a session of an earlier day that stopped without its record
+holds is judged by `_carry_unrecorded` against the books `_carry_books` reads (whether a
+stop GTT of it may have fired: `_carry_fired`), and rebuilt from its last save and the
+journal's updates as that day's record by `_carry_rebuild` (its GTTs:
+`_carry_rebuild_gtts`; what a close's record adds: `_carry_rebuild_record`; unit N5c). A
+CNC or NRML leg under `positional_stops="rearm_daily"` (20-positional-live 6; unit N5b)
+is `_session_rearm`'s (its warnings at every start and close), a future the exchange
+settles on the session's day `_session_expiry`'s, and a daily or longer strategy's bars
+and pre-open decision (20-positional-live 8) `_plan_daily`'s and `_session_pre_open`'s,
+the bar due at a start `_pre_open_due`'s. A stock future or option, which `bt.live` does
+not trade yet, is refused in `_plan_stock`'s words. The alert of a session whose mode
+guard locked is `_session_breach`'s. OpenAlgo's product
 names are `.._products`'.
 
 Times are UTC nanoseconds, prices rupees and quantities units, never lots. No module

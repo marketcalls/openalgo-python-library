@@ -21,7 +21,7 @@ import dataclasses
 from typing import Any
 
 from .._engine import call
-from ._exit_reasons import exit_reason, exit_words
+from ._exit_reasons import alert_label, exit_reason, exit_words
 from ._fill_ledger import FillOutcome, FillResult, Increment
 from ._order_state import ENTRY_PURPOSES
 from ._session_records import fill_record
@@ -76,7 +76,8 @@ class FillNews(ResolutionNews):
             reason = exit_reason(trader, result.kernel_order, intent.purpose)
             words = None if reason is None else exit_words(trader, result.kernel_order, reason)
             both = tuple(dict.fromkeys((*order_flags, *flags)))
-            self._fill_alert(intent, update, result.increment, words, both)
+            label = alert_label(intent.purpose, reason)
+            self._fill_alert(intent, update, result.increment, (label, words), both)
         if result.ended is OrderStatus.REJECTED:
             why = update.rejection_reason or "no reason given"
             session.rejected += 1
@@ -103,15 +104,16 @@ class FillNews(ResolutionNews):
         intent: OrderIntent,
         update: OrderUpdate,
         increment: Increment,
-        words: str | None,
+        named_as: tuple[str, str | None],
         flags: tuple[str, ...],
     ) -> None:
-        """The fill's record, its event and its ENTRY or EXIT alert, which names in `words`
-        the exit reason of an order that closes a position (`_exit_reasons`), in a session
+        """The fill's record, its event and its ENTRY or EXIT alert, which names first the
+        order's purpose or the exit reason its fills record (`named_as`, with the words of
+        the exit reason of an order that closes a position: `_exit_reasons`), in a session
         of several strategies, first, the strategy whose order filled, and last the fill's
         `flags`: the kernel's flags of the order, then the venue's (`_session_gtts`)."""
         kind = AlertKind.ENTRY if intent.purpose in ENTRY_PURPOSES else AlertKind.EXIT
-        why = intent.purpose.value
+        why, words = named_as
         if words is not None:
             why = f"{why}: {words}"
         session = self._session

@@ -2,8 +2,9 @@
 (16-session-design 2.10 K1 and 3.1 step 11; unit 7). Part of `plan`.
 
 - `session_engine` builds the strategy's kernel session (`Engine.session`) from its setup:
-  the config a backtest of the day runs with, its instruments with OpenAlgo's facts, and
-  no bars (the catch-up adds today's). Its venue is external: a broker fills its orders.
+  the config a backtest of the day runs with, its instruments with OpenAlgo's facts
+  (`kernel_instruments`), and no bars (the catch-up adds today's). Its venue is external:
+  a broker fills its orders.
 - `check_grid` checks that the session's slice grid is the grid the bar builders
   (`bars.TickBarBuilder`, from `calendar.union_grid([exchange], day, day, base="60s")`)
   and the live series use. The kernel builds its grid from the calendar's union grid
@@ -19,7 +20,7 @@ Times are UTC nanoseconds.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -81,18 +82,28 @@ def check_grid(
         )
 
 
-def session_engine(setup: StrategySetup, calendar: Calendar) -> Any:
-    """The kernel session of one strategy (`Engine.session`), with no bars yet, each
-    instrument with its positional exit day as `bt.backtest` gives it (`_positional_exit`:
+def kernel_instruments(setup: StrategySetup, calendar: Calendar) -> tuple[dict[str, Any], ...]:
+    """The binding's instrument dicts of one strategy's kernel session, in registration
+    order, each with its positional exit day as `bt.backtest` gives it (`_positional_exit`:
     a stock future, an option or an MCX delivery contract is exited at the square-off of
-    that day, `expiry_exit`; 20-positional-live 9). Raises ConfigError for a config or
-    instrument the kernel refuses, BacktestError for a kernel defect, NotImplementedError
-    for what the kernel does not run."""
+    that day, `expiry_exit`; 20-positional-live 9). Plain data: the session saves them, so
+    a session of a day that stopped without its close is rebuilt on them
+    (`_carry_rebuild`). Raises ConfigError for an instrument with no tick."""
     exits = positional_exits(setup.instruments, calendar).days
     pairs = zip(setup.instruments, exits, strict=True)
-    specs = [instrument_dict(instrument, day) for instrument, day in pairs]
-    arrays = [bar_arrays(empty_base()) for _ in setup.instruments]
-    return call(native_attr("Engine").session, calendar._cal, setup.config, specs, arrays)
+    return tuple(instrument_dict(instrument, day) for instrument, day in pairs)
+
+
+def session_engine(
+    config: Mapping[str, Any], instruments: Sequence[Mapping[str, Any]], calendar: Calendar
+) -> Any:
+    """The kernel session of one strategy (`Engine.session`) of `config`, on its kernel
+    `instruments` (`kernel_instruments`), with no bars yet. Raises ConfigError for a config
+    or instrument the kernel refuses, BacktestError for a kernel defect,
+    NotImplementedError for what the kernel does not run."""
+    arrays = [bar_arrays(empty_base()) for _ in instruments]
+    specs = [dict(instrument) for instrument in instruments]
+    return call(native_attr("Engine").session, calendar._cal, dict(config), specs, arrays)
 
 
 def bind_strategy(
@@ -132,4 +143,11 @@ def bind_strategy(
     return instance, context
 
 
-__all__ = ["Slices", "bind_strategy", "check_grid", "grid_slices", "session_engine"]
+__all__ = [
+    "Slices",
+    "bind_strategy",
+    "check_grid",
+    "grid_slices",
+    "kernel_instruments",
+    "session_engine",
+]

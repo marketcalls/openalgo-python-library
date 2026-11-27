@@ -101,15 +101,9 @@ impl Engine {
     /// Check that `read` is a state of this session saved before its close began, and that
     /// the session stands at or after that point and before its own close (module docs).
     pub(super) fn check_session(&self, read: &Read<'_>) -> Result<(), LiveStateError> {
-        let layout: i64 = read.whole_of("layout")?;
-        if layout != LIVE_STATE_LAYOUT {
-            return Err(LiveStateError::Version { found: layout });
-        }
+        check_layout(read)?;
         self.check_same_session(read)?;
-        let saved_at = (
-            read.whole_of::<usize>("slice")?,
-            read.field("stage")?.code(&STAGES, Stage::code)?,
-        );
+        let saved_at = saved_at(read)?;
         let not_restorable = |reason: String| Err(LiveStateError::NotRestorable { reason });
         if saved_at.1 >= Stage::Closing {
             return not_restorable(format!(
@@ -138,7 +132,7 @@ impl Engine {
     }
 
     /// Check that `read` names this session's instruments, day and capital.
-    fn check_same_session(&self, read: &Read<'_>) -> Result<(), LiveStateError> {
+    pub(super) fn check_same_session(&self, read: &Read<'_>) -> Result<(), LiveStateError> {
         let other = |reason: String| Err(LiveStateError::OtherSession { reason });
         let saved = read.items_of("instruments")?;
         let named: Vec<(String, String)> = saved
@@ -173,6 +167,27 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// Refuse a state of another layout than this kernel reads.
+///
+/// Errors: `Version`; `Malformed` for a layout that cannot be read.
+pub(super) fn check_layout(read: &Read<'_>) -> Result<(), LiveStateError> {
+    let layout: i64 = read.whole_of("layout")?;
+    if layout != LIVE_STATE_LAYOUT {
+        return Err(LiveStateError::Version { found: layout });
+    }
+    Ok(())
+}
+
+/// The slice and stage a saved state was saved at.
+///
+/// Errors: `Malformed` for a slice or stage that cannot be read.
+pub(super) fn saved_at(read: &Read<'_>) -> Result<(usize, Stage), LiveStateError> {
+    Ok((
+        read.whole_of::<usize>("slice")?,
+        read.field("stage")?.code(&STAGES, Stage::code)?,
+    ))
 }
 
 #[cfg(test)]

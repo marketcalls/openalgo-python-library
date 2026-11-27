@@ -18,8 +18,10 @@
 //!   has ended. An order's "sent" is False only for a strategy exit that waits for the
 //!   cancellation of the orders on its position's closing side: nothing of it is at the
 //!   broker, so the restart's order check (16-session-design 3.6) skips it.
-//! - `restore_live_state(state)`: give a saved state to a session built for a restart,
-//!   once, after its catch-up and before any order. Returns `{saved id: new id}` for
+//! - `restore_live_state(state, now=None)`: give a saved state to a session built for a
+//!   restart, once, after its catch-up and before any order; `now` is the present (UTC
+//!   nanoseconds), by which a pre-open decision's orders waiting for the open go at once,
+//!   flagged `late_decision`, once the open has passed. Returns `{saved id: new id}` for
 //!   every restored working order (the saved orders are numbered from o1 again). The live
 //!   layer rebuilds its venue map from these pairs alone: later orders take the next ids,
 //!   which the earlier start may have given to orders that have ended since. The saved
@@ -73,6 +75,21 @@
 //!   state of the same or a later day, other instruments, another capital, an MIS
 //!   position, or parts that do not hold together raises `NativeEngineInputError` (the
 //!   message names the part of `carried_state`), and nothing of it is restored.
+//! - `restore_stopped_state(state, today, unsent)`: a session of an earlier day stopped
+//!   without its close (a crash): give its last `live_state()` to a session built for that
+//!   day (its instruments and capital, none of its bars), before any of its slices runs. The
+//!   session stands where the save stood and takes the broker's results the journal holds
+//!   after the save (`apply_fill`, the order ends, the GTT answers); `stop_session()` then
+//!   ends it as its close would and `carried_state()` gives what it carries, a command never
+//!   taken dropped (a GTT whose place it is is not carried). `today` is the day number of
+//!   the session that carries it on (a state of that day or later is refused), `unsent` the
+//!   GTT ids whose waiting place, modification or cancellation never reached the broker.
+//!   Returns `{saved id: new id}` as `restore_live_state` does; the GTTs keep their ids. A
+//!   state refused for what it is raises `NativeEngineInputError`; an `unsent` GTT that
+//!   waits for no answer, a session that has run a slice, traded or was restored already,
+//!   and a backtest, raise `NativeEngineError`.
+//! - Since layout 6 `live_state()` also holds "last_closes" (as `carried_state()`'s), which
+//!   only `restore_stopped_state` reads.
 //! - `apply_external_fill(instrument, product, side, units, price, at, reason)`: the
 //!   broker closed or reduced the position by itself (its square-off, a position closed
 //!   by hand): `units` (above 0) on `side` ("BUY", "SELL") at `price` rupees at `at` (UTC
@@ -84,7 +101,7 @@
 //!   refusals are those of `apply_fill`.
 
 use oa_bt::engine::{Engine, StateValue};
-use oa_bt::exec::InstrumentId;
+use oa_bt::exec::{GttId, InstrumentId};
 use oa_bt::model::Side;
 use oa_bt::rms::ExitReason;
 use pyo3::exceptions::PyOverflowError;
@@ -203,7 +220,8 @@ pub(super) fn live_state(py: Python<'_>, engine: &Engine) -> PyResult<PyObject> 
     to_python(py, &engine.live_state())
 }
 
-/// Restore `state` into `engine`; `{saved id: new id}` of the restored working orders.
+/// Restore `state` into `engine` at the present `now_ns` (UTC nanoseconds) when given;
+/// `{saved id: new id}` of the restored working orders.
 ///
 /// Errors: `NativeEngineInputError` for a value that is not plain data and for a state
 /// refused for what it is; `NativeEngineError` for a session that cannot take one now.
@@ -211,9 +229,39 @@ pub(super) fn restore_live_state<'py>(
     py: Python<'py>,
     engine: &mut Engine,
     state: &Bound<'py, PyAny>,
+    now_ns: Option<i64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let state = from_python(state, "live_state", 0)?;
-    let pairs = engine.restore_live_state(&state).map_err(engine_error)?;
+    let restored = match now_ns {
+        Some(now_ns) => engine.restore_live_state_at(&state, now_ns),
+        None => engine.restore_live_state(&state),
+    };
+    let pairs = restored.map_err(engine_error)?;
+    let ids = PyDict::new_bound(py);
+    for (saved, new) in pairs {
+        ids.set_item(saved.0, new.0)?;
+    }
+    Ok(ids)
+}
+
+/// Restore the last saved `state` of a session of an earlier day that stopped without its
+/// close into `engine`, a session built for that day (`Engine::restore_stopped_state`);
+/// `{saved id: new id}` of the restored working orders.
+///
+/// Errors: `NativeEngineInputError` for a value that is not plain data and a state refused
+/// for what it is; `NativeEngineError` for a session that cannot take one now and an
+/// `unsent` GTT the state holds none of, or that waits for no answer.
+pub(super) fn restore_stopped_state<'py>(
+    py: Python<'py>,
+    engine: &mut Engine,
+    state: &Bound<'py, PyAny>,
+    today: i32,
+    unsent: &[GttId],
+) -> PyResult<Bound<'py, PyDict>> {
+    let state = from_python(state, "live_state", 0)?;
+    let pairs = engine
+        .restore_stopped_state(&state, today, unsent)
+        .map_err(engine_error)?;
     let ids = PyDict::new_bound(py);
     for (saved, new) in pairs {
         ids.set_item(saved.0, new.0)?;

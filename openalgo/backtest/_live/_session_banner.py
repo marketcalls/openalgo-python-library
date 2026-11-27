@@ -21,6 +21,7 @@ from ..calendar import default_calendar
 from ..report._format import indian_digits
 from ._carry_lines import carry_lines
 from ._groups import shared_lines
+from ._plan_daily import decides_before_open
 from ._preflight_gtt import SANDBOX_GTT_LINE
 from ._session_restore import restart_lines
 from ._session_trader import ist_instant
@@ -41,6 +42,12 @@ STOPS_LINE = (
 
 #: A CNC or NRML strategy's square-off in its banner line: none (20-positional-live 7.3).
 CARRIED_WORDS = "no square-off: the position is carried overnight"
+#: When a daily or longer strategy decides and its orders go (20-positional-live 8),
+#: in place of an intraday entry cut-off.
+PRE_OPEN_WORDS = (
+    "decides each {interval} bar before the open, on the bar that closed, and its "
+    "orders go at the open"
+)
 #: The banner's line on a CNC or NRML position's stop (20-positional-live 2, P6).
 POSITIONAL_STOPS_LINE = (
     "CNC and NRML: each position's stop rests at the broker as a SINGLE GTT, kept overnight; "
@@ -114,8 +121,9 @@ def banner_lines(session: Any) -> list[str]:
 
 def strategy_lines(session: Any) -> list[str]:
     """The banner's lines of each strategy of `session`, in the plan's order: its
-    instrument, interval, capital, daily loss limit, entry cut-off and square-off (none for
-    a CNC or NRML strategy, `CARRIED_WORDS`), its daily limits when set, and its
+    instrument, interval, capital, daily loss limit, entry cut-off (for a daily or longer
+    strategy, when it decides and its orders go instead: `PRE_OPEN_WORDS`) and square-off
+    (none for a CNC or NRML strategy, `CARRIED_WORDS`), its daily limits when set, and its
     instrument's freeze cap, once per instrument."""
     spec, report = session.parts.spec, session.parts.report
     facts = {(fact.symbol, fact.exchange): fact for fact in report.instruments}
@@ -131,11 +139,13 @@ def strategy_lines(session: Any) -> list[str]:
         square_off = (
             CARRIED_WORDS if overnight(trader) else f"square-off {_clock(trader.square_off_ns)} IST"
         )
+        timing = f"entries until {_clock(until)} IST"
+        if decides_before_open(each.interval):
+            timing = PRE_OPEN_WORDS.format(interval=each.interval)
         lines.append(
             f"{each.name}: {each.exchange}:{each.symbol} every {each.interval}, capital "
             f"Rs {indian_digits(each.capital)}, daily loss limit "
-            f"Rs {indian_digits(each.max_daily_loss)}, "
-            f"entries until {_clock(until)} IST, {square_off}"
+            f"Rs {indian_digits(each.max_daily_loss)}, {timing}, {square_off}"
         )
         limits = daily_limit_words(each.plan.risk)
         if limits:
@@ -231,6 +241,7 @@ __all__ = [
     "ON_STOP_LINES",
     "ON_STOP_REARM_LINE",
     "POSITIONAL_STOPS_LINE",
+    "PRE_OPEN_WORDS",
     "REARM_STOPS_LINE",
     "STOPS_LINE",
     "account_limit_lines",

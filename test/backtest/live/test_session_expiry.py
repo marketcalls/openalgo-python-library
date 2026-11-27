@@ -143,7 +143,7 @@ def test_an_option_held_into_its_last_trading_day_exits_at_the_square_off_gtt_ca
     mode = "SANDBOX" if analyzer else "LIVE"
     assert any(
         text.startswith(
-            f"{mode} (OptionHold): SELL {LOT} {OPTION} NFO at 120.00 (risk_exit: exit "
+            f"{mode} (OptionHold): SELL {LOT} {OPTION} NFO at 120.00 (expiry_exit: exit "
             "before the contract's expiry"
         )
         for text in alerts(caplog, "exit")
@@ -223,6 +223,12 @@ def test_an_index_future_on_its_last_trading_day_is_left_to_the_exchange_at_the_
         "names the settlement and today's last close"
     ) in world.lines
     assert alerts(caplog, "error") == []
+    # The close's Carried alert and summary line say so too (the lead's ruling N5c-4 (h)).
+    (carried,) = [a for a in alerts(caplog, "session") if "Carried overnight:" in a]
+    assert "the exchange settles it at its expiry today, so its stop GTT was cancelled" in carried
+    assert "no stop at the broker" not in carried
+    (summary,) = alerts(caplog, "daily_summary")
+    assert "the exchange settles it at its expiry today" in summary
 
 
 def test_an_index_future_under_rearm_daily_on_its_last_day_is_left_to_the_exchange_unwarned(
@@ -244,6 +250,9 @@ def test_an_index_future_under_rearm_daily_on_its_last_day_is_left_to_the_exchan
         "the settlement and today's last close"
     ) in world.lines
     assert alerts(caplog, "warn") == []
+    (carried,) = [a for a in alerts(caplog, "session") if "Carried overnight:" in a]
+    assert "the exchange settles it at its expiry today, so it needs no stop" in carried
+    assert "until your next start" not in carried
     warned = session_result(outcome).warnings
     assert not [w for w in warned if w.endswith("no stop at the broker until your next start")]
     assert alerts(caplog, "error") == []

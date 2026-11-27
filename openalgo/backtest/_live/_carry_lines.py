@@ -8,7 +8,8 @@ restart's lines and before the funds:
   as the start's warning of such legs says it (`_session_rearm.stop_at_start`);
 - the trading days of its exchange since that record on which no session ran: a stop GTT
   that fired on one is recorded at its child's limit, and targets reached then were
-  missed (`missed_line`);
+  missed (`missed_line`); a rearm_daily leg has no stop GTT, and N5b's start warning
+  names those days for it (`_session_rearm`), so it has no such line;
 - a strategy whose version changed since its record: carried all the same, its leg keeps
   the levels and rules saved with it (`version_line`, review L4);
 - each position the other mode's ledger carries, named and never restored
@@ -43,7 +44,7 @@ def carry_lines(session: Any) -> list[str]:
         if carried is None:
             continue
         lines.append(continued_line(session, trader, carried))
-        missed = missed_line(trader, carried, carry.day)
+        missed = "" if rearm_daily(trader) else missed_line(trader, carried, carry.day)
         lines += [missed] if missed else []
         version = version_line(trader, carried)
         lines += [version] if version else []

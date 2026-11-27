@@ -31,6 +31,7 @@ from session_samples import NS, StopFlag, alerts, ist
 from stops_samples import STOP_POINTS
 
 import openalgo.backtest as bt
+from openalgo.backtest._live._result_build import session_result
 from openalgo.backtest._live._types import LOGGER_NAME
 
 MONDAY, TUESDAY = dt.date(2026, 11, 16), dt.date(2026, 11, 17)
@@ -92,6 +93,16 @@ def to_tuesday(world):
     world.stop, world.feed = StopFlag(), None
 
 
+#: The stop's line of the exit Tuesday's first start decided before the open and left
+#: unsent (the lead's ruling N5c-4 (j)), written out.
+KEPT_EXIT = (
+    "DailyInOut: the stop leaves the orders of its decision on its D bar closing on "
+    "2026-11-16 (SELL 10 MARKET) unsent: a restart today sends them, at the open or at once "
+    "after it, flagged late_decision, since that bar is not decided again; with no restart "
+    "today they are never sent"
+)
+
+
 def sent_since(world, instant_ns):
     """The endpoint of each call that sends anything, made at or after `instant_ns`."""
     return [c.what for c in calls(world, *SENDS) if c.ts_ns >= instant_ns]
@@ -115,6 +126,14 @@ def test_monday_decides_before_the_open_buys_at_the_open_and_carries_its_stop_gt
     )
     assert bought.placed_ns >= OPEN
     assert gtts(world) == [("active", UNITS, GTT_TRIGGER, "SELL")]
+    # Its banner line says when it decides and when its orders go, not an intraday entry
+    # cut-off (the lead's ruling N5c-4 (b)).
+    (line,) = [line for line in world.lines if line.startswith("DailyInOut: NSE:SBIN every D")]
+    assert (
+        ", decides each D bar before the open, on the bar that closed, and its orders go at "
+        "the open, no square-off: the position is carried overnight"
+    ) in line
+    assert "entries until" not in line
 
 
 @MODES
@@ -166,6 +185,9 @@ def test_a_second_start_on_tuesday_decides_nothing_again_and_places_no_second_st
     first = world.run(DailyInOut)
     assert first.stopped_by == "ctrl_c"
     assert sent_since(world, ist(*START, day=TUESDAY)) == []
+    # The stop names the exit it leaves unsent and what becomes of it (N5c-4 (j)).
+    assert KEPT_EXIT in session_result(first).warnings
+    assert f"Warning: {KEPT_EXIT}" in world.lines
     world.script.sleep((ist(9, 10, day=TUESDAY) - world.fake.clock.now()) / NS)
     caplog.clear()
 
@@ -187,4 +209,53 @@ def test_a_second_start_on_tuesday_decides_nothing_again_and_places_no_second_st
     assert open_of(TUESDAY) <= sold.placed_ns
     assert [g for g in gtts(world) if g[0] == "active"] == []
     assert second.open_positions == ()
+    assert not alerts(caplog, "error")
+
+
+@MODES
+def test_a_restart_after_the_open_sends_the_exit_a_stop_left_unsent_flagged_late_decision(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # Tuesday's first start decides Monday's bar before the open (an exit) and is stopped
+    # at 09:08, the exit left unsent. The restart at 09:20, after the open, sends it at
+    # once, flagged late_decision, as a start after the open sends its decision's orders;
+    # the bar is not decided again.
+    world = monday(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, history=True)
+    to_tuesday(world)
+    world.stop_at(ist(9, 8, day=TUESDAY))
+    assert world.run(DailyInOut).stopped_by == "ctrl_c"
+    world.script.sleep((ist(9, 20, day=TUESDAY) - world.fake.clock.now()) / NS)
+    restarted_at = world.fake.clock.now()
+
+    second = restart(world, DailyInOut, stop_ns=ist(9, 40, day=TUESDAY))
+
+    assert DailyInOut.decided[1:] == [(close_of(MONDAY), UNITS)]
+    (sold,) = [o for o in world.orders() if o.action == "SELL"]
+    assert (sold.price_type, sold.quantity, sold.status) == ("MARKET", UNITS, "complete")
+    assert sold.placed_ns >= restarted_at
+    (fill,) = [fill for fill in second.fills if fill.action == "SELL"]
+    assert "late_decision" in fill.flags
+    assert not alerts(caplog, "error")
+
+
+@MODES
+def test_a_restart_in_the_opens_first_minute_sends_the_exit_left_unsent_flagged_late_decision(
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
+):
+    # As above, the restart at 09:15:30, before its catch-up has released the 09:15
+    # slice: the open has passed, so the exit goes at once flagged late_decision, as a
+    # start at 09:15:30 decides late (the lead's ruling N5c-4 (j); review finding 4).
+    world = monday(make_fake_openalgo, monkeypatch, tmp_path, analyzer=analyzer, history=True)
+    to_tuesday(world)
+    world.stop_at(ist(9, 8, day=TUESDAY))
+    assert world.run(DailyInOut).stopped_by == "ctrl_c"
+    world.script.sleep((ist(9, 15, 30, day=TUESDAY) - world.fake.clock.now()) / NS)
+
+    second = restart(world, DailyInOut, stop_ns=ist(9, 40, day=TUESDAY))
+
+    assert DailyInOut.decided[1:] == [(close_of(MONDAY), UNITS)]
+    (sold,) = [o for o in world.orders() if o.action == "SELL"]
+    assert (sold.price_type, sold.quantity, sold.status) == ("MARKET", UNITS, "complete")
+    (fill,) = [fill for fill in second.fills if fill.action == "SELL"]
+    assert "late_decision" in fill.flags
     assert not alerts(caplog, "error")

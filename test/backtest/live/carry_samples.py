@@ -114,13 +114,13 @@ def carried_world(
     world = gtt_world(make_fake_openalgo, monkeypatch, tmp_path, trades_until=(15, 32), **options)
     world.future = future
     if future is not None:
-        _add_future(world, future)
+        add_future(world, future)
     world.first = world.run(strategy)
     world.day = DAY1
     return world
 
 
-def _add_future(world: Any, symbol: str) -> None:
+def add_future(world: Any, symbol: str) -> None:
     """The fake's future `symbol` (`list_future`) and its trades every 10 s from Monday's
     start to 15:32."""
     list_future(world, symbol)
@@ -236,6 +236,7 @@ __all__ = [
     "flat_minutes",
     "held",
     "journal_of",
+    "add_future",
     "list_future",
     "missed_day",
     "on",

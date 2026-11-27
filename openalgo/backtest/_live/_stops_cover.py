@@ -9,7 +9,11 @@ their seconds the summary's `unprotected_seconds` (a window still open counts up
 moment asked). On an instrument several strategies trade, a stop held back while another
 strategy's placement of the instrument is unanswered has its own reason
 (`INSTRUMENT_HELD`, `held_by_other`; 18-multi-strategy 4.4), and so has a leg whose
-closing order was rejected there (`REFUSED_FOR_MARGIN`, `CLOSE_REJECTED`; 4.14).
+closing order was rejected there (`REFUSED_FOR_MARGIN`, `CLOSE_REJECTED`; 4.14). A CNC or
+NRML leg with a stop level and no stop GTT while the reconciler's exit guard holds it (the
+books show another position, so `protect` is held back: a leg carried without its stop
+GTT, 20-positional-live 4.2) is guarded and unprotected with its stop held
+(`gtt_held_back`), not a position opened with no stop.
 
 Times are UTC nanoseconds, quantities whole units. Used by the loop only.
 """
@@ -18,14 +22,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from typing import Any
 
 from .._layout import NANOS_PER_SECOND
+from ._session_rearm import stop_level
+from ._stops_gtt import gtt_guarded, stop_gtt
 from ._stops_orders import LegOrders, Sent
 
 #: Why a leg is unprotected (the result's `unprotected` reasons).
 STOP_UNCONFIRMED = "stop unconfirmed"
 STOP_HELD = "stop held"
 STOP_ENDED = "stop ended"
+#: A CNC or NRML leg whose stop GTT is asked for and not confirmed by a read of the GTT book
+#: yet (after the entry's fill, 20-positional-live 2 "Day 1, entry fills").
+STOP_GTT_UNCONFIRMED = "stop GTT not confirmed yet"
 EXITING = "exiting"
 EXIT_RETRIES = "exit retries"
 UNBOUND_ADD = "unbound add"
@@ -34,6 +44,16 @@ AMBIGUOUS_ORDER = "ambiguous order"
 INSTRUMENT_HELD = "instrument held by another strategy's order"
 REFUSED_FOR_MARGIN = "closing order refused for margin"
 CLOSE_REJECTED = "closing order rejected"
+#: The warning, once per strategy, of a leg opened with no stop at the broker, and of one
+#: whose stop GTT the exit guard holds back (`gtt_held_back`), by its `units` and `leg`.
+UNGUARDED = (
+    "a position of {units} {leg} was opened with no stop at the broker (no stop=, or a "
+    "trail or breakeven not armed yet)"
+)
+HELD_BACK = (
+    "its position of {units} {leg} has no stop at the broker: its stop GTT is held back "
+    "while OpenAlgo's books show another position (a reconciliation mismatch)"
+)
 #: A `positional_stops="rearm_daily"` leg while the market is closed: its day stop is
 #: placed at the open and ends at the close (20-positional-live 6, `_session_rearm`).
 MARKET_CLOSED = "no day stop while the market is closed"
@@ -41,6 +61,7 @@ REASONS = (
     STOP_UNCONFIRMED,
     STOP_HELD,
     STOP_ENDED,
+    STOP_GTT_UNCONFIRMED,
     EXITING,
     EXIT_RETRIES,
     UNBOUND_ADD,
@@ -80,6 +101,8 @@ def reason_of(
     retries: bool,
     held_by_other: bool = False,
     closing_rejected: str | None = None,
+    gtt_asked: bool = False,
+    gtt_held: bool = False,
 ) -> str:
     """Why `leg`'s units are uncovered (one of `REASONS`): an order of it ambiguous in the
     order book (an entry's units uncovered too, `LegOrders.ambiguous_entry_units`), its
@@ -88,7 +111,10 @@ def reason_of(
     lost, its stop held back while another strategy's placement of the instrument is
     unanswered (`held_by_other`), its stop held back or unanswered, an exit the exit
     owner retries (`retries`), an exit working or the stop's cancel sent for one, else its
-    stop not confirmed yet or ended."""
+    stop not confirmed yet or ended; with no stop order, a CNC or NRML leg whose stop GTT
+    the exit guard holds back (`gtt_held`, `gtt_held_back`) has its stop held, and one
+    whose stop GTT is asked for (`gtt_asked`) has it not confirmed yet: no stop has
+    ended."""
     live = [w for w in leg.orders.values() if w.state is not Sent.ENDED]
     if any(w.state is Sent.AMBIGUOUS for w in live):
         return AMBIGUOUS_ORDER
@@ -108,7 +134,32 @@ def reason_of(
     if leg.exits() or (stop is not None and stop.cancel_sent):
         # A stop's cancel is sent only for an exit of the position (R4).
         return EXITING
-    return STOP_ENDED if stop is None else STOP_UNCONFIRMED
+    if stop is None and gtt_held:
+        return STOP_HELD
+    if stop is None:
+        return STOP_GTT_UNCONFIRMED if gtt_asked else STOP_ENDED
+    return STOP_UNCONFIRMED
+
+
+def warn_once(session: Any, warned: set[str], trader: Any, units: int, *, held_back: bool) -> None:
+    """Warn through `session` once per strategy (`warned`, the names warned already) of
+    `trader`'s leg of `units` without a stop at the broker: its stop GTT `held_back` by the
+    exit guard (`HELD_BACK`), else opened with no stop (`UNGUARDED`)."""
+    if trader.name in warned:
+        return
+    warned.add(trader.name)
+    words = HELD_BACK if held_back else UNGUARDED
+    leg = f"{trader.symbol} {trader.exchange}"
+    session.warn(f"{trader.name}: {words.format(units=units, leg=leg)}")
+
+
+def gtt_held_back(trader: Any, guarded_by_books: bool) -> bool:
+    """Whether `trader`'s leg is a CNC or NRML leg holding units with a stop level and no
+    stop GTT while the reconciler's exit guard holds it (`guarded_by_books`; module
+    docstring). Reads the kernel's state only for a leg the guard holds."""
+    if not guarded_by_books or not stop_gtt(trader) or trader.open_units() == 0:
+        return False
+    return not gtt_guarded(trader) and stop_level(trader) is not None
 
 
 def held_by_other(others: Iterable[tuple[str, LegOrders]]) -> tuple[str, str] | None:
@@ -172,17 +223,22 @@ __all__ = [
     "EXITING",
     "EXIT_RETRIES",
     "CLOSE_REJECTED",
+    "HELD_BACK",
     "HELD_CANCEL",
     "INSTRUMENT_HELD",
     "MARKET_CLOSED",
     "REASONS",
     "REFUSED_FOR_MARGIN",
     "STOP_ENDED",
+    "STOP_GTT_UNCONFIRMED",
     "STOP_HELD",
     "STOP_UNCONFIRMED",
     "UNBOUND_ADD",
+    "UNGUARDED",
     "Unprotected",
     "Windows",
+    "gtt_held_back",
     "held_by_other",
     "reason_of",
+    "warn_once",
 ]

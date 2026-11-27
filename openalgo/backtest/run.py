@@ -55,6 +55,7 @@ from ._strategy_args import SHARED_POOL
 from ._warm_up_notice import announce_wait
 from .errors import ConfigError
 from .reference import Instrument
+from .reference._store import run_wording
 from .result import Result
 from .strategy import Strategy
 from .units import Distance
@@ -308,11 +309,13 @@ def backtest(
     for any setting or feature the kernel does not run yet.
     """
     arguments = dict(locals())
-    if isinstance(strategy, list | tuple):
-        return run_portfolio(strategy, client, arguments)
-    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
-        raise ConfigError("backtest takes a bt.Strategy subclass, or a list of them")
-    return _run(strategy, client, arguments)
+    # A run reads the built-in tables only: its reference words give the run's advice.
+    with run_wording():
+        if isinstance(strategy, list | tuple):
+            return run_portfolio(strategy, client, arguments)
+        if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
+            raise ConfigError("backtest takes a bt.Strategy subclass, or a list of them")
+        return _run(strategy, client, arguments)
 
 
 def _run(strategy: type[Strategy], client: Any, args: dict[str, Any]) -> Result:

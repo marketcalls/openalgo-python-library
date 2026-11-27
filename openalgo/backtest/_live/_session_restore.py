@@ -7,6 +7,11 @@ with nothing saved today that carries a position or a GTT from an earlier day is
 its day-close record instead (`_carry_restore`, 20-positional-live 4.2), and its start's
 difference is acted on as any (`_restart_carried` judged it).
 
+The kernel takes the state at the present (`restore_live_state` with `now`), so a daily
+strategy's pre-open decision whose orders waited for the open goes at once, flagged
+`late_decision`, once the open has passed, as a start at that moment decides late (the
+lead's ruling N5c-4 (j)).
+
 **The restored-order check** (`_check`, 3.6), for each order the saved state worked:
 
 - Saved as not sent (a strategy exit that waited for its cancels): nothing; the kernel
@@ -136,7 +141,7 @@ def _catch_up_to(session: Any, trader: Trader, saved_slice: int, sleep: Sleep) -
 
 def _restore(session: Any, trader: Trader, saved: Saved, restart: Restart) -> None:
     try:
-        pairs = call(trader.engine.restore_live_state, saved.live_state)
+        pairs = call(trader.engine.restore_live_state, saved.live_state, session.now())
     except Exception as error:
         raise LiveError(
             f"{trader.name}: the engine refused its saved state ({error}): the restart "

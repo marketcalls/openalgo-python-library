@@ -216,14 +216,17 @@ impl NativeEngine {
         live_state::live_state(py, self.engine()?)
     }
 
-    /// Restore a saved state into a session built for a restart; `{saved id: new id}` of
-    /// the restored working orders (`live_state`).
+    /// Restore a saved state into a session built for a restart, at the present `now`
+    /// (UTC nanoseconds) when given; `{saved id: new id}` of the restored working orders
+    /// (`live_state`).
+    #[pyo3(signature = (state, now=None))]
     fn restore_live_state<'py>(
         &mut self,
         py: Python<'py>,
         state: &Bound<'py, PyAny>,
+        now: Option<i64>,
     ) -> PyResult<Dict<'py>> {
-        live_state::restore_live_state(py, self.engine_mut()?, state)
+        live_state::restore_live_state(py, self.engine_mut()?, state, now)
     }
 
     /// A live session's state carried to the next trading day, once its session has closed
@@ -240,6 +243,23 @@ impl NativeEngine {
         state: &Bound<'py, PyAny>,
     ) -> PyResult<Dict<'py>> {
         live_state::restore_carried_state(py, self.engine_mut()?, state)
+    }
+
+    /// Restore the last saved state of a session of an earlier day that stopped without
+    /// its close, into a session built for that day, standing where the save stood;
+    /// `today` is the day number of the session that carries it on, `unsent` the GTTs
+    /// whose waiting request never reached the venue; `{saved id: new id}` of the restored
+    /// working orders (`live_state`).
+    #[pyo3(signature = (state, today, unsent))]
+    fn restore_stopped_state<'py>(
+        &mut self,
+        py: Python<'py>,
+        state: &Bound<'py, PyAny>,
+        today: i32,
+        unsent: Vec<u64>,
+    ) -> PyResult<Dict<'py>> {
+        let unsent: Vec<GttId> = unsent.into_iter().map(GttId).collect();
+        live_state::restore_stopped_state(py, self.engine_mut()?, state, today, &unsent)
     }
 
     /// Record that the venue confirmed a GTT's place; the stamp (`gtts`).

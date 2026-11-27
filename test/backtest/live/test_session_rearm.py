@@ -134,7 +134,7 @@ def test_a_carried_legs_day_stop_waits_for_the_open_and_is_placed_there(
 
 @MODES
 def test_a_gap_through_the_stop_at_the_open_exits_flagged_stop_crossed(
-    make_fake_openalgo, monkeypatch, tmp_path, analyzer
+    make_fake_openalgo, monkeypatch, tmp_path, caplog, analyzer
 ):
     # 13.3 "gap through the stop at the open" under rearm_daily: SBIN opens at 495.00,
     # beyond the 497.00 stop, so no stop is placed: the 10 units are sold at market at the
@@ -151,6 +151,10 @@ def test_a_gap_through_the_stop_at_the_open_exits_flagged_stop_crossed(
     assert (trade.exit_reason, trade.flags) == ("leg_sl", ["stop_crossed"])
     assert (trade.exit_price_rupees, trade.gross_pnl_rupees) == (495.0, -50.0)
     assert trade.exit_time == dt.datetime(2026, 11, 16, 9, 15, tzinfo=trade.exit_time.tzinfo)
+    # Its EXIT alert names the exit reason the trade records (the lead's ruling N5c-4 (a)).
+    (exit_alert,) = alerts(caplog, "exit")
+    assert "(leg_sl: stop level, order " in exit_alert
+    assert exit_alert.endswith("flagged stop_crossed)")
 
 
 def test_a_mode_switch_with_a_carried_leg_says_to_check_its_stop_and_sends_nothing(

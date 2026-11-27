@@ -17,6 +17,7 @@
 //! | `commands` | the commands the adapter has not taken yet |
 //! | `risk` | the trading state and its cause, the daily loss totals, the drawdown peak, the slices the cooldown and time exit count from, the engine exits waiting for an open, the day's entries the trade caps count |
 //! | `open_trades`, `session_buys` | the round trips still open (with their excursion and slippage so far, the working orders that hold their excursion back, their last slice's ticks and the flags of their fills so far), the day's CNC buys |
+//! | `last_closes` | each instrument's last close so far (rupees), read only when the state rebuilds a session that stopped without its close (`stopped`) |
 //!
 //! `Engine::restore_live_state` gives a saved state to a session built for the restart,
 //! once, after its catch-up (the day's bars added and released, nothing decided) and
@@ -41,6 +42,12 @@
 //!   Place still to be taken is the live layer's to send or not, by its journal. A saved
 //!   order's `sent` is false for a strategy exit that waits for its cancels: nothing of it
 //!   can be at the venue, and the check has no intent to look for.
+//! - **A pre-open decision's orders** that wait for the open go as the restored session
+//!   reaches it; restored after the open (the session stands past its first slice, or
+//!   `restore_live_state_at`'s present is at or after the open), they go at once and are
+//!   late, as a start after the open sends its decision's (`pre_open_decision` tells a
+//!   late start by its slice and its present alike): their fills are flagged
+//!   `late_decision` (`pre_open`).
 //! - **Controls.** The entry locks are not restored: the session keeps those set before
 //!   the restore (the live layer's "starting"), and the saved ones stay readable in the
 //!   state (`desk.entry_locks`) for the live layer to set again those that last the day
@@ -65,7 +72,9 @@
 //! futures series are refused in a session). The GTTs keep their ids: the restored
 //! session's book of GTTs is empty before the restore and takes them all back.
 //!
-//! The state the next trading day's session takes is `carried_state` (`carry`).
+//! The state the next trading day's session takes is `carried_state` (`carry`). A session
+//! of an earlier day that stopped without its close gives it too, rebuilt from its last
+//! saved state (`stopped`).
 
 mod book;
 mod carry;
@@ -81,6 +90,7 @@ mod orders;
 mod requests;
 mod risk;
 mod standing;
+mod stopped;
 mod value;
 
 pub use carry::CarriedIds;
@@ -88,7 +98,8 @@ pub use error::LiveStateError;
 pub use value::StateValue;
 
 use crate::charges::OrderCharges;
-use crate::exec::{GttBook, InstrumentId, OrderId};
+use crate::exec::{FillFlags, GttBook, InstrumentId, OrderId};
+use crate::model::TsNanos;
 use crate::portfolio::{Portfolio, PositionKey};
 use crate::rms::LegState;
 
@@ -120,7 +131,8 @@ use value::{list, map, Read};
 /// layout 6 the GTTs and what the session follows of them, and an engine exit's fill flags
 /// (design 20-positional-live 4.1), and then, before layout 6 was released, the flags of
 /// each open trade's fills (`book`), read as absent (no flag) from a layout 6 state
-/// written without them.
+/// written without them, and each instrument's last close (`stopped`), read as absent (no
+/// close) from one written without it.
 pub const LIVE_STATE_LAYOUT: i64 = 6;
 
 /// A saved state read whole, before any of it is applied.
@@ -196,6 +208,7 @@ impl Engine {
                 }),
             ),
             ("session_buys", list(&self.session_buys.bought, write_buy)),
+            ("last_closes", self.write_last_closes()),
         ])
     }
 
@@ -212,17 +225,48 @@ impl Engine {
         &mut self,
         state: &StateValue,
     ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
+        self.restore_live(state, None)
+    }
+
+    /// `restore_live_state` at `now_ns`, the present (UTC nanoseconds): a restore at or
+    /// after the session's open, even before the catch-up has released a slice of it,
+    /// sends a pre-open decision's waiting orders at once, flagged `late_decision`, as
+    /// `pre_open_decision` decides a start at that present late (module docs).
+    ///
+    /// Errors: those of `restore_live_state`.
+    pub fn restore_live_state_at(
+        &mut self,
+        state: &StateValue,
+        now_ns: TsNanos,
+    ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
+        self.restore_live(state, Some(now_ns))
+    }
+
+    /// `restore_live_state`, at the present `now_ns` when it is known.
+    fn restore_live(
+        &mut self,
+        state: &StateValue,
+        now_ns: Option<TsNanos>,
+    ) -> Result<Vec<(OrderId, OrderId)>, KernelError> {
         if !self.is_external() {
             return Err(VenueError::NotExternal.into());
         }
         self.check_restorable()?;
         let saved = self.read_saved(&Read::root(state))?;
-        self.apply_saved(saved)
+        let pairs = self.apply_saved(saved)?;
+        self.late_after_open(now_ns);
+        Ok(pairs)
     }
 
     /// Read the whole state (module docs), applying nothing.
     fn read_saved(&self, read: &Read<'_>) -> Result<Saved, LiveStateError> {
         self.check_session(read)?;
+        self.read_parts(read)
+    }
+
+    /// Read the parts of a state whose session was checked (`check_session`, or the
+    /// checks of a stopped session's, `stopped`), applying nothing.
+    fn read_parts(&self, read: &Read<'_>) -> Result<Saved, LiveStateError> {
         let count = self.instruments.len();
         let saved_orders = read.items_of("orders")?;
         let (orders, ids) = read_orders(&saved_orders, self.book.next_id(), count)?;
@@ -332,5 +376,25 @@ impl Engine {
         }
         self.record.trades.open = saved.open_trades;
         Ok(saved.ids.pairs)
+    }
+
+    /// A restored pre-open decision's orders that wait for the open, in a session restored
+    /// after its open: it stands past its first slice, or the present `now_ns` (UTC
+    /// nanoseconds, when known) is at or after the open of the session it stands in. They
+    /// go at once, late, as a start after the open sends its decision's (`pre_open`), so
+    /// their fills are flagged `late_decision`.
+    fn late_after_open(&mut self, now_ns: Option<TsNanos>) {
+        let index = self.standing().0;
+        let open = self
+            .timeline
+            .slice(index)
+            .and_then(|slice| self.session_open_of(&slice).ok());
+        let opened = now_ns.is_some_and(|now| open.is_some_and(|open| now >= open));
+        if index == 0 && !opened {
+            return;
+        }
+        let late = self.venue.pre_open.at_open.iter();
+        let flagged = late.map(|id| (*id, FillFlags::LATE_DECISION));
+        self.venue.exit_flags.extend(flagged.collect::<Vec<_>>());
     }
 }

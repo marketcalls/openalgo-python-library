@@ -52,12 +52,13 @@ from .._warm_up import SeriesNeed
 from .._warm_up_measure import WarmUp
 from .._warm_up_probe import ProbeContext, history_needs, probe_setup
 from ..calendar import Calendar
-from ..errors import ConfigError
+from ..errors import ConfigError, ReferenceDataError
 from ..reference import Instrument
 from ..reference.symbols import SymbolError, parse_symbol
 from ..report._format import indian_digits
 from ..strategy import Strategy
 from ._plan_daily import decides_before_open
+from ._plan_stock import STOCK_DERIVATIVES_NOT_LIVE, stock_derivative
 from ._version_id import StrategyVersion, version_of
 from .series import DEFAULT_BASE
 
@@ -295,13 +296,21 @@ def strategy_spec(
 def _instruments_today(plan: RunPlan, calendar: Calendar) -> list[Instrument]:
     """The instruments of `plan` on its day (`resolve_instruments`). Raises what that
     raises; a ConfigError while the plan names a contract whose expiry is before its day
-    ends with `EXPIRED_CONTRACT_SETTLED` (module docstring)."""
+    ends with `EXPIRED_CONTRACT_SETTLED` (module docstring); a ReferenceDataError for a
+    stock future or option says that `bt.live` does not trade one yet (`_plan_stock`), and
+    any other gives the advice a run can follow once `bt.live`'s
+    `reference._store.run_wording` words it."""
     try:
         instruments, _, _ = resolve_instruments(plan, None, calendar)
     except ConfigError as error:
         if not _names_expired(plan):
             raise
         raise ConfigError(f"{error}. {EXPIRED_CONTRACT_SETTLED}") from error
+    except ReferenceDataError as error:
+        stock = stock_derivative(plan)
+        if stock is not None:
+            raise ReferenceDataError(STOCK_DERIVATIVES_NOT_LIVE.format(symbol=stock)) from error
+        raise
     return instruments
 
 

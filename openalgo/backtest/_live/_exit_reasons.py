@@ -11,7 +11,11 @@ has none: its alert and event are as they were. The event carries the code, the 
 words in the trader's terms (`EXIT_REASON_WORDS`), but for the session's own risk exits the
 kernel records as "manual" (Ctrl+C or a retried exit, a stop not confirmed or rejected,
 the strategy's kill switch), which the alert words by the reason the session gave the
-kernel for them (`Trader.reasons`, `MANUAL_RISK_EXIT_WORDS`).
+kernel for them (`Trader.reasons`, `MANUAL_RISK_EXIT_WORDS`). An alert names first the
+order's purpose ("entry", "exit", "stop"), but an engine's risk exit whose fills record
+an exit reason of their own (an expiry exit, a stop level crossed at the open, the
+account's kill switch) names that reason, the trade's `exit_reason`: "risk_exit" is no
+exit reason a trade records (`alert_label`).
 """
 
 from __future__ import annotations
@@ -89,6 +93,15 @@ def exit_words(trader: Any, kernel_order: int, code: str) -> str:
     return MANUAL_RISK_EXIT_WORDS.get(risk or "") or reason_words(code)
 
 
+def alert_label(purpose: Purpose, code: str | None) -> str:
+    """What a fill's alert names first (module docstring): the order's purpose, or the
+    exit reason `code` its fills record for an engine's risk exit that records one of its
+    own (not `MANUAL`)."""
+    if purpose is Purpose.RISK_EXIT and code is not None and code != MANUAL:
+        return code
+    return purpose.value
+
+
 def reason_words(code: str) -> str:
     """An exit reason's code in the trader's terms. Raises LiveError for a code the kernel
     does not have, naming it: a new reason needs its words here."""
@@ -119,6 +132,7 @@ __all__ = [
     "MANUAL",
     "MANUAL_RISK_EXIT_WORDS",
     "SIGNAL",
+    "alert_label",
     "exit_reason",
     "exit_words",
     "reason_words",

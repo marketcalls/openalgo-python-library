@@ -9,7 +9,10 @@ A stop GTT the close's read did not confirm asks the operator to check the order
 the position, then place it by hand (`_stops_gtt.CHECK_THEN_PLACE`): it may have fired. A
 `positional_stops="rearm_daily"` leg has no stop GTT: its line gives its stop level and
 what the broker holds from the close on in the words of the close's WARN alert of such legs
-(`_session_rearm.stop_at_close`), never a stop resting overnight.
+(`_session_rearm.stop_at_close`), never a stop resting overnight. A future the exchange
+settles today (its last trading day, `_session_expiry.settles_today`) is named so on either
+stop mode (`settles_words`): the exchange settles it at its expiry, so it needs no stop from
+the close, and the next start names the settlement.
 
 Quantities are signed units, prices rupees, days IST. Used by the loop at the close.
 """
@@ -21,6 +24,7 @@ from typing import Any
 from .._engine import call
 from .._series import ist_time
 from ._plan_catch_up import INSTRUMENT
+from ._session_expiry import settles_today, settles_words
 from ._session_rearm import rearm_daily, stop_at_close
 from ._session_trader import Trader
 from ._stops_gtt import CHECK_THEN_PLACE, gtt_unconfirmed, gtt_words, overnight, stop_gtts
@@ -49,6 +53,8 @@ def carried_words(session: Any, trader: Trader) -> str:
     at the broker until your next start"."""
     units = trader.open_units()
     held = f"{trader.name} {trader.symbol} {trader.exchange} {units:g} units{_entered(trader)}"
+    if settles_today(trader, session.parts.spec.day):
+        return f"{held}: {settles_words(trader)}"
     if rearm_daily(trader):
         return f"{held}, {stop_at_close(session, trader)}"
     gtts = stop_gtts(trader)
